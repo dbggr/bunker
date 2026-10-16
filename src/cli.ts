@@ -17,6 +17,7 @@ const { values, positionals } = parseArgs({
     "reviewer-model": { type: "string" },
     issue: { type: "string" },
     verify: { type: "string" },
+    "verify-on-host": { type: "boolean", default: false },
     merge: { type: "boolean", default: false },
   },
 });
@@ -32,15 +33,19 @@ if (values.issue !== undefined) {
     console.error("bunker: --merge requires --verify");
     process.exit(2);
   }
-} else if (values.verify !== undefined || values.merge) {
-  console.error("bunker: --verify and --merge only apply to --issue");
+  if (values["verify-on-host"] && values.verify === undefined) {
+    console.error("bunker: --verify-on-host requires --verify");
+    process.exit(2);
+  }
+} else if (values.verify !== undefined || values.merge || values["verify-on-host"]) {
+  console.error("bunker: --verify, --verify-on-host and --merge only apply to --issue");
   process.exit(2);
 }
 if (values.issue === undefined && !prompt === !tasks.length) {
   console.error(
     'usage: bunker "<prompt>" [--model <id>] [--image <name>] [--no-sandbox] [--max-iterations <n>]\n' +
       '       bunker --review "<prompt>" [--max-rounds <n>] [--reviewer-model <id>]   (implement → review → fix)\n' +
-      '       bunker --issue <n> [--verify "<cmd>" [--merge]] [--max-rounds <n>] [--reviewer-model <id>]   (issue → reviewed PR)\n' +
+      '       bunker --issue <n> [--verify "<cmd>" [--verify-on-host] [--merge]] [--max-rounds <n>] [--reviewer-model <id>]   (issue → reviewed PR)\n' +
       '       bunker --task "<prompt>" --task "<prompt>" ...   (parallel, one worktree each)',
   );
   process.exit(2);
@@ -81,7 +86,7 @@ if (values.issue !== undefined) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"] }) : agent;
   let result;
   try {
-    result = await runIssue({ issue, agent, reviewer, sandbox, maxRounds, verify: values.verify, merge: values.merge });
+    result = await runIssue({ issue, agent, reviewer, sandbox, maxRounds, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     process.exit(2);
