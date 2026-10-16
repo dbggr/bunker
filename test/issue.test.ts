@@ -114,6 +114,7 @@ if [ "$1 $2" = "pr view" ]; then
   case "$*" in *statusCheckRollup*)
     echo "$*" >> "${root}/checks-view.log"
     if [ -f "${root}/fail-once" ]; then rm "${root}/fail-once"; echo "boom" >&2; exit 1; fi
+    if [ -f "${root}/forbidden" ]; then echo "GraphQL: Resource not accessible by personal access token (HTTP 403)" >&2; exit 1; fi
     if [ -f "${root}/checks.json" ]; then cat "${root}/checks.json"; else echo '{"statusCheckRollup":[]}'; fi
     exit 0;;
   esac
@@ -454,14 +455,38 @@ describe("runIssue() --merge", () => {
       expect(await Bun.file(join(root, "merge.log")).exists()).toBe(false);
     });
 
-    test("a failed gh pr view is retried, not treated as no checks", async () => {
-      const { repo } = await withChecks([{ ...pass, status: "IN_PROGRESS", conclusion: "" }]);
+    test("a failed gh pr view is an error, never 'no checks'", async () => {
+      const { repo } = await withChecks([pass]);
       const root = dirname(repo);
       await Bun.write(join(root, "fail-once"), "");
-      setTimeout(() => Bun.write(join(root, "checks.json"), JSON.stringify({ statusCheckRollup: [{ ...pass, conclusion: "FAILURE" }] })), 100);
       const r = await run(repo, { ciPollMs: 20 });
-      expect(r.status).toBe("ci-failed");
+      expect(r.status).toBe("ci-unreadable");
       expect(await Bun.file(join(root, "merge.log")).exists()).toBe(false);
+    });
+
+    test("403 on the check query → ci-unreadable naming the token permissions, no merge", async () => {
+      const { repo } = await withChecks([pass]);
+      const root = dirname(repo);
+      await Bun.write(join(root, "forbidden"), "");
+      const r = await run(repo, { ciPollMs: 10 });
+      expect(r.status).toBe("ci-unreadable");
+      expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
+      expect(r.error).toContain("Resource not accessible");
+      expect(r.error).toContain("Checks: Read");
+      expect(r.error).toContain("Commit statuses: Read");
+      expect(await Bun.file(join(root, "merge.log")).exists()).toBe(false);
+      expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
+      expect(await Bun.file(r.logPath!).text()).toContain("ci-unreadable");
+      expect((await Bun.file(join(root, "checks-view.log")).text()).trim().split("\n").length).toBe(1);
+    });
+
+    test("check query starts failing mid-wait → ci-unreadable", async () => {
+      const { repo } = await withChecks([{ ...pass, status: "IN_PROGRESS", conclusion: "" }]);
+      const root = dirname(repo);
+      setTimeout(() => Bun.write(join(root, "forbidden"), ""), 80);
+      const r = await run(repo, { ciPollMs: 20 });
+      expect(r.status).toBe("ci-unreadable");
+      expect(r.error).toContain("Resource not accessible");
     });
 
     describe("required checks", () => {

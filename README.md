@@ -119,13 +119,14 @@ CLI: `--issue <N> [--setup "<cmd>"] [--verify "<cmd>"] [--model] [--reviewer-mod
 
 ## Merging
 
-`bunker --issue 12 --verify "bun test" --merge` finishes the job: once the PR is open it runs `gh pr merge <url> --squash --delete-branch`, after waiting for the PR's CI checks (polled via `gh pr view --json statusCheckRollup`; a repo with no checks merges straight away), then checks the squash really landed — it fetches, lists the files the branch changed, and requires each to be identical on `origin/<default>` and the branch tip. `--merge` requires `--verify` (exit 2 otherwise) and exits 0 only for `merged`.
+`bunker --issue 12 --verify "bun test" --merge` finishes the job: once the PR is open it runs `gh pr merge <url> --squash --delete-branch`, after waiting for the PR's CI checks (polled via `gh pr view --json statusCheckRollup`; a repo with no checks merges straight away; if the query fails, e.g. a 403, it stops with `ci-unreadable` instead), then checks the squash really landed — it fetches, lists the files the branch changed, and requires each to be identical on `origin/<default>` and the branch tip. `--merge` requires `--verify` (exit 2 otherwise) and exits 0 only for `merged`.
 
 | status | meaning |
 | --- | --- |
 | `merged` | merged and verified; worktree and local branch removed |
 | `ci-failed` | a PR check failed; PR left open, worktree kept |
 | `ci-timeout` | checks still pending after `--ci-timeout <min>` (default 20); PR left open, worktree kept |
+| `ci-unreadable` | the check query failed (403, network, GraphQL error); PR left open, worktree kept, error in the result and run log |
 | `merge-failed` | `gh pr merge` failed; PR left open, worktree kept |
 | `merge-unverified` | merged, but some files differ on the default branch (listed in the error); worktree and branch kept |
 
@@ -133,7 +134,7 @@ CLI: `--issue <N> [--setup "<cmd>"] [--verify "<cmd>"] [--model] [--reviewer-mod
 
 Set `BUNKER_GH_TOKEN` (exported, or in `~/.config/bunker/.env` / `.bunker/.env`) and bunker's own `gh` calls run with `GH_TOKEN=$BUNKER_GH_TOKEN`; pushes and fetches go over HTTPS to `https://github.com/<owner>/<repo>.git` using `gh auth git-credential`, so your SSH key and full `gh` login aren't used. Unset, bunker behaves as before. The token never reaches an agent: `docker()` doesn't pass it, and `noSandbox()` strips `GH_TOKEN`, `GITHUB_TOKEN` and `BUNKER_GH_TOKEN` from the agent's environment.
 
-Create the token at GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token. Restrict it to the one repository, set a short expiry, and grant repository permissions: **Contents: Read and write**, **Pull requests: Read and write**, **Issues: Read** (Read and write if agents may file `discovered` issues) (Metadata: Read is added automatically). Nothing else.
+Create the token at GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token. Restrict it to the one repository, set a short expiry, and grant repository permissions: **Contents: Read and write**, **Pull requests: Read and write**, **Checks: Read-only**, **Commit statuses: Read-only** (`--merge` needs both to read CI), **Issues: Read** (Read and write if agents may file `discovered` issues) (Metadata: Read is added automatically). Nothing else.
 
 ## Work queue
 
