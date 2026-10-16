@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
-import { AgentFailure, claudeCode, formatUsage, docker, noSandbox, review, run, runAll } from "./index.ts";
+import { AgentFailure, claudeCode, formatDuration, formatUsage, docker, noSandbox, review, run, runAll } from "./index.ts";
 import { runAudit } from "./audit.ts";
 import { runIssue, runQueue } from "./issue.ts";
 import { redact } from "./redact.ts";
@@ -168,6 +168,9 @@ if (values["ci-timeout"] !== undefined) {
     process.exit(2);
   }
 }
+
+const startedAt = Date.now();
+process.on("exit", () => console.log(`bunker: elapsed ${formatDuration(Date.now() - startedAt)} (wall-clock)`));
 
 const tty = !!process.stdout.isTTY;
 const progress = createProgress({ write: (s) => process.stdout.write(redact(s)), tty, columns: process.stdout.columns ?? 100 });
