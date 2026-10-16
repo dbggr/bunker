@@ -156,6 +156,31 @@ Labels: `bunker` = queued for bunker; `discovered` = filed by an agent, waiting 
 
 Implementer and reviewer prompts tell the agent not to fix out-of-scope problems but to print `<issue title="...">one-paragraph body</issue>`. After the run bunker collects every such block from all agent output, dedupes by title and runs `gh issue create --label discovered` with the body plus `Found while working on #<N>.` They are never labelled `bunker`, so agents can't queue work. `IssueResult.filed` lists `{ number, title }` for each. `review()` takes an optional `reviewerInstruction` appended to the reviewer prompt; its defaults are unchanged. Creating issues needs **Issues: Read and write** on `BUNKER_GH_TOKEN`.
 
+## Watch mode
+
+`bunker --watch`, run from the repo's main checkout, keeps working the `bunker` queue unattended. It implies `--queue --merge`; verify comes from `.bunker/verify` unless `--verify` is given (neither → exit 2). `--model`, `--reviewer-model`, `--max-rounds`, `--ui` and the rest pass through.
+
+- Loop: work every queued issue (one at a time, each branching from freshly fetched origin), print `bunker: pass 3 · 2 merged · next in 10 min`, sleep `--interval <min>` (default 10), repeat. SIGINT/SIGTERM finish the current step, then exit 0 (a second signal quits at once).
+- `--for <duration>` (`5h`, `90m`, `2h30m`; anything else exits 2): once the time is up no new issue starts, the current one finishes, a summary prints and bunker exits 0. Without it, it runs until Ctrl-C.
+- No retry loops: any outcome other than `merged` removes the `bunker` label, adds `bunker-failed` (created if missing) and comments the status, error and run-log path. Watch continues with the next issue; a human relabels `bunker` to retry.
+- Spend cap: `--max-cost <usd>` per rolling 24 h (default 20), summed from per-run cost and kept in `.bunker/watch-spend.json`. When reached, no issue starts until the window allows more.
+- Single instance: `.bunker/watch.lock` holds the PID; a second watcher on the repo is refused, a lock with a dead PID is taken over. The lock and spend file are excluded via `.git/info/exclude`.
+
+To start it at login, a systemd user unit (`~/.config/systemd/user/bunker-watch.service`, then `systemctl --user enable --now bunker-watch`):
+
+```ini
+[Unit]
+Description=bunker --watch
+
+[Service]
+WorkingDirectory=%h/src/my-repo
+ExecStart=%h/.bun/bin/bunker --watch
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
 ## Agent images: base + per-repo
 
 The container only runs the agent, so it needs no Bun or Node of its own, just git and claude. Anything else the agent needs to *verify* its work (run tests, lint) is the target repo's toolchain, so each repo adds that itself.

@@ -364,6 +364,12 @@ export interface QueueOptions extends Omit<IssueOptions, "issue"> {
   limit?: number;
   /** Delay before re-listing once, always, to catch issues the first list missed (gh lags label changes). Defaults to 3000. */
   listRetryMs?: number;
+  /** Don't stop at the first non-merged outcome; an issue run that throws becomes a `failed` entry. For unattended callers that handle failures in `onResult`. */
+  keepGoing?: boolean;
+  /** Checked before each issue; true ends the pass without starting another. */
+  shouldStop?: () => boolean;
+  /** Called after each issue run, before the next one starts. */
+  onResult?: (entry: QueueEntry) => void | Promise<void>;
 }
 
 export interface QueueEntry extends IssueResult {
@@ -376,7 +382,7 @@ export interface QueueEntry extends IssueResult {
  * stops after the first PR opens; with `merge` continues only after `merged`.
  * Stops at the first other outcome, or after `limit` issues.
  */
-export async function runQueue({ limit = 5, listRetryMs = 3000, ...opts }: QueueOptions): Promise<QueueEntry[]> {
+export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shouldStop, onResult, ...opts }: QueueOptions): Promise<QueueEntry[]> {
   const cwd = opts.cwd ?? process.cwd();
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
@@ -401,7 +407,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, ...opts }: Queue
   const queue = [...merged.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.number - b.number);
   const done: QueueEntry[] = [];
   for (const q of queue) {
-    if (done.length >= limit) break;
+    if (done.length >= limit || shouldStop?.()) break;
     // The list lags label changes by seconds, so confirm the live state before working it.
     const view = await $`gh issue view ${q.number} --json state,labels`.cwd(cwd).env(env).nothrow().quiet();
     if (view.exitCode !== 0) {
@@ -417,9 +423,17 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, ...opts }: Queue
       continue;
     }
     if (live.state !== "OPEN" || !live.labels.some((l) => l.name === "bunker")) continue;
-    const result = await runIssue({ ...opts, cwd, issue: q.number });
-    done.push({ ...result, issue: q.number, title: q.title });
-    if (!opts.merge || result.status !== "merged") break;
+    let result: IssueResult;
+    try {
+      result = await runIssue({ ...opts, cwd, issue: q.number });
+    } catch (e) {
+      if (!keepGoing) throw e;
+      result = { status: "failed", branch: "", worktree: "", filed: [], error: e instanceof Error ? e.message : String(e) };
+    }
+    const entry = { ...result, issue: q.number, title: q.title };
+    done.push(entry);
+    await onResult?.(entry);
+    if (!keepGoing && (!opts.merge || result.status !== "merged")) break;
   }
   return done;
 }

@@ -4,6 +4,9 @@ import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
 import { AgentFailure, claudeCode, formatDuration, formatUsage, docker, noSandbox, review, run, runAll } from "./index.ts";
 import { runAudit } from "./audit.ts";
 import { runIssue, runQueue } from "./issue.ts";
+import { parseDuration, runWatch } from "./watch.ts";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { redact } from "./redact.ts";
 import { createProgress, type BunkerEvent, hyperlink } from "./events.ts";
 import { startUi } from "./ui.ts";
@@ -48,6 +51,41 @@ if (values.version) {
 
 const prompt = positionals.join(" ");
 const tasks = values.task ?? [];
+let watchOpts: { intervalMs: number; maxCostUsd: number; forMs?: number } | undefined;
+if (values.watch) {
+  if (prompt || tasks.length || values.review || values.issue !== undefined || values.queue || values.audit || values.limit !== undefined) {
+    console.error("bunker: --watch can't be combined with a prompt, --task, --review, --issue, --queue, --audit or --limit");
+    process.exit(2);
+  }
+  const intervalMin = values.interval === undefined ? 10 : Number(values.interval);
+  if (!(intervalMin > 0) || !Number.isFinite(intervalMin)) {
+    console.error("bunker: --interval must be a positive number of minutes");
+    process.exit(2);
+  }
+  const maxCostUsd = values["max-cost"] === undefined ? 20 : Number(values["max-cost"]);
+  if (!(maxCostUsd > 0) || !Number.isFinite(maxCostUsd)) {
+    console.error("bunker: --max-cost must be a positive number of US dollars");
+    process.exit(2);
+  }
+  let forMs: number | undefined;
+  if (values.for !== undefined) {
+    forMs = parseDuration(values.for);
+    if (forMs === undefined) {
+      console.error('bunker: --for must be a duration like 5h, 90m or 2h30m');
+      process.exit(2);
+    }
+  }
+  if (!values.verify && !existsSync(join(process.cwd(), ".bunker", "verify"))) {
+    console.error("bunker: --watch needs a verify command: pass --verify \"<cmd>\" or add a .bunker/verify file");
+    process.exit(2);
+  }
+  watchOpts = { intervalMs: intervalMin * 60_000, maxCostUsd, ...(forMs === undefined ? {} : { forMs }) };
+  values.queue = true;
+  values.merge = true;
+} else if (values.interval !== undefined || values.for !== undefined || values["max-cost"] !== undefined) {
+  console.error("bunker: --interval, --for and --max-cost only apply to --watch");
+  process.exit(2);
+}
 if (values.audit) {
   if (prompt || tasks.length || values.review || values.issue !== undefined || values.queue) {
     console.error("bunker: --audit can't be combined with a prompt, --task, --review, --issue or --queue");
@@ -93,6 +131,7 @@ if (!values.audit && values.issue === undefined && !values.queue && !prompt === 
       '       bunker --review "<prompt>" [--max-rounds <n>] [--reviewer-model <id>]   (implement → review → fix)\n' +
       '       bunker --issue <n> [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--max-rounds <n>] [--reviewer-model <id>]   (issue → reviewed PR)\n' +
       '       bunker --queue [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--limit <n>]   (work the `bunker` label queue)\n' +
+      '       bunker --watch [--interval <min>] [--for <duration>] [--max-cost <usd>] [--verify "<cmd>"]   (work the queue unattended, auto-merging)\n' +
       '       bunker --audit [--max-issues <n>] [--focus "<text>"] [--setup "<cmd>"]   (file improvement ideas as `discovered` issues)\n' +
       '       bunker --task "<prompt>" --task "<prompt>" ...   (parallel, one worktree each)\n' +
       "run bunker --help for all options",
@@ -188,6 +227,23 @@ if (values.audit) {
   if (!result.filed.length) console.log("bunker: no issues filed");
   for (const f of result.filed) console.log(`filed #${f.number}: ${f.title}`);
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
+} else if (watchOpts) {
+  const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
+  const ctl = new AbortController();
+  // The first signal finishes the current step and exits 0; a second one quits now.
+  for (const sig of ["SIGINT", "SIGTERM"] as const) {
+    process.on(sig, () => {
+      if (ctl.signal.aborted) process.exit(130);
+      console.log(`bunker: ${sig} received; finishing the current step, then exiting (again to quit now)`);
+      ctl.abort();
+    });
+  }
+  try {
+    await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, signal: ctl.signal, ...watchOpts });
+  } catch (e) {
+    console.error(`bunker: ${e instanceof Error ? e.message : e}`);
+    process.exit(2);
+  }
 } else if (values.queue) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
   let results;
