@@ -12,7 +12,7 @@
   },
   "scripts": {
     "test": "bun test",
-    "build": "bun build --compile src/cli.ts --outfile dist/bunker",
+    "build": "bun scripts/build.ts",
     "typecheck": "tsc --noEmit",
     "docs:cli": "bun scripts/cli-docs.ts"
   },

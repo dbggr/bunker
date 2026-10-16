@@ -22,6 +22,7 @@ bunker --queue --merge              # everything labelled `bunker`
 - Scoped GitHub token and output redaction; agents never see GitHub credentials
 - Live multi-repo view with `bunker ui`
 - Read-only `--audit` that files improvement ideas
+- Starts each run with a safe `git pull --ff-only` of your checkout (clean, default branch only; `--no-pull` disables it), and `bunker self-update` rebuilds the binary from its own checkout
 
 ## Docs
 
