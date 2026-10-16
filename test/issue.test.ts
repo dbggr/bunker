@@ -339,7 +339,7 @@ describe("runIssue()", () => {
 
 describe("runIssue() --merge", () => {
   const run = (repo: string, extra: object = {}) =>
-    runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: "true", merge: true, ...extra });
+    runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10, ...extra });
   const branches = async (repo: string) => (await $`git -C ${repo} branch ${"--format=%(refname:short)"}`.text()).trim().split("\n");
 
   test("merged + landed → worktree and local branch removed", async () => {
@@ -435,6 +435,15 @@ describe("runIssue() --merge", () => {
     test("no checks configured → merges straight away", async () => {
       const { repo } = await withChecks([]);
       expect((await run(repo, { ciPollMs: 10 })).status).toBe("merged");
+    });
+
+    test("checks that register late are waited for, not skipped as 'no checks'", async () => {
+      const { repo } = await withChecks([]);
+      const root = dirname(repo);
+      setTimeout(() => Bun.write(join(root, "checks.json"), JSON.stringify({ statusCheckRollup: [{ ...pass, conclusion: "FAILURE" }] })), 60);
+      const r = await run(repo, { ciPollMs: 50 });
+      expect(r.status).toBe("ci-failed");
+      expect(await Bun.file(join(root, "merge.log")).exists()).toBe(false);
     });
 
     test("a failed gh pr view is retried, not treated as no checks", async () => {

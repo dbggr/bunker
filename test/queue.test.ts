@@ -124,13 +124,13 @@ describe("runQueue()", () => {
 
   test("with merge: continues after merged, honours limit", async () => {
     const { repo } = await setup(issues, "ff");
-    const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 2 });
+    const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 2, ciPollMs: 10 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"], [2, "merged"]]);
   });
 
   test("with merge: stops at the first non-merged outcome", async () => {
     const { repo } = await setup(issues, "ff");
-    const rs = await runQueue({ cwd: repo, agent: fakeAgent("nope"), sandbox: noSandbox(), verify: "true", merge: true });
+    const rs = await runQueue({ cwd: repo, agent: fakeAgent("nope"), sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "rejected"]]);
   });
 });
