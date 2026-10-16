@@ -4,7 +4,7 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { noSandbox, type Agent } from "../src/index.ts";
+import { noSandbox, type Agent, type Sandbox } from "../src/index.ts";
 import { parseDuration, runWatch } from "../src/watch.ts";
 
 const dirs: string[] = [];
@@ -157,6 +157,18 @@ describe("runWatch()", () => {
     const comments = await Bun.file(join(root, "comments.log")).text();
     expect(comments).toContain("[REDACTED]");
     expect(comments).not.toContain("ghp_abcdefghijklmnop1234");
+  });
+
+  test("spend from a run that throws after the agents ran counts toward the cap", async () => {
+    const { repo } = await setup(three);
+    const inner = noSandbox();
+    // The agents run fine; the sandboxed verify step blows up.
+    const sandbox: Sandbox = { exec: (cmd, ctx) => (cmd.join(" ").includes("(true)") ? Promise.reject(new Error("sandbox exploded")) : inner.exec(cmd, ctx)) };
+    const s = await runWatch({ ...base, sandbox, cwd: repo, agent: fakeAgent({ cost: 15 }), maxCostUsd: 20, forMs: 400, log: () => {} });
+    expect(s.failed).toBe(1);
+    expect(s.spentUsd).toBeCloseTo(30);
+    const spend = JSON.parse(await Bun.file(join(repo, ".bunker", "watch-spend.json")).text());
+    expect(spend.reduce((a: number, e: { usd: number }) => a + e.usd, 0)).toBeCloseTo(30);
   });
 
   test("the spend cap stops work and persists spend", async () => {
