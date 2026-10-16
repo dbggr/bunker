@@ -39,11 +39,15 @@ export function sumUsage(items: (Usage | undefined)[]): Usage | undefined {
   };
 }
 
-/** "$0.42, 1m 5s" */
+/** "1m 5s" */
+export function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+}
+
+/** "$0.42, 1m 5s agent time". The time is what the agent reported, not wall-clock. */
 export function formatUsage(u: Usage): string {
-  const s = Math.round(u.durationMs / 1000);
-  const time = s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
-  return `$${u.costUsd.toFixed(2)}, ${time}`;
+  return `$${u.costUsd.toFixed(2)}, ${formatDuration(u.durationMs)} agent time`;
 }
 
 /** Where the agent's command runs. Gets the worktree and the repo's shared .git dir. */

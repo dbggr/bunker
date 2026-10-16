@@ -111,3 +111,16 @@ describe("usage totals", () => {
     expect(err.usage).toEqual({ costUsd: 1.5, durationMs: 20 });
   });
 });
+
+describe("formatUsage / formatDuration", () => {
+  test("formatDuration renders seconds and minutes", async () => {
+    const { formatDuration } = await import("../src/index.ts");
+    expect(formatDuration(5400)).toBe("5s");
+    expect(formatDuration(65_000)).toBe("1m 5s");
+  });
+
+  test("formatUsage labels the time as agent time", async () => {
+    const { formatUsage } = await import("../src/index.ts");
+    expect(formatUsage({ costUsd: 0.42, durationMs: 65_000 })).toBe("$0.42, 1m 5s agent time");
+  });
+});
