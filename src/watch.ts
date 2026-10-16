@@ -2,6 +2,7 @@ import { $ } from "bun";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
+import { safePull } from "./pull.ts";
 import { redact } from "./redact.ts";
 import { runQueue, type QueueEntry, type QueueOptions } from "./issue.ts";
 
@@ -14,6 +15,8 @@ export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "ke
   forMs?: number;
   /** Abort to finish the current step and stop. */
   signal?: AbortSignal;
+  /** `git pull --ff-only` the checkout before each pass (when clean, on the default branch). */
+  pull?: boolean;
   /** One line per event. Defaults to console.log. */
   log?: (line: string) => void;
 }
@@ -50,7 +53,7 @@ function readSpend(file: string): Spend[] {
   }
 }
 
-const alive = (pid: number) => {
+export const alive = (pid: number) => {
   try {
     process.kill(pid, 0);
     return true;
@@ -87,7 +90,7 @@ function acquireLock(file: string): () => void {
  * Works the `bunker` queue with auto-merge, pass after pass, until aborted or `forMs` is up.
  * Any outcome other than `merged` relabels the issue `bunker-failed` so it is never retried by itself.
  */
-export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forMs, signal, log = console.log, ...opts }: WatchOptions): Promise<WatchSummary> {
+export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forMs, signal, pull = false, log = console.log, ...opts }: WatchOptions): Promise<WatchSummary> {
   const cwd = opts.cwd ?? process.cwd();
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
@@ -162,6 +165,10 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
         log(`bunker: spend cap reached ($${spentNow().toFixed(2)} of $${maxCostUsd} in 24 h); sleeping until ${new Date(at).toISOString()}`);
         await sleep(at - Date.now());
         continue;
+      }
+      if (pull) {
+        const r = await safePull(cwd);
+        if (!r.pulled) log(r.message);
       }
       let merged = 0;
       await runQueue({

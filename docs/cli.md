@@ -14,6 +14,7 @@ Usage:
   bunker --watch                              keep working the queue unattended (implies --queue --merge)
   bunker ui [--port <n>]                      shared live view: one tab per repo (default port 4321)
   bunker --audit                              file improvement ideas as `discovered` issues
+  bunker self-update                          pull, rebuild and reinstall bunker itself (BUNKER_HOME or build checkout)
 
 Common options (all modes):
   --model <id>               agent model
@@ -21,7 +22,9 @@ Common options (all modes):
   --no-sandbox               run the agent on the host instead of in docker
   -h, --help                 show this help (wins over every other flag)
   --verbose                  stream all agent, setup and verify output (also BUNKER_VERBOSE=1)
-  --version                  print the version
+  --version                  print the version and the commit it was built from
+  --no-pull                  (--issue, --queue, --watch, --audit) skip the `git pull --ff-only` of your checkout that
+                             otherwise runs first, only when it has no tracked changes and is on the default branch
 
 Single prompt and --task:
   --max-iterations <n>       re-run the agent up to n times in one worktree (default 1)

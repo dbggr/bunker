@@ -2,6 +2,7 @@ import type { ParseArgsOptionsConfig } from "node:util";
 
 export const options = {
   help: { type: "boolean", short: "h", default: false },
+  "no-pull": { type: "boolean", default: false },
   "no-sandbox": { type: "boolean", default: false },
   image: { type: "string" },
   model: { type: "string" },

@@ -13,6 +13,9 @@ import { connectHub, hubReachable, readToken, repoId, startHub, type Hub, type P
 import { HELP } from "./help.ts";
 import { options } from "./options.ts";
 import { output } from "./output.ts";
+import { safePull } from "./pull.ts";
+import { selfUpdate } from "./self-update.ts";
+import { buildCommit } from "./build-info.ts";
 import pkg from "../package.json" with { type: "json" };
 
 // Anything printed first wipes the in-place progress line, if one is showing.
@@ -45,8 +48,12 @@ if (values.help) {
 }
 
 if (values.version) {
-  console.log(pkg.version);
+  console.log(`${pkg.version} (${await buildCommit()})`);
   process.exit(0);
+}
+
+if (positionals.length === 1 && positionals[0] === "self-update") {
+  process.exit(await selfUpdate());
 }
 
 // `bunker ui [--port <n>]`: the shared live view, a long-lived hub every run publishes to.
@@ -248,6 +255,9 @@ if (values.ui || values.queue || values.issue !== undefined) {
 }
 const onEvent = publisher ? (e: BunkerEvent) => (progress.onEvent(e), publisher.onEvent(e)) : progress.onEvent;
 clearProgress = progress.clear;
+// Keep the caller's checkout current (lags otherwise: .bunker/verify lookup, docs); --watch pulls on every pass itself.
+const pull = !values["no-pull"] && !watchOpts && (values.audit || values.queue || values.issue !== undefined);
+if (pull) console.log((await safePull(process.cwd())).message);
 const agent = claudeCode({ model: values.model, json: true });
 const sandbox = values["no-sandbox"] ? noSandbox() : docker({ image: values.image });
 
@@ -277,7 +287,7 @@ if (values.audit) {
     });
   }
   try {
-    await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, signal: ctl.signal, ...watchOpts });
+    await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, signal: ctl.signal, pull: !values["no-pull"], ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
