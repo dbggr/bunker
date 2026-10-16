@@ -226,7 +226,7 @@ describe("runQueue()", () => {
   });
 
   test("ignores a valid-but-wrong-shaped list response", async () => {
-    for (const raw of ["null", '{"message":"rate limited"}', "42", '"x"', '[null, 7, {"title":"no number"}]']) {
+    for (const raw of ["null", '{"message":"rate limited"}', "42", '"x"', '[null, 7, {"title":"no number"}]', '[{"number":3}]', '[{"number":3,"title":"t"}]']) {
       const { repo } = await setup(issues);
       await Bun.write(join(repo, "..", "list-raw-once"), raw);
       const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), listRetryMs: 10 });
@@ -235,7 +235,9 @@ describe("runQueue()", () => {
   });
 
   test("skips an issue whose view is valid JSON of the wrong shape", async () => {
-    for (const raw of ["null", "[]", '{"state":"OPEN"}', '{"state":"OPEN","labels":"bunker"}']) {
+    for (const raw of ["null", "[]", '{"state":"OPEN"}', '{"state":"OPEN","labels":"bunker"}', '{"state":"OPEN","labels":[null]}',
+      '{"state":"OPEN","labels":[{"name":"bunker"}],"comments":"x","body":5}', '{"state":"OPEN","labels":[{"name":"bunker"}],"comments":[null]}',
+      '{"state":"OPEN","labels":[{"name":"bunker"}],"comments":[{"body":5,"authorAssociation":"OWNER"}]}']) {
       const { repo } = await setup(issues);
       await Bun.write(join(repo, "..", "view-raw-1"), raw);
       const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10, listRetryMs: 10 });
