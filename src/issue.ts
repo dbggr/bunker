@@ -62,9 +62,14 @@ const ISSUE_CONVENTION =
 /** Every `<issue title="...">body</issue>` block in `text`, deduped by title (first wins). */
 export function parseIssueBlocks(text: string): { title: string; body: string }[] {
   const seen = new Map<string, string>();
-  for (const m of text.matchAll(/<issue\s+title="([^"]*)"\s*>([\s\S]*?)<\/issue>/g)) {
+  // Blocks an agent merely quotes (fenced code or inline code spans) are not findings.
+  const prose = text
+    .replace(/^ *(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^ *\1[`~]*[ \t]*$|(?![\s\S]))/gm, "")
+    .replace(/(`+)[^`][\s\S]*?\1/g, "");
+  for (const m of prose.matchAll(/<issue\s+title="([^"]*)"\s*>([\s\S]*?)<\/issue>/g)) {
     const title = m[1]!.trim();
-    if (title && !seen.has(title)) seen.set(title, m[2]!.trim());
+    const placeholder = !/[\p{L}\p{N}]/u.test(title) || title.toLowerCase() === "short title";
+    if (!placeholder && !seen.has(title)) seen.set(title, m[2]!.trim());
   }
   return [...seen].map(([title, body]) => ({ title, body }));
 }
