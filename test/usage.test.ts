@@ -27,7 +27,8 @@ describe("claudeCode({ json })", () => {
   test("requests JSON output only when asked", () => {
     expect(claudeCode().command("x")).not.toContain("--output-format");
     const cmd = claudeCode({ json: true }).command("x");
-    expect(cmd.slice(cmd.indexOf("--output-format"), cmd.indexOf("--output-format") + 2)).toEqual(["--output-format", "json"]);
+    expect(cmd.slice(cmd.indexOf("--output-format"), cmd.indexOf("--output-format") + 2)).toEqual(["--output-format", "stream-json"]);
+    expect(cmd).toContain("--verbose");
   });
 
   test("parse() extracts result text, cost and duration", () => {
