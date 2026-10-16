@@ -169,7 +169,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
         skip: (n) => handled.has(n),
         shouldStop: () => stopped() || spentNow() >= maxCostUsd,
         onResult: async (e) => {
-          const usd = e.review?.usage?.costUsd ?? 0;
+          const usd = (e.review?.usage ?? e.usage)?.costUsd ?? 0;
           if (usd > 0) addSpend(usd);
           summary.spentUsd += usd;
           if (e.status === "merged") {

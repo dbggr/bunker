@@ -6,7 +6,7 @@ import { redact } from "./redact.ts";
 import { emit } from "./events.ts";
 import { tailLines, testCounts } from "./output.ts";
 import { hyperlink } from "./events.ts";
-import { emitStage, review, runSetup, type Agent, type OnEvent, type ReviewResult, type Sandbox } from "./index.ts";
+import { AgentFailure, emitStage, review, runSetup, type Agent, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
 
 export interface IssueInfo {
   number: number;
@@ -53,6 +53,8 @@ export interface IssueResult {
   worktree: string;
   prUrl?: string;
   review?: ReviewResult;
+  /** Spend when the run threw instead of producing a `review` (otherwise see `review.usage`). */
+  usage?: Usage;
   /** Tail of the verify command's output, when it failed. */
   verifyOutput?: string;
   error?: string;
@@ -270,7 +272,18 @@ function commentsSection(comments: IssueInfo["comments"]): string {
  * every later outcome is a status, and the worktree and branch are always kept.
  * The caller's checkout and branch are never touched.
  */
-export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, setup, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent }: IssueOptions): Promise<IssueResult> {
+export async function runIssue(opts: IssueOptions): Promise<IssueResult> {
+  const spent: { usage?: Usage } = {};
+  try {
+    return await runIssueInner(opts, spent);
+  } catch (e) {
+    // Whatever the agents already spent must not vanish with the error.
+    if (spent.usage && !(e instanceof AgentFailure)) throw new AgentFailure(e instanceof Error ? e.message : String(e), spent.usage);
+    throw e;
+  }
+}
+
+async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, setup, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent }: IssueOptions, spent: { usage?: Usage }): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -352,6 +365,7 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
     ISSUE_CONVENTION;
   log("raw agent events (stream-json lines follow, interleaved with the sections below)");
   const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, setup, reviewerInstruction: ISSUE_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
+  spent.usage = result.usage;
 
   for (const [i, r] of result.rounds.entries()) {
     log(`round ${i + 1}: agent output`, r.output);
@@ -556,7 +570,8 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       result = await runIssue({ ...opts, cwd, issue: q.number });
     } catch (e) {
       if (!keepGoing) throw e;
-      result = { status: "failed", branch: "", worktree: "", filed: [], error: e instanceof Error ? e.message : String(e) };
+      const usage = e instanceof AgentFailure ? e.usage : undefined;
+      result = { status: "failed", branch: "", worktree: "", filed: [], ...(usage ? { usage } : {}), error: e instanceof Error ? e.message : String(e) };
     }
     const entry = { ...result, issue: q.number, title: q.title };
     done.push(entry);
