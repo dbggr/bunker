@@ -44,7 +44,7 @@ export function formatUsage(u: Usage): string {
 
 /** Where the agent's command runs. Gets the worktree and the repo's shared .git dir. */
 export interface Sandbox {
-  exec(cmd: string[], ctx: { worktree: string; gitCommonDir: string }): Promise<{ code: number; stdout: string }>;
+  exec(cmd: string[], ctx: { worktree: string; gitCommonDir: string; prefix?: string }): Promise<{ code: number; stdout: string }>;
 }
 
 export interface Commit {
@@ -123,8 +123,12 @@ export function claudeCode(opts: { model?: string; attribution?: boolean; json?:
   };
 }
 
-/** Waits for the process, echoing its (redacted) stdout live to the terminal while capturing it. */
-async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">): Promise<{ code: number; stdout: string }> {
+function prefixLines(text: string, prefix: string): string {
+  return prefix ? text.replace(/^(?=.)/gm, prefix) : text;
+}
+
+/** Waits for the process, echoing its (redacted) stdout live, each line led by `prefix`, while capturing it unprefixed. */
+async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">, prefix = ""): Promise<{ code: number; stdout: string }> {
   const decoder = new TextDecoder();
   let stdout = "";
   // Echo whole lines only, so a secret split across chunks is still caught.
@@ -135,14 +139,14 @@ async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">): Pro
     pending += text;
     const nl = pending.lastIndexOf("\n");
     if (nl >= 0) {
-      process.stdout.write(redact(pending.slice(0, nl + 1)));
+      process.stdout.write(prefixLines(redact(pending.slice(0, nl + 1)), prefix));
       pending = pending.slice(nl + 1);
     }
   }
   const tail = decoder.decode();
   stdout += tail;
   pending += tail;
-  if (pending) process.stdout.write(redact(pending));
+  if (pending) process.stdout.write(prefixLines(redact(pending), prefix));
   return { code: await proc.exited, stdout: redact(stdout) };
 }
 
@@ -152,10 +156,10 @@ export const GH_TOKEN_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "BUNKER_GH_TOKEN"] as 
 /** Runs the agent straight on the host, in the worktree. No isolation (GitHub tokens are stripped from its env). */
 export function noSandbox(): Sandbox {
   return {
-    exec: (cmd, { worktree }) =>
+    exec: (cmd, { worktree, prefix }) =>
       // Explicit env: Bun.spawn otherwise passes the startup environment, dropping
       // anything set at runtime (e.g. the token loaded from .bunker/.env).
-      teeStdout(Bun.spawn(cmd, { cwd: worktree, env: agentEnv(), stdio: ["ignore", "pipe", "inherit"] })),
+      teeStdout(Bun.spawn(cmd, { cwd: worktree, env: agentEnv(), stdio: ["ignore", "pipe", "inherit"] }), prefix),
   };
 }
 
@@ -227,7 +231,7 @@ export function docker(opts: DockerOptions = {}): Sandbox {
   // runAll() calls exec once per task at the same time; share one image build per repo.
   const images = new Map<string, Promise<string>>();
   return {
-    async exec(cmd, { worktree, gitCommonDir }) {
+    async exec(cmd, { worktree, gitCommonDir, prefix }) {
       const [entrypoint, ...args] = cmd;
       if (!entrypoint) throw new Error("empty agent command");
       if (!images.has(gitCommonDir)) images.set(gitCommonDir, resolveImage(opts, worktree, gitCommonDir));
@@ -254,7 +258,7 @@ export function docker(opts: DockerOptions = {}): Sandbox {
         image,
         ...args,
       ];
-      return teeStdout(Bun.spawn(docker, { env: process.env, stdio: ["ignore", "pipe", "inherit"] }));
+      return teeStdout(Bun.spawn(docker, { env: process.env, stdio: ["ignore", "pipe", "inherit"] }), prefix);
     },
   };
 }
@@ -328,13 +332,14 @@ async function runAgent(
   gitCommonDir: string,
   wt: Worktree,
   { prompt, agent, sandbox, maxIterations = 1, completionSignal = DEFAULT_SIGNAL }: Omit<RunOptions, "cwd">,
+  prefix?: string,
 ): Promise<AgentOutcome> {
   const signals = [completionSignal].flat();
   const iterations: Iteration[] = [];
   let commits: Commit[] = [];
   try {
     for (let i = 0; i < maxIterations; i++) {
-      const { code, stdout } = await sandbox.exec(agent.command(prompt), { worktree: wt.path, gitCommonDir });
+      const { code, stdout } = await sandbox.exec(agent.command(prompt), { worktree: wt.path, gitCommonDir, ...(prefix ? { prefix } : {}) });
       const { text, usage } = interpret(agent, stdout);
       if (code !== 0) {
         throw new AgentFailure(`agent exited with ${code}; work kept on ${wt.branch}`, sumUsage([...iterations.map((i) => i.usage), usage]));
@@ -406,7 +411,8 @@ export interface TaskResult {
  * One worktree per task, all from the same base. Worktrees are created one at a
  * time (git takes locks on the shared .git), agents run concurrently, and merges
  * land one at a time in task order. A task's failure or conflict is reported in
- * its result, never thrown, and its branch is kept.
+ * its result, never thrown, and its branch is kept. Live output lines are
+ * prefixed with the task index (`[2] `); captured stdout is not.
  */
 export async function runAll({ tasks, cwd = process.cwd(), ...opts }: RunAllOptions): Promise<TaskResult[]> {
   const { base, gitCommonDir } = await repoInfo(cwd);
@@ -414,7 +420,7 @@ export async function runAll({ tasks, cwd = process.cwd(), ...opts }: RunAllOpti
   for (const _ of tasks) worktrees.push(await addWorktree(cwd, base));
 
   const outcomes = await Promise.allSettled(
-    tasks.map((task, i) => runAgent(cwd, base, gitCommonDir, worktrees[i]!, { ...opts, prompt: task.prompt })),
+    tasks.map((task, i) => runAgent(cwd, base, gitCommonDir, worktrees[i]!, { ...opts, prompt: task.prompt }, `[${i}] `)),
   );
 
   const results: TaskResult[] = [];
