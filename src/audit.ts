@@ -75,7 +75,7 @@ export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues 
     if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${prep.stdout.slice(-2000)}`);
     const res = await sandbox.exec(agent.command(auditPrompt(maxIssues, focus), "review"), ctx);
     if (res.code !== 0) throw new Error(`agent exited with ${res.code}`);
-    output = res.stdout;
+    output = agent.parse?.(res.stdout).text ?? res.stdout;
   } finally {
     await $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet();
   }
