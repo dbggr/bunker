@@ -2,6 +2,7 @@ import { $ } from "bun";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { redact } from "./redact.ts";
+import baseDockerfile from "../images/base/Dockerfile" with { type: "text" };
 
 export type AgentMode = "write" | "review";
 
@@ -114,7 +115,18 @@ function agentEnv(): Record<string, string | undefined> {
 }
 
 const BASE_IMAGE = "bunker-claude";
-const BASE_CONTEXT = join(import.meta.dir, "..", "images", "base");
+
+/** Builds the base image from the Dockerfile embedded in the bundle (it has no COPY, so stdin needs no context). */
+export async function buildBaseImage(tag = BASE_IMAGE, dockerBin = "docker") {
+  console.error(`bunker: building ${tag}`);
+  const proc = Bun.spawn([dockerBin, "build", "-q", "-t", tag, "-"], {
+    stdin: new TextEncoder().encode(baseDockerfile),
+    stdout: "ignore",
+    stderr: "inherit",
+  });
+  const code = await proc.exited;
+  if (code !== 0) throw new Error(`docker build of ${tag} failed (exit ${code})`);
+}
 
 async function dockerBuild(tag: string, context: string, dockerfile = join(context, "Dockerfile")) {
   console.error(`bunker: building ${tag}`);
@@ -132,7 +144,7 @@ async function resolveImage(opts: DockerOptions, worktree: string, gitCommonDir:
   if (opts.image) return opts.image;
   const base = opts.baseImage ?? BASE_IMAGE;
   if (base === BASE_IMAGE && (await $`docker image inspect ${base}`.quiet().nothrow()).exitCode !== 0) {
-    await dockerBuild(base, BASE_CONTEXT);
+    await buildBaseImage(base);
   }
   const repoDockerfile = join(worktree, ".bunker", "Dockerfile");
   if (!(await Bun.file(repoDockerfile).exists())) return base;

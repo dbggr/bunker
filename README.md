@@ -16,6 +16,14 @@ cd /some/repo
 bun ~/Projects/Management/tool-bunker/src/cli.ts "add a greet() helper" [--model <id>] [--no-sandbox]
 ```
 
+### Install
+
+```sh
+bun run build && install -m 755 dist/bunker ~/.local/bin/bunker
+```
+
+Then run `bunker "…"` from any repo. The base image's Dockerfile is embedded in the binary.
+
 Or as a library:
 
 ```ts
