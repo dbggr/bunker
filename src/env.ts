@@ -1,11 +1,21 @@
+import { join } from "node:path";
+
 type Env = Record<string, string | undefined>;
 
 export const AUTH_VARS = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] as const;
 
 export const AUTH_HINT = `bunker: no Claude auth found.
-  Run \`claude setup-token\` and put the token in .bunker/.env:
+  Run \`claude setup-token\` and put the token in ~/.config/bunker/.env:
     CLAUDE_CODE_OAUTH_TOKEN=<token>
-  (or export it, or set ANTHROPIC_API_KEY to bill an API key instead). See .env.example.`;
+  (a repo's .bunker/.env or an exported var overrides it; ANTHROPIC_API_KEY bills an API key instead). See .env.example.`;
+
+/** Loads auth/config env. Precedence: already-set vars > <repo>/.bunker/.env > user file. */
+export async function loadBunkerEnv(cwd: string, env: Env = process.env): Promise<void> {
+  const configHome = env.XDG_CONFIG_HOME || join(env.HOME ?? "", ".config");
+  // loadEnvFile never overwrites, so the first file loaded wins.
+  await loadEnvFile(join(cwd, ".bunker", ".env"), env);
+  await loadEnvFile(join(configHome, "bunker", ".env"), env);
+}
 
 /** Loads KEY=VALUE lines into env. `#` lines are comments; variables already set win. */
 export async function loadEnvFile(path: string, env: Env = process.env): Promise<void> {

@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { parseArgs } from "node:util";
-import { join } from "node:path";
-import { AUTH_HINT, hasAuth, loadEnvFile } from "./env.ts";
+import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
 import { claudeCode, docker, noSandbox, run } from "./index.ts";
 
 const { values, positionals } = parseArgs({
@@ -19,7 +18,7 @@ if (!prompt) {
   process.exit(2);
 }
 
-await loadEnvFile(join(process.cwd(), ".bunker", ".env"));
+await loadBunkerEnv(process.cwd());
 if (!values["no-sandbox"] && !hasAuth()) {
   // On the host claude can use your login; in a container it only has what we pass in.
   console.error(AUTH_HINT);

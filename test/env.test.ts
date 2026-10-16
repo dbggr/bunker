@@ -3,7 +3,7 @@ import { $ } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hasAuth, loadEnvFile } from "../src/env.ts";
+import { hasAuth, loadBunkerEnv, loadEnvFile } from "../src/env.ts";
 
 const dirs: string[] = [];
 async function tempDir(): Promise<string> {
@@ -53,6 +53,40 @@ describe("loadEnvFile", () => {
   });
 });
 
+describe("loadBunkerEnv", () => {
+  test("loads the user file at ~/.config/bunker/.env", async () => {
+    const home = await tempDir();
+    await Bun.write(join(home, ".config/bunker/.env"), "CLAUDE_CODE_OAUTH_TOKEN=user\n");
+    const env: Record<string, string | undefined> = { HOME: home };
+
+    await loadBunkerEnv(await tempDir(), env);
+
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("user");
+  });
+
+  test("respects XDG_CONFIG_HOME", async () => {
+    const xdg = await tempDir();
+    await Bun.write(join(xdg, "bunker/.env"), "CLAUDE_CODE_OAUTH_TOKEN=xdg\n");
+    const env: Record<string, string | undefined> = { HOME: await tempDir(), XDG_CONFIG_HOME: xdg };
+
+    await loadBunkerEnv(await tempDir(), env);
+
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("xdg");
+  });
+
+  test("exported env > repo .bunker/.env > user file", async () => {
+    const home = await tempDir();
+    const repo = await tempDir();
+    await Bun.write(join(home, ".config/bunker/.env"), "A=user\nB=user\nC=user\n");
+    await Bun.write(join(repo, ".bunker/.env"), "A=repo\nB=repo\n");
+    const env: Record<string, string | undefined> = { HOME: home, A: "shell" };
+
+    await loadBunkerEnv(repo, env);
+
+    expect([env.A, env.B, env.C]).toEqual(["shell", "repo", "user"]);
+  });
+});
+
 describe("hasAuth", () => {
   test("accepts either the OAuth token or an API key, ignoring empty values", () => {
     expect(hasAuth({ CLAUDE_CODE_OAUTH_TOKEN: "t" })).toBe(true);
@@ -64,7 +98,8 @@ describe("hasAuth", () => {
 
 describe("cli", () => {
   const cli = join(import.meta.dir, "..", "src", "cli.ts");
-  const bareEnv = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" };
+  // Empty HOME so a real ~/.config/bunker/.env on the dev box cannot leak into these tests.
+  const bareEnv = { PATH: process.env.PATH ?? "", HOME: join(tmpdir(), "bunker-test-empty-home") };
 
   test("without auth, exits non-zero and points at claude setup-token", async () => {
     const repo = await tempDir();
@@ -75,6 +110,22 @@ describe("cli", () => {
     expect(await proc.exited).toBe(2);
     expect(await new Response(proc.stderr).text()).toContain("claude setup-token");
   });
+
+  test("picks the token up from the user file, with no repo .env", async () => {
+    const repo = await tempDir();
+    const home = await tempDir();
+    await $`git init -q ${repo}`;
+    await Bun.write(join(home, ".config/bunker/.env"), "CLAUDE_CODE_OAUTH_TOKEN=tok\n");
+
+    const proc = Bun.spawn(["bun", cli, "--image", "bunker-no-such-image", "x"], {
+      cwd: repo,
+      env: { ...bareEnv, HOME: home },
+      stderr: "pipe",
+    });
+    expect(await proc.exited).not.toBe(2);
+
+    expect(await new Response(proc.stderr).text()).not.toContain("claude setup-token");
+  }, 30_000);
 
   test("picks the token up from <repo>/.bunker/.env", async () => {
     const repo = await tempDir();
