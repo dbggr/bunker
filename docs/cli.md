@@ -34,8 +34,11 @@ Single prompt and --task:
 
 --issue and --queue:
   --issue <n>                implement GitHub issue n and open a PR
-  --queue                    run open issues labelled `bunker`, oldest first
-  --limit <n>                (--queue) max issues per run (default 5)
+  --queue                    run open issues labelled `bunker`, oldest first; skips any with an open
+                             `Blocked by #N` / `Depends on #N`. An agent that prints <blocked-by title="…">…</blocked-by>
+                             gets its blocker filed as `discovered` and the issue relabelled `bunker-blocked`
+                             (no PR, doesn't count toward --limit); it returns to `bunker` once the blockers close
+  --limit <n>                (--queue) max issues per run (default 5; blocked issues don't count)
   --setup "<cmd>"            run in the worktree before the agent (default: .bunker/setup)
   --verify "<cmd>"           run after approval; a failure stops before pushing (default: .bunker/verify)
   --verify-on-host           run --verify on the host instead of in the sandbox

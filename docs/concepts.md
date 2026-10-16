@@ -32,6 +32,7 @@ Outcomes: `merged`, `ci-timeout` (PR left open, auto-merge still armed), `merge-
 - `bunker`: queued. `--queue` and `--watch` work these oldest first.
 - `discovered`: filed by an agent (or `--audit`) for something out of scope. It waits for a human to triage; relabel it `bunker` to queue it. Agents can't queue work themselves.
 - `bunker-failed`: `--watch` swaps `bunker` for this when an issue ends in anything but `merged`, and comments the status and log path. It is never retried automatically; relabel `bunker` to retry.
+- `bunker-blocked`: an agent printed `<blocked-by title="…">why + acceptance criteria</blocked-by>` because the issue can't be done until something else is. bunker files that blocker as `discovered` (body ends `Blocks #N.`; a human triages it), pushes nothing, removes the worktree and branch, comments `Blocked by #M: <title>` and swaps `bunker` for this label. The result status is `blocked`; it doesn't count toward `--limit` and doesn't stop the queue or `--watch`. The queue also skips any issue whose body or trusted comments say `Blocked by #N` or `Depends on #N` while #N is open (logged as `waiting on #N`). At the start of each queue pass and after each merge, every open `bunker-blocked` issue whose blockers are all closed goes back to `bunker` with the comment `Unblocked: #M is closed`.
 
 ## Run logs
 
