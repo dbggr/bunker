@@ -72,7 +72,7 @@ if (positionals.length === 1 && positionals[0] === "ui") {
     console.error(`bunker: could not start the hub: ${e instanceof Error ? e.message : e}`);
     process.exit(2);
   }
-  console.log(`bunker: hub at ${hyperlink(hub.url)} (Ctrl-C to quit)`);
+  console.log(`bunker: hub at ${hub.url} (Ctrl-C to quit)`);
   await new Promise(() => {});
 }
 
