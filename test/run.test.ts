@@ -1,9 +1,9 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { $ } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeCode, docker, noSandbox, run, type Agent } from "../src/index.ts";
+import { claudeCode, docker, noSandbox, run, runAll, type Agent } from "../src/index.ts";
 
 const dirs: string[] = [];
 
@@ -175,6 +175,30 @@ describe.skipIf(!dockerUp)("run() with docker", () => {
     await run({ cwd: repo, prompt: "x", agent, sandbox: docker({ baseImage: GIT_IMAGE }) });
 
     expect(await Bun.file(join(repo, "e.txt")).text()).toBe("extended\n");
+  }, 120_000);
+
+  test("parallel agents share one build of the repo image", async () => {
+    const repo = await makeRepo();
+    await Bun.write(join(repo, ".bunker/Dockerfile"), `FROM ${GIT_IMAGE}\n`);
+    await $`git -C ${repo} add .bunker && git -C ${repo} commit -qm bunker-image`;
+    const builds: string[] = [];
+    const spy = spyOn(console, "error").mockImplementation((msg: unknown) => {
+      if (String(msg).includes("building")) builds.push(String(msg));
+    });
+
+    try {
+      const results = await runAll({
+        cwd: repo,
+        agent: { command: (p) => ["sh", "-c", p] },
+        sandbox: docker({ baseImage: GIT_IMAGE }),
+        tasks: [{ prompt: "true" }, { prompt: "true" }, { prompt: "true" }],
+      });
+      expect(results.map((r) => r.status)).toEqual(["merged", "merged", "merged"]);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(builds).toHaveLength(1);
   }, 120_000);
 
   test("an explicit image overrides the repo's .bunker/Dockerfile", async () => {

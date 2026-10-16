@@ -103,11 +103,14 @@ export interface DockerOptions {
  */
 export function docker(opts: DockerOptions = {}): Sandbox {
   const env = opts.env ?? ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
+  // runAll() calls exec once per task at the same time; share one image build per repo.
+  const images = new Map<string, Promise<string>>();
   return {
     async exec(cmd, { worktree, gitCommonDir }) {
       const [entrypoint, ...args] = cmd;
       if (!entrypoint) throw new Error("empty agent command");
-      const image = await resolveImage(opts, worktree, gitCommonDir);
+      if (!images.has(gitCommonDir)) images.set(gitCommonDir, resolveImage(opts, worktree, gitCommonDir));
+      const image = await images.get(gitCommonDir)!;
       // ~/.gitconfig isn't in the container, so carry the commit identity over.
       const name = (await $`git -C ${worktree} config user.name`.nothrow().text()).trim();
       const email = (await $`git -C ${worktree} config user.email`.nothrow().text()).trim();
