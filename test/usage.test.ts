@@ -3,7 +3,7 @@ import { $ } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeCode, noSandbox, review, run, runAll, type Agent } from "../src/index.ts";
+import { AgentFailure, claudeCode, noSandbox, review, run, runAll, type Agent } from "../src/index.ts";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -101,5 +101,13 @@ describe("usage totals", () => {
     const [r] = await runAll({ cwd: repo, tasks: [{ prompt: "x" }], agent, sandbox: noSandbox() });
     expect(r!.status).toBe("failed");
     expect(r!.usage).toEqual({ costUsd: 1.5, durationMs: 20 });
+  });
+
+  test("run() rejects with an AgentFailure carrying the usage spent", async () => {
+    const repo = await makeRepo();
+    const agent = jsonAgent(() => `echo '${json("boom", 1.5, 20)}'; exit 3`);
+    const err = await run({ cwd: repo, prompt: "x", agent, sandbox: noSandbox() }).catch((e) => e);
+    expect(err).toBeInstanceOf(AgentFailure);
+    expect(err.usage).toEqual({ costUsd: 1.5, durationMs: 20 });
   });
 });
