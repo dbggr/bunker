@@ -368,6 +368,8 @@ export interface QueueOptions extends Omit<IssueOptions, "issue"> {
   keepGoing?: boolean;
   /** Checked before each issue; true ends the pass without starting another. */
   shouldStop?: () => boolean;
+  /** Issues for which this returns true are not started. */
+  skip?: (issue: number) => boolean;
   /** Called after each issue run, before the next one starts. */
   onResult?: (entry: QueueEntry) => void | Promise<void>;
 }
@@ -382,7 +384,7 @@ export interface QueueEntry extends IssueResult {
  * stops after the first PR opens; with `merge` continues only after `merged`.
  * Stops at the first other outcome, or after `limit` issues.
  */
-export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shouldStop, onResult, ...opts }: QueueOptions): Promise<QueueEntry[]> {
+export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shouldStop, skip, onResult, ...opts }: QueueOptions): Promise<QueueEntry[]> {
   const cwd = opts.cwd ?? process.cwd();
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
@@ -408,6 +410,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
   const done: QueueEntry[] = [];
   for (const q of queue) {
     if (done.length >= limit || shouldStop?.()) break;
+    if (skip?.(q.number)) continue;
     // The list lags label changes by seconds, so confirm the live state before working it.
     const view = await $`gh issue view ${q.number} --json state,labels`.cwd(cwd).env(env).nothrow().quiet();
     if (view.exitCode !== 0) {

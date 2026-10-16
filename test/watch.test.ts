@@ -66,6 +66,7 @@ if [ "$1 $2" = "issue list" ]; then
   printf ']'; exit 0
 fi
 if [ "$1 $2" = "issue view" ]; then cat "${root}/issue-$3.json"; exit 0; fi
+if [ "$1 $2" = "issue edit" ] && [ -f "${root}/edit-fails" ]; then echo "network down" >&2; exit 1; fi
 if [ "$1 $2" = "issue edit" ]; then rm -f "${root}/q/$3.json"; exit 0; fi
 if [ "$1 $2" = "issue comment" ]; then shift 3; echo "COMMENT: $*" >> "${root}/comments.log"; exit 0; fi
 if [ "$1 $2" = "label create" ]; then exit 0; fi
@@ -134,6 +135,28 @@ describe("runWatch()", () => {
     expect(comments).toContain("agent exited with 1");
     expect(comments).toMatch(/\.bunker\/runs\//);
     expect(prompts.filter((p) => p.includes("Title: First"))).toHaveLength(1);
+  });
+
+  test("a failed relabel never makes the same watcher retry the issue", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    await Bun.write(join(root, "edit-fails"), "");
+    const ctl = new AbortController();
+    const prompts: string[] = [];
+    await runWatch({
+      ...base, cwd: repo, agent: fakeAgent({ failing: ["First"], prompts }), signal: ctl.signal,
+      log: (l) => { if (/pass 3 /.test(l)) ctl.abort(); },
+    });
+    expect(prompts.filter((p) => p.includes("Title: First"))).toHaveLength(1);
+  });
+
+  test("secrets are redacted from the failure comment", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    const agent = fakeAgent();
+    const ctl = new AbortController();
+    await runWatch({ ...base, verify: "echo ghp_abcdefghijklmnop1234; exit 1", cwd: repo, agent, signal: ctl.signal, log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); } });
+    const comments = await Bun.file(join(root, "comments.log")).text();
+    expect(comments).toContain("[REDACTED]");
+    expect(comments).not.toContain("ghp_abcdefghijklmnop1234");
   });
 
   test("the spend cap stops work and persists spend", async () => {

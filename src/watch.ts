@@ -2,9 +2,10 @@ import { $ } from "bun";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
+import { redact } from "./redact.ts";
 import { runQueue, type QueueEntry, type QueueOptions } from "./issue.ts";
 
-export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "onResult"> {
+export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult"> {
   /** Sleep between passes. Defaults to 10 minutes. */
   intervalMs?: number;
   /** Spend cap in USD per rolling 24 h. Defaults to 20. */
@@ -63,11 +64,15 @@ function acquireLock(file: string): () => void {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       writeFileSync(file, String(process.pid), { flag: "wx" });
-      return () => {
+      // Also released on process.exit (e.g. a second signal), not just on a clean stop.
+      const release = () => {
+        process.off("exit", release);
         try {
           if (readFileSync(file, "utf8").trim() === String(process.pid)) rmSync(file);
         } catch {}
       };
+      process.on("exit", release);
+      return release;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
       const pid = Number(readFileSync(file, "utf8").trim());
@@ -126,15 +131,18 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
     writeFileSync(spendFile, JSON.stringify([...entries, { at: Date.now(), usd }]));
   };
 
+  /** Issues this watcher already gave up on; a failed relabel must not let one be retried. */
+  const handled = new Set<number>();
   let labelReady = false;
   const markFailed = async (e: QueueEntry) => {
+    handled.add(e.issue);
     if (!labelReady) {
       await $`gh label create ${FAILED_LABEL} --description ${"bunker gave up on this issue; relabel `bunker` to retry"} --color B60205`.cwd(cwd).env(env).nothrow().quiet();
       labelReady = true;
     }
     const edit = await $`gh issue edit ${e.issue} --remove-label bunker --add-label ${FAILED_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
     if (edit.exitCode !== 0) log(`bunker: could not relabel #${e.issue}: ${edit.stderr.toString().trim()}`);
-    const body = [
+    const body = redact([
       `bunker --watch did not merge this issue: status \`${e.status}\`.`,
       ...(e.error ? ["", "```", e.error.trimEnd(), "```"] : []),
       ...(e.verifyOutput ? ["", "Verify output:", "```", e.verifyOutput.trimEnd(), "```"] : []),
@@ -142,7 +150,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
       ...(e.logPath ? ["", `Run log: \`${e.logPath}\``] : []),
       "",
       `Relabel \`bunker\` to retry.`,
-    ].join("\n");
+    ].join("\n"));
     await $`gh issue comment ${e.issue} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
   };
 
@@ -158,6 +166,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
       let merged = 0;
       await runQueue({
         ...opts, cwd, merge: true, limit: Infinity, keepGoing: true,
+        skip: (n) => handled.has(n),
         shouldStop: () => stopped() || spentNow() >= maxCostUsd,
         onResult: async (e) => {
           const usd = e.review?.usage?.costUsd ?? 0;
