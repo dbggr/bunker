@@ -249,6 +249,46 @@ describe("runIssue()", () => {
     expect(calls.some((c) => c.join(" ").includes("ONHOST"))).toBe(false);
   });
 
+  test("setup runs in the sandbox before the agent; agent sees its output", async () => {
+    const { repo } = await setup(issue());
+    const calls: string[][] = [];
+    const inner = noSandbox();
+    const sandbox = { exec: (cmd: string[], ctx: { worktree: string; gitCommonDir: string }) => (calls.push(cmd), inner.exec(cmd, ctx)) };
+    const agent: Agent = {
+      command: (_p, mode = "write") =>
+        mode === "write"
+          ? ["sh", "-c", `cp setup.out feature.txt && git add feature.txt && git commit -qm "feat: impl"`]
+          : ["sh", "-c", `echo '${APPROVE}'`],
+    };
+    const r = await runIssue({ cwd: repo, issue: 7, agent, sandbox, setup: "echo SETUPME > setup.out" });
+    expect(r.status).toBe("pr-opened");
+    expect((await Bun.file(join(r.worktree, "feature.txt")).text()).trim()).toBe("SETUPME");
+    expect(calls.findIndex((c) => c.join(" ").includes("SETUPME"))).toBe(0);
+  });
+
+  test("failing setup → failed with its output, agent never runs", async () => {
+    const { repo, origin } = await setup(issue());
+    const prompts: string[] = [];
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE, prompts), sandbox: noSandbox(), setup: "echo setup-boom; exit 5" });
+    expect(r.status).toBe("failed");
+    expect(r.error).toContain("setup-boom");
+    expect(prompts).toEqual([]);
+    expect(await originBranches(origin)).toEqual(["main"]);
+  });
+
+  test(".bunker/setup is the default; explicit setup overrides it", async () => {
+    const { repo } = await setup(issue());
+    await $`mkdir -p ${repo}/.bunker`;
+    await Bun.write(join(repo, ".bunker", "setup"), "echo FROMFILE > setup.out\n");
+    await $`git -C ${repo} add .bunker/setup && git -C ${repo} commit -qm "chore: setup" && git -C ${repo} push -q origin main`;
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() });
+    expect(r.status).toBe("pr-opened");
+    expect((await Bun.file(join(r.worktree, "setup.out")).text()).trim()).toBe("FROMFILE");
+    await $`git -C ${repo} worktree remove --force ${r.worktree} && git -C ${repo} branch -D ${r.branch}`.quiet();
+    const r2 = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), setup: "echo EXPLICIT > setup.out" });
+    expect((await Bun.file(join(r2.worktree, "setup.out")).text()).trim()).toBe("EXPLICIT");
+  });
+
   test("rejected → nothing pushed, worktree kept", async () => {
     const { repo, origin, prLog } = await setup(issue());
     const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent("nope"), sandbox: noSandbox(), maxRounds: 1 });

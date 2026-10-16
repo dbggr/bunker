@@ -22,6 +22,8 @@ export interface IssueOptions {
   /** The target repo's main checkout. Defaults to process.cwd(). */
   cwd?: string;
   maxRounds?: number;
+  /** Shell command run in the worktree, inside `sandbox`, before the first agent run. Defaults to the repo's `.bunker/setup` script if present. */
+  setup?: string;
   /** Shell command run in the worktree, inside `sandbox`, once the review approves. */
   verify?: string;
   /** Run `verify` on the host (with the caller's credentials) instead of in the sandbox. */
@@ -140,7 +142,7 @@ async function waitForChecks(
  * every later outcome is a status, and the worktree and branch are always kept.
  * The caller's checkout and branch are never touched.
  */
-export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, verify, verifyOnHost, merge, ciTimeoutMin = 20, ciPollMs = 10_000 }: IssueOptions): Promise<IssueResult> {
+export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, setup, verify, verifyOnHost, merge, ciTimeoutMin = 20, ciPollMs = 10_000 }: IssueOptions): Promise<IssueResult> {
   if (merge && !verify) throw new Error("merge requires verify");
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -192,6 +194,15 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   const baseSha = (await $`git -C ${repo} rev-parse FETCH_HEAD`.text()).trim();
   const add = await $`git -C ${repo} worktree add -q -b ${branch} ${worktree} FETCH_HEAD`.nothrow().quiet();
   if (add.exitCode !== 0) return fail("failed", { error: `could not create worktree:\n${add.stderr}` });
+
+  // Explicit `setup` wins; else the repo's own .bunker/setup script. Same sandbox as the agent.
+  const setupScript = join(worktree, ".bunker", "setup");
+  const setupCmd = setup ?? ((await Bun.file(setupScript).exists()) ? "sh .bunker/setup" : undefined);
+  if (setupCmd) {
+    const out = await sandbox.exec(["sh", "-c", `(${setupCmd}) 2>&1`], { worktree, gitCommonDir });
+    log(`setup (exit ${out.code})`, out.stdout);
+    if (out.code !== 0) return fail("failed", { error: `setup failed (exit ${out.code}):\n${out.stdout.slice(-VERIFY_TAIL)}` });
+  }
 
   const prompt =
     `Implement GitHub issue #${number}: ${issue.title}\n\n${issue.body}\n\n` +
