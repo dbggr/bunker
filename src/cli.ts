@@ -23,6 +23,7 @@ const { values, positionals } = parseArgs({
     "max-rounds": { type: "string" },
     "reviewer-model": { type: "string" },
     issue: { type: "string" },
+    setup: { type: "string" },
     verify: { type: "string" },
     "verify-on-host": { type: "boolean", default: false },
     merge: { type: "boolean", default: false },
@@ -64,16 +65,16 @@ if (values.queue) {
     process.exit(2);
   }
 }
-if (values.issue === undefined && !values.queue && (values.verify !== undefined || values.merge || values["verify-on-host"])) {
-  console.error("bunker: --verify, --verify-on-host and --merge only apply to --issue or --queue");
+if (values.issue === undefined && !values.queue && (values.verify !== undefined || values.setup !== undefined || values.merge || values["verify-on-host"])) {
+  console.error("bunker: --setup, --verify, --verify-on-host and --merge only apply to --issue or --queue");
   process.exit(2);
 }
 if (values.issue === undefined && !values.queue && !prompt === !tasks.length) {
   console.error(
     'usage: bunker "<prompt>" [--model <id>] [--image <name>] [--no-sandbox] [--max-iterations <n>]\n' +
       '       bunker --review "<prompt>" [--max-rounds <n>] [--reviewer-model <id>]   (implement → review → fix)\n' +
-      '       bunker --issue <n> [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--max-rounds <n>] [--reviewer-model <id>]   (issue → reviewed PR)\n' +
-      '       bunker --queue [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--limit <n>]   (work the `bunker` label queue)\n' +
+      '       bunker --issue <n> [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--max-rounds <n>] [--reviewer-model <id>]   (issue → reviewed PR)\n' +
+      '       bunker --queue [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--limit <n>]   (work the `bunker` label queue)\n' +
       '       bunker --task "<prompt>" --task "<prompt>" ...   (parallel, one worktree each)',
   );
   process.exit(2);
@@ -124,7 +125,7 @@ if (values.queue) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"] }) : agent;
   let results;
   try {
-    results = await runQueue({ agent, reviewer, sandbox, maxRounds, limit, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
+    results = await runQueue({ agent, reviewer, sandbox, maxRounds, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     process.exit(2);
@@ -147,7 +148,7 @@ if (values.queue) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"] }) : agent;
   let result;
   try {
-    result = await runIssue({ issue, agent, reviewer, sandbox, maxRounds, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
+    result = await runIssue({ issue, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     process.exit(2);

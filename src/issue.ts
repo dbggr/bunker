@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { redact } from "./redact.ts";
-import { review, type Agent, type ReviewResult, type Sandbox } from "./index.ts";
+import { review, runSetup, type Agent, type ReviewResult, type Sandbox } from "./index.ts";
 
 export interface IssueInfo {
   number: number;
@@ -22,6 +22,8 @@ export interface IssueOptions {
   /** The target repo's main checkout. Defaults to process.cwd(). */
   cwd?: string;
   maxRounds?: number;
+  /** Shell command run in the worktree, inside `sandbox`, before the first agent run. Defaults to the repo's `.bunker/setup` script if present. */
+  setup?: string;
   /** Shell command run in the worktree, inside `sandbox`, once the review approves. */
   verify?: string;
   /** Run `verify` on the host (with the caller's credentials) instead of in the sandbox. */
@@ -140,7 +142,7 @@ async function waitForChecks(
  * every later outcome is a status, and the worktree and branch are always kept.
  * The caller's checkout and branch are never touched.
  */
-export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, verify, verifyOnHost, merge, ciTimeoutMin = 20, ciPollMs = 10_000 }: IssueOptions): Promise<IssueResult> {
+export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, setup, verify, verifyOnHost, merge, ciTimeoutMin = 20, ciPollMs = 10_000 }: IssueOptions): Promise<IssueResult> {
   if (merge && !verify) throw new Error("merge requires verify");
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -197,7 +199,7 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
     `Implement GitHub issue #${number}: ${issue.title}\n\n${issue.body}\n\n` +
     "Use Conventional Commits for your commit messages, write tests first, and make the repo's tests pass.\n\n" +
     ISSUE_CONVENTION;
-  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, reviewerInstruction: ISSUE_CONVENTION });
+  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, setup, reviewerInstruction: ISSUE_CONVENTION });
 
   for (const [i, r] of result.rounds.entries()) {
     log(`round ${i + 1}: agent output`, r.output);
@@ -220,6 +222,12 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   if (result.status !== "approved") return fail(result.status, { review: result, ...(result.error ? { error: result.error } : {}) });
 
   if (verify) {
+    // The issue worktree is a fresh checkout too (the agent ran in review()'s own), so it needs setup as well.
+    const prep = await runSetup(sandbox, { worktree, gitCommonDir }, setup);
+    if (prep) {
+      log(`setup (exit ${prep.code})`, prep.stdout);
+      if (prep.code !== 0) return fail("failed", { review: result, error: `setup failed (exit ${prep.code}):\n${prep.stdout.slice(-VERIFY_TAIL)}` });
+    }
     let code: number;
     let text: string;
     if (verifyOnHost) {

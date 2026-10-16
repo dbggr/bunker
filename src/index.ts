@@ -218,6 +218,21 @@ async function repoInfo(cwd: string) {
   return { base, gitCommonDir };
 }
 
+/**
+ * Runs the setup step in `worktree`, inside `sandbox`: `setup` if given, else the repo's
+ * `.bunker/setup` script if present. Returns undefined on success (or no setup), else the failure text.
+ */
+export async function runSetup(
+  sandbox: Sandbox,
+  ctx: { worktree: string; gitCommonDir: string },
+  setup?: string,
+): Promise<{ cmd: string; code: number; stdout: string } | undefined> {
+  const cmd = setup ?? ((await Bun.file(join(ctx.worktree, ".bunker", "setup")).exists()) ? "sh .bunker/setup" : undefined);
+  if (!cmd) return undefined;
+  const out = await sandbox.exec(["sh", "-c", `(${cmd}) 2>&1`], ctx);
+  return { cmd, ...out };
+}
+
 async function addWorktree(cwd: string, base: string): Promise<Worktree> {
   const id = crypto.randomUUID().slice(0, 8);
   const wt = { branch: `bunker/${id}`, path: join(tmpdir(), `bunker-${id}`) };
@@ -355,6 +370,8 @@ export interface ReviewOptions {
   approveSignal?: string;
   /** Extra instruction appended to every reviewer prompt. */
   reviewerInstruction?: string;
+  /** Shell command run in the worktree, inside `sandbox`, before the first agent run. Defaults to `.bunker/setup` if present. */
+  setup?: string;
 }
 
 export interface ReviewRound {
@@ -404,6 +421,7 @@ export async function review({
   maxRounds = 2,
   approveSignal = DEFAULT_APPROVE,
   reviewerInstruction,
+  setup,
 }: ReviewOptions): Promise<ReviewResult> {
   const { base, gitCommonDir } = await repoInfo(cwd);
   const wt = await addWorktree(cwd, base);
@@ -413,6 +431,8 @@ export async function review({
   let status: ReviewResult["status"] = "rejected";
   let error: string | undefined;
   try {
+    const prep = await runSetup(sandbox, ctx, setup);
+    if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${prep.stdout.slice(-2000)}`);
     for (let i = 0; i < maxRounds; i++) {
       const feedback = rounds.at(-1)?.feedback;
       const task = feedback === undefined ? prompt : `${prompt}\n\nA reviewer requested changes:\n${feedback}`;

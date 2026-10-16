@@ -100,21 +100,22 @@ CLI: `--review "<prompt>" [--max-rounds <n>] [--reviewer-model <id>]` (single pr
 ## Issue to PR
 
 ```bash
-bunker --issue 19 --verify "bun test"
+bunker --issue 19 --verify "bun test && bun run typecheck"
 ```
 
 Run from the target repo's main checkout. `runIssue({ issue, agent, sandbox, verify?, reviewer?, maxRounds? })` (`src/issue.ts`):
 
 1. `gh issue view <N>`. A closed issue (or a `gh` failure) throws; the CLI exits 2.
 2. Branch `fix/<N>-<slug>` if the issue has a `bug` label, else `feature/<N>-<slug>` (`issueBranch()`: title lowercased, non-alphanumerics → `-`, a conventional prefix like `feat:` stripped, slug max 40 chars). It's a worktree at `<repo>/.worktrees/<N>-<slug>` from the current HEAD; `.worktrees/` is added to `.git/info/exclude`. Your checkout and branch are never touched.
-3. `review()` runs with that worktree as `cwd`, prompted with `Implement GitHub issue #<N>: <title>` + the body + instructions to use Conventional Commits and write tests first.
-4. Not approved → stop, nothing pushed.
-5. Approved and `verify` given → the command runs in the worktree inside the same sandbox as the agent, so agent-written code never runs on the host with your credentials. `--verify-on-host` (`verifyOnHost: true`) opts into running it on the host instead. Non-zero → stop, nothing pushed, `verifyOutput` has the tail of its output.
-6. `git push -u origin <branch>`, then `gh pr create` with the issue title and a body of `Closes #<N>`, one line per review round and (if run) `Verify: \`<cmd>\` passed`. No AI attribution. The URL is `prUrl`.
+3. Setup: `--setup "<cmd>"` (`setup`) runs in the worktree inside the sandbox, before the first agent run (worktrees have no `node_modules`). Default: the repo's `.bunker/setup` script, if present (this repo uses `bun install --frozen-lockfile`). It also runs in the issue worktree before `verify`. Non-zero → `failed`, `error` has its output.
+4. `review()` runs with that worktree as `cwd`, prompted with `Implement GitHub issue #<N>: <title>` + the body + instructions to use Conventional Commits and write tests first.
+5. Not approved → stop, nothing pushed.
+6. Approved and `verify` given → the command runs in the worktree inside the same sandbox as the agent, so agent-written code never runs on the host with your credentials. `--verify-on-host` (`verifyOnHost: true`) opts into running it on the host instead. Non-zero → stop, nothing pushed, `verifyOutput` has the tail of its output.
+7. `git push -u origin <branch>`, then `gh pr create` with the issue title and a body of `Closes #<N>`, one line per review round and (if run) `Verify: \`<cmd>\` passed`. No AI attribution. The URL is `prUrl`.
 
 Result: `{ status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed", branch, worktree, prUrl?, review?, verifyOutput?, error? }`. Nothing is thrown for those statuses, and the worktree and branch are always kept.
 
-CLI: `--issue <N> [--verify "<cmd>"] [--model] [--reviewer-model] [--max-rounds] [--no-sandbox] [--image]`. Exits 0 only when a PR was opened; can't be combined with a prompt, `--task` or `--review`.
+CLI: `--issue <N> [--setup "<cmd>"] [--verify "<cmd>"] [--model] [--reviewer-model] [--max-rounds] [--no-sandbox] [--image]`. Exits 0 only when a PR was opened; can't be combined with a prompt, `--task` or `--review`.
 
 ## Merging
 
