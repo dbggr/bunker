@@ -76,12 +76,16 @@ export function parseIssueBlocks(text: string): { title: string; body: string }[
 
 /** `fix/<N>-<slug>` for a bug-labelled issue, else `feature/<N>-<slug>`. */
 export function issueBranch(issue: Pick<IssueInfo, "number" | "title" | "labels">): { branch: string; slug: string } {
-  const slug = issue.title
+  let slug = issue.title
     .replace(CONVENTIONAL_PREFIX, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .slice(0, MAX_SLUG)
     .replace(/^-+|-+$/g, "");
+  if (slug.length > MAX_SLUG) {
+    // Cut at a word boundary; a single over-long word is cut hard.
+    const cut = slug.lastIndexOf("-", MAX_SLUG);
+    slug = slug.slice(0, cut > 0 ? cut : MAX_SLUG);
+  }
   const type = issue.labels.some((l) => l.name === "bug") ? "fix" : "feature";
   return { branch: `${type}/${issue.number}-${slug}`, slug };
 }

@@ -49,6 +49,12 @@ describe("issueBranch()", () => {
   test("max 40 chars, no trailing dash", () => {
     const { slug } = issueBranch({ number: 1, title: "a".repeat(39) + " bbbbbbbb", labels: [] });
     expect(slug).toBe("a".repeat(39));
+  });
+
+  test("cuts at the last whole word, not mid-word", () => {
+    const title = "make the branch slug stop cutting words in half";
+    expect(issueBranch({ number: 1, title, labels: [] }).slug).toBe("make-the-branch-slug-stop-cutting-words");
+    expect(issueBranch({ number: 1, title: "a".repeat(50), labels: [] }).slug).toBe("a".repeat(40));
     expect(issueBranch({ number: 1, title: "word ".repeat(30), labels: [] }).slug.length).toBeLessThanOrEqual(40);
   });
 });
