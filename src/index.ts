@@ -9,7 +9,7 @@ export interface Agent {
 
 /** Where the agent's command runs. Gets the worktree and the repo's shared .git dir. */
 export interface Sandbox {
-  exec(cmd: string[], ctx: { worktree: string; gitCommonDir: string }): Promise<number>;
+  exec(cmd: string[], ctx: { worktree: string; gitCommonDir: string }): Promise<{ code: number; stdout: string }>;
 }
 
 export interface Commit {
@@ -23,12 +23,28 @@ export interface RunOptions {
   sandbox: Sandbox;
   /** Repo to branch from and merge back into. Defaults to process.cwd(). */
   cwd?: string;
+  /** Max times to run the agent, in the same worktree. Defaults to 1. */
+  maxIterations?: number;
+  /** Stop after an iteration whose stdout contains any of these. Defaults to "<promise>COMPLETE</promise>". */
+  completionSignal?: string | string[];
+}
+
+export interface Iteration {
+  exitCode: number;
+  /** Commits this iteration added. */
+  commits: Commit[];
 }
 
 export interface RunResult {
   branch: string;
+  /** Total across all iterations. */
   commits: Commit[];
+  iterations: Iteration[];
+  /** The signal that ended the loop early, if one did. */
+  completionSignal?: string;
 }
+
+const DEFAULT_SIGNAL = "<promise>COMPLETE</promise>";
 
 const COMMIT_INSTRUCTION =
   "\n\nWhen you are done, commit your changes with git. Uncommitted work is discarded.";
@@ -45,13 +61,25 @@ export function claudeCode(opts: { model?: string } = {}): Agent {
   };
 }
 
+/** Waits for the process, echoing its stdout live to the terminal while capturing it. */
+async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">): Promise<{ code: number; stdout: string }> {
+  const decoder = new TextDecoder();
+  let stdout = "";
+  for await (const chunk of proc.stdout) {
+    process.stdout.write(chunk);
+    stdout += decoder.decode(chunk, { stream: true });
+  }
+  stdout += decoder.decode();
+  return { code: await proc.exited, stdout };
+}
+
 /** Runs the agent straight on the host, in the worktree. No isolation. */
 export function noSandbox(): Sandbox {
   return {
     exec: (cmd, { worktree }) =>
       // Explicit env: Bun.spawn otherwise passes the startup environment, dropping
       // anything set at runtime (e.g. the token loaded from .bunker/.env).
-      Bun.spawn(cmd, { cwd: worktree, env: process.env, stdio: ["ignore", "inherit", "inherit"] }).exited,
+      teeStdout(Bun.spawn(cmd, { cwd: worktree, env: process.env, stdio: ["ignore", "pipe", "inherit"] })),
   };
 }
 
@@ -133,7 +161,7 @@ export function docker(opts: DockerOptions = {}): Sandbox {
         image,
         ...args,
       ];
-      return Bun.spawn(docker, { env: process.env, stdio: ["ignore", "inherit", "inherit"] }).exited;
+      return teeStdout(Bun.spawn(docker, { env: process.env, stdio: ["ignore", "pipe", "inherit"] }));
     },
   };
 }
@@ -167,20 +195,38 @@ async function addWorktree(cwd: string, base: string): Promise<Worktree> {
   return wt;
 }
 
-/** Runs the agent in the worktree and returns its commits. The worktree is always removed; the branch never is. */
+interface AgentOutcome {
+  commits: Commit[];
+  iterations: Iteration[];
+  completionSignal?: string;
+}
+
+/**
+ * Runs the agent in the worktree, again and again with the same prompt until an
+ * iteration's stdout has a completion signal or maxIterations is reached.
+ * The worktree is always removed; the branch never is.
+ */
 async function runAgent(
   cwd: string,
   base: string,
   gitCommonDir: string,
   wt: Worktree,
-  prompt: string,
-  agent: Agent,
-  sandbox: Sandbox,
-): Promise<Commit[]> {
+  { prompt, agent, sandbox, maxIterations = 1, completionSignal = DEFAULT_SIGNAL }: Omit<RunOptions, "cwd">,
+): Promise<AgentOutcome> {
+  const signals = [completionSignal].flat();
+  const iterations: Iteration[] = [];
+  let commits: Commit[] = [];
   try {
-    const code = await sandbox.exec(agent.command(prompt), { worktree: wt.path, gitCommonDir });
-    if (code !== 0) throw new Error(`agent exited with ${code}; work kept on ${wt.branch}`);
-    return await commitsBetween(cwd, base, wt.branch);
+    for (let i = 0; i < maxIterations; i++) {
+      const { code, stdout } = await sandbox.exec(agent.command(prompt), { worktree: wt.path, gitCommonDir });
+      if (code !== 0) throw new Error(`agent exited with ${code}; work kept on ${wt.branch}`);
+      const total = await commitsBetween(cwd, base, wt.branch);
+      iterations.push({ exitCode: code, commits: total.slice(commits.length) });
+      commits = total;
+      const matched = signals.find((s) => stdout.includes(s));
+      if (matched) return { commits, iterations, completionSignal: matched };
+    }
+    return { commits, iterations };
   } finally {
     await $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet();
   }
@@ -202,13 +248,13 @@ async function mergeBack(cwd: string, branch: string, commits: Commit[]): Promis
  * Branch → sandbox → collect → merge. On agent failure or merge conflict it throws,
  * keeping the branch so you can inspect what it got done.
  */
-export async function run({ prompt, agent, sandbox, cwd = process.cwd() }: RunOptions): Promise<RunResult> {
+export async function run({ cwd = process.cwd(), ...opts }: RunOptions): Promise<RunResult> {
   const { base, gitCommonDir } = await repoInfo(cwd);
   const wt = await addWorktree(cwd, base);
-  const commits = await runAgent(cwd, base, gitCommonDir, wt, prompt, agent, sandbox);
-  const conflict = await mergeBack(cwd, wt.branch, commits);
+  const outcome = await runAgent(cwd, base, gitCommonDir, wt, opts);
+  const conflict = await mergeBack(cwd, wt.branch, outcome.commits);
   if (conflict) throw new Error(conflict);
-  return { branch: wt.branch, commits };
+  return { branch: wt.branch, ...outcome };
 }
 
 export interface RunAllOptions {
@@ -216,6 +262,9 @@ export interface RunAllOptions {
   agent: Agent;
   sandbox: Sandbox;
   cwd?: string;
+  /** Per task, as in run(). */
+  maxIterations?: number;
+  completionSignal?: string | string[];
 }
 
 export interface TaskResult {
@@ -223,6 +272,8 @@ export interface TaskResult {
   status: "merged" | "conflict" | "failed";
   branch: string;
   commits: Commit[];
+  iterations: Iteration[];
+  completionSignal?: string;
   error?: string;
 }
 
@@ -232,13 +283,13 @@ export interface TaskResult {
  * land one at a time in task order. A task's failure or conflict is reported in
  * its result, never thrown, and its branch is kept.
  */
-export async function runAll({ tasks, agent, sandbox, cwd = process.cwd() }: RunAllOptions): Promise<TaskResult[]> {
+export async function runAll({ tasks, cwd = process.cwd(), ...opts }: RunAllOptions): Promise<TaskResult[]> {
   const { base, gitCommonDir } = await repoInfo(cwd);
   const worktrees: Worktree[] = [];
   for (const _ of tasks) worktrees.push(await addWorktree(cwd, base));
 
   const outcomes = await Promise.allSettled(
-    tasks.map((task, i) => runAgent(cwd, base, gitCommonDir, worktrees[i]!, task.prompt, agent, sandbox)),
+    tasks.map((task, i) => runAgent(cwd, base, gitCommonDir, worktrees[i]!, { ...opts, prompt: task.prompt })),
   );
 
   const results: TaskResult[] = [];
@@ -247,13 +298,14 @@ export async function runAll({ tasks, agent, sandbox, cwd = process.cwd() }: Run
     const { branch } = worktrees[i]!;
     if (outcome.status === "rejected") {
       const error = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
-      results.push({ prompt, status: "failed", branch, commits: [], error });
+      results.push({ prompt, status: "failed", branch, commits: [], iterations: [], error });
       continue;
     }
-    const commits = outcome.value;
-    const conflict = await mergeBack(cwd, branch, commits);
+    const conflict = await mergeBack(cwd, branch, outcome.value.commits);
     results.push(
-      conflict ? { prompt, status: "conflict", branch, commits, error: conflict } : { prompt, status: "merged", branch, commits },
+      conflict
+        ? { prompt, status: "conflict", branch, ...outcome.value, error: conflict }
+        : { prompt, status: "merged", branch, ...outcome.value },
     );
   }
   return results;

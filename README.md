@@ -46,6 +46,28 @@ bun ~/Projects/Management/tool-bunker/src/cli.ts --task "add a greet() helper" -
 
 It prints one line per task and exits 1 if any task isn't `merged`.
 
+## Iterations
+
+```ts
+const result = await run({
+  prompt: "Work through the TODO list. When every item is done, print <promise>COMPLETE</promise>.",
+  agent: claudeCode(),
+  sandbox: docker(),
+  maxIterations: 10,
+  // completionSignal: "ALL DONE",             // or ["ALL DONE", "GIVING UP"]
+});
+result.iterations; // [{ exitCode, commits }, ...] one per iteration
+result.completionSignal; // the signal that stopped the loop, if any
+```
+
+With `maxIterations` above 1 the agent is re-run with the *same prompt* in the *same worktree*, one iteration after another, so each pass sees the previous passes' commits. The loop stops after an iteration whose stdout contains a completion signal (default `<promise>COMPLETE</promise>`), or at `maxIterations` (default 1, i.e. a single run).
+
+The engine never adds the signal to your prompt, so tell the agent about it yourself. A non-zero exit in any iteration fails the run and keeps the branch, as for a single run. `commits` is the total across iterations; each entry of `iterations` has the commits that pass added. `runAll()` takes the same options and applies them per task.
+
+Agent stdout is still streamed live; `Sandbox.exec` also returns it as `{ code, stdout }` so the signal can be detected.
+
+CLI: `--max-iterations <n>` applies to a single prompt and to every `--task`.
+
 ## Agent images: base + per-repo
 
 The container only runs the agent, so it needs no Bun or Node of its own, just git and claude. Anything else the agent needs to *verify* its work (run tests, lint) is the target repo's toolchain, so each repo adds that itself.
