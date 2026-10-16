@@ -341,6 +341,8 @@ export interface ReviewOptions {
   maxRounds?: number;
   /** Reviewer stdout containing this approves the change. Defaults to "<review>APPROVE</review>". */
   approveSignal?: string;
+  /** Extra instruction appended to every reviewer prompt. */
+  reviewerInstruction?: string;
 }
 
 export interface ReviewRound {
@@ -349,6 +351,8 @@ export interface ReviewRound {
   approved: boolean;
   /** The reviewer's stdout. */
   feedback: string;
+  /** The implementer's stdout. */
+  output: string;
 }
 
 export interface ReviewResult {
@@ -361,13 +365,14 @@ export interface ReviewResult {
 
 const DEFAULT_APPROVE = "<review>APPROVE</review>";
 
-function reviewerPrompt(task: string, diff: string, approveSignal: string): string {
+function reviewerPrompt(task: string, diff: string, approveSignal: string, extra?: string): string {
   return (
     `You are reviewing a change made for this task:\n\n${task}\n\n` +
     `Here is the full diff of the change:\n\n${diff}\n\n` +
     "Do not modify any files and do not commit anything. " +
     `If the change is acceptable, print ${approveSignal}. ` +
-    "Otherwise list the changes that are required."
+    "Otherwise list the changes that are required." +
+    (extra ? `\n\n${extra}` : "")
   );
 }
 
@@ -386,6 +391,7 @@ export async function review({
   sandbox,
   maxRounds = 2,
   approveSignal = DEFAULT_APPROVE,
+  reviewerInstruction,
 }: ReviewOptions): Promise<ReviewResult> {
   const { base, gitCommonDir } = await repoInfo(cwd);
   const wt = await addWorktree(cwd, base);
@@ -406,14 +412,14 @@ export async function review({
 
       const head = (await $`git -C ${wt.path} rev-parse HEAD`.text()).trim();
       const diff = await $`git -C ${wt.path} diff ${base}..HEAD`.text();
-      const rev = await sandbox.exec(reviewer.command(reviewerPrompt(prompt, diff, approveSignal), "review"), ctx);
+      const rev = await sandbox.exec(reviewer.command(reviewerPrompt(prompt, diff, approveSignal, reviewerInstruction), "review"), ctx);
       // Only the implementer's commits survive, whatever the reviewer did.
       await $`git -C ${wt.path} reset -q --hard ${head}`.quiet();
       await $`git -C ${wt.path} clean -qfd`.quiet();
       if (rev.code !== 0) throw new Error(`reviewer exited with ${rev.code}; work kept on ${wt.branch}`);
 
       const approved = rev.stdout.includes(approveSignal);
-      rounds.push({ commits: added, approved, feedback: rev.stdout });
+      rounds.push({ commits: added, approved, feedback: rev.stdout, output: impl.stdout });
       if (approved) {
         status = "approved";
         break;
