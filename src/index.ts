@@ -10,6 +10,36 @@ export type AgentMode = "write" | "review";
 export interface Agent {
   /** "review" is a read-only pass over someone else's work; "write" (default) is expected to commit. */
   command(prompt: string, mode?: AgentMode): string[];
+  /** Turns the command's raw stdout into the agent's text plus what the run cost. Omit if stdout is already the text. */
+  parse?(stdout: string): { text: string; usage?: Usage };
+}
+
+/** What a run cost. */
+export interface Usage {
+  costUsd: number;
+  durationMs: number;
+}
+
+/** The agent's text (for signals and feedback) and usage from raw stdout. */
+function interpret(agent: Agent, stdout: string): { text: string; usage?: Usage } {
+  return agent.parse ? agent.parse(stdout) : { text: stdout };
+}
+
+/** Sums usages; undefined if none was reported. */
+export function sumUsage(items: (Usage | undefined)[]): Usage | undefined {
+  const known = items.filter((u): u is Usage => !!u);
+  if (!known.length) return undefined;
+  return {
+    costUsd: known.reduce((a, u) => a + u.costUsd, 0),
+    durationMs: known.reduce((a, u) => a + u.durationMs, 0),
+  };
+}
+
+/** "$0.42, 1m 5s" */
+export function formatUsage(u: Usage): string {
+  const s = Math.round(u.durationMs / 1000);
+  const time = s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+  return `$${u.costUsd.toFixed(2)}, ${time}`;
 }
 
 /** Where the agent's command runs. Gets the worktree and the repo's shared .git dir. */
@@ -38,6 +68,7 @@ export interface Iteration {
   exitCode: number;
   /** Commits this iteration added. */
   commits: Commit[];
+  usage?: Usage;
 }
 
 export interface RunResult {
@@ -47,6 +78,8 @@ export interface RunResult {
   iterations: Iteration[];
   /** The signal that ended the loop early, if one did. */
   completionSignal?: string;
+  /** Total across all iterations, if the agent reports it. */
+  usage?: Usage;
 }
 
 const DEFAULT_SIGNAL = "<promise>COMPLETE</promise>";
@@ -59,13 +92,31 @@ const COMMIT_INSTRUCTION =
 // holds in any image, not just the base.
 const NO_ATTRIBUTION = JSON.stringify({ attribution: { commit: "", pr: "" } });
 
-export function claudeCode(opts: { model?: string; attribution?: boolean } = {}): Agent {
+/** Reads `claude -p --output-format json` output; anything else is passed through as plain text. */
+function parseClaudeJson(stdout: string): { text: string; usage?: Usage } {
+  try {
+    const j = JSON.parse(stdout);
+    if (typeof j?.result !== "string") return { text: stdout };
+    const cost = j.total_cost_usd;
+    const ms = j.duration_ms;
+    return {
+      text: j.result,
+      ...(typeof cost === "number" ? { usage: { costUsd: cost, durationMs: typeof ms === "number" ? ms : 0 } } : {}),
+    };
+  } catch {
+    return { text: stdout };
+  }
+}
+
+export function claudeCode(opts: { model?: string; attribution?: boolean; json?: boolean } = {}): Agent {
   return {
+    ...(opts.json ? { parse: parseClaudeJson } : {}),
     command: (prompt, mode = "write") => [
       "claude",
       "-p",
       mode === "write" ? prompt + COMMIT_INSTRUCTION : prompt,
       "--dangerously-skip-permissions",
+      ...(opts.json ? ["--output-format", "json"] : []),
       ...(opts.model ? ["--model", opts.model] : []),
       ...(opts.attribution ? [] : ["--settings", NO_ATTRIBUTION]),
     ],
@@ -252,10 +303,18 @@ async function addWorktree(cwd: string, base: string): Promise<Worktree> {
   return wt;
 }
 
+/** A failed agent run; carries the usage already spent. */
+class AgentFailure extends Error {
+  constructor(message: string, readonly usage?: Usage) {
+    super(message);
+  }
+}
+
 interface AgentOutcome {
   commits: Commit[];
   iterations: Iteration[];
   completionSignal?: string;
+  usage?: Usage;
 }
 
 /**
@@ -276,17 +335,25 @@ async function runAgent(
   try {
     for (let i = 0; i < maxIterations; i++) {
       const { code, stdout } = await sandbox.exec(agent.command(prompt), { worktree: wt.path, gitCommonDir });
-      if (code !== 0) throw new Error(`agent exited with ${code}; work kept on ${wt.branch}`);
+      const { text, usage } = interpret(agent, stdout);
+      if (code !== 0) {
+        throw new AgentFailure(`agent exited with ${code}; work kept on ${wt.branch}`, sumUsage([...iterations.map((i) => i.usage), usage]));
+      }
       const total = await commitsBetween(cwd, base, wt.branch);
-      iterations.push({ exitCode: code, commits: total.slice(commits.length) });
+      iterations.push({ exitCode: code, commits: total.slice(commits.length), ...(usage ? { usage } : {}) });
       commits = total;
-      const matched = signals.find((s) => stdout.includes(s));
-      if (matched) return { commits, iterations, completionSignal: matched };
+      const matched = signals.find((s) => text.includes(s));
+      if (matched) return { commits, iterations, completionSignal: matched, ...totalUsage(iterations) };
     }
-    return { commits, iterations };
+    return { commits, iterations, ...totalUsage(iterations) };
   } finally {
     await $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet();
   }
+}
+
+function totalUsage(iterations: Iteration[]): { usage?: Usage } {
+  const usage = sumUsage(iterations.map((i) => i.usage));
+  return usage ? { usage } : {};
 }
 
 /** Merges the branch into the caller's checkout and deletes it. On conflict: aborts, keeps the branch, returns the error. */
@@ -331,6 +398,7 @@ export interface TaskResult {
   commits: Commit[];
   iterations: Iteration[];
   completionSignal?: string;
+  usage?: Usage;
   error?: string;
 }
 
@@ -355,7 +423,8 @@ export async function runAll({ tasks, cwd = process.cwd(), ...opts }: RunAllOpti
     const { branch } = worktrees[i]!;
     if (outcome.status === "rejected") {
       const error = redact(outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason));
-      results.push({ prompt, status: "failed", branch, commits: [], iterations: [], error });
+      const usage = outcome.reason instanceof AgentFailure ? outcome.reason.usage : undefined;
+      results.push({ prompt, status: "failed", branch, commits: [], iterations: [], ...(usage ? { usage } : {}), error });
       continue;
     }
     const conflict = await mergeBack(cwd, branch, outcome.value.commits);
@@ -394,6 +463,8 @@ export interface ReviewRound {
   feedback: string;
   /** The implementer's stdout. */
   output: string;
+  /** Implementer + reviewer this round. */
+  usage?: Usage;
 }
 
 export interface ReviewResult {
@@ -401,6 +472,8 @@ export interface ReviewResult {
   branch: string;
   commits: Commit[];
   rounds: ReviewRound[];
+  /** Implementer + reviewer, all rounds, if the agents report it. */
+  usage?: Usage;
   error?: string;
 }
 
@@ -440,6 +513,7 @@ export async function review({
   const ctx = { worktree: wt.path, gitCommonDir };
   const rounds: ReviewRound[] = [];
   let commits: Commit[] = [];
+  const usages: (Usage | undefined)[] = [];
   let status: ReviewResult["status"] = "rejected";
   let error: string | undefined;
   try {
@@ -449,6 +523,8 @@ export async function review({
       const feedback = rounds.at(-1)?.feedback;
       const task = feedback === undefined ? prompt : `${prompt}\n\nA reviewer requested changes:\n${feedback}`;
       const impl = await sandbox.exec(agent.command(task, "write"), ctx);
+      const implOut = interpret(agent, impl.stdout);
+      usages.push(implOut.usage);
       if (impl.code !== 0) throw new Error(`agent exited with ${impl.code}; work kept on ${wt.branch}`);
       const total = await commitsBetween(cwd, base, wt.branch);
       const added = total.slice(commits.length);
@@ -460,10 +536,13 @@ export async function review({
       // Only the implementer's commits survive, whatever the reviewer did.
       await $`git -C ${wt.path} reset -q --hard ${head}`.quiet();
       await $`git -C ${wt.path} clean -qfd`.quiet();
+      const revOut = interpret(reviewer, rev.stdout);
+      usages.push(revOut.usage);
       if (rev.code !== 0) throw new Error(`reviewer exited with ${rev.code}; work kept on ${wt.branch}`);
 
-      const approved = rev.stdout.includes(approveSignal);
-      rounds.push({ commits: added, approved, feedback: rev.stdout, output: impl.stdout });
+      const approved = revOut.text.includes(approveSignal);
+      const usage = sumUsage([implOut.usage, revOut.usage]);
+      rounds.push({ commits: added, approved, feedback: revOut.text, output: implOut.text, ...(usage ? { usage } : {}) });
       if (approved) {
         status = "approved";
         break;
@@ -479,5 +558,6 @@ export async function review({
     error = await mergeBack(cwd, wt.branch, commits);
     if (error) status = "conflict";
   }
-  return { status, branch: wt.branch, commits, rounds, ...(error ? { error } : {}) };
+  const usage = sumUsage(usages);
+  return { status, branch: wt.branch, commits, rounds, ...(usage ? { usage } : {}), ...(error ? { error } : {}) };
 }

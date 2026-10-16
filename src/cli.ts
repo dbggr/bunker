@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
-import { claudeCode, docker, noSandbox, review, run, runAll } from "./index.ts";
+import { claudeCode, formatUsage, docker, noSandbox, review, run, runAll } from "./index.ts";
 import { runAudit } from "./audit.ts";
 import { runIssue, runQueue } from "./issue.ts";
 import { redact } from "./redact.ts";
@@ -150,7 +150,7 @@ if (values["ci-timeout"] !== undefined) {
   }
 }
 
-const agent = claudeCode({ model: values.model });
+const agent = claudeCode({ model: values.model, json: true });
 const sandbox = values["no-sandbox"] ? noSandbox() : docker({ image: values.image });
 
 if (values.audit) {
@@ -166,7 +166,7 @@ if (values.audit) {
   if (!result.filed.length) console.log("bunker: no issues filed");
   for (const f of result.filed) console.log(`filed #${f.number}: ${f.title}`);
 } else if (values.queue) {
-  const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"] }) : agent;
+  const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
   let results;
   try {
     results = await runQueue({ agent, reviewer, sandbox, maxRounds, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
@@ -180,6 +180,7 @@ if (values.audit) {
     console.log(`#${r.issue} [${r.status}] ${r.prUrl ?? "-"}`);
     if (r.error) console.log(`  ${r.error.trimEnd().replaceAll("\n", "\n  ")}`);
     if (r.logPath) console.log(`  log: ${r.logPath}`);
+    if (r.review?.usage) console.log(`  cost ${formatUsage(r.review.usage)}`);
     for (const f of r.filed) console.log(`  filed #${f.number}: ${f.title}`);
   }
   if (results.some((r) => r.status !== (values.merge ? "merged" : "pr-opened"))) process.exit(1);
@@ -189,7 +190,7 @@ if (values.audit) {
     console.error("bunker: --issue must be a positive integer");
     process.exit(2);
   }
-  const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"] }) : agent;
+  const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
   let result;
   try {
     result = await runIssue({ issue, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
@@ -205,10 +206,11 @@ if (values.audit) {
   if (result.error) console.log(`  ${result.error.trimEnd().replaceAll("\n", "\n  ")}`);
   if (result.verifyOutput) console.log(`  verify output:\n${result.verifyOutput}`);
   if (result.prUrl) console.log(result.prUrl);
+  if (result.review?.usage) console.log(`bunker: cost ${formatUsage(result.review.usage)}`);
   if (result.logPath) console.log(`bunker: log ${result.logPath}`);
   if (result.status !== (values.merge ? "merged" : "pr-opened")) process.exit(1);
 } else if (values.review) {
-  const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"] }) : agent;
+  const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
   const result = await review({ prompt, agent, reviewer, sandbox, maxRounds });
   console.log();
   for (const [i, r] of result.rounds.entries()) {
@@ -217,17 +219,20 @@ if (values.audit) {
   console.log(`bunker: [${result.status}] ${result.branch} (${result.commits.length} commit(s))`);
   for (const c of result.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
   if (result.error) console.log(`  ${result.error.trimEnd().replaceAll("\n", "\n  ")}`);
+  if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
   if (result.status !== "approved") process.exit(1);
 } else if (prompt) {
   const result = await run({ prompt, agent, sandbox, maxIterations });
   console.log(`\nbunker: ${result.commits.length} commit(s) merged from ${result.branch}`);
   for (const c of result.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
+  if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
 } else {
   const results = await runAll({ tasks: tasks.map((p) => ({ prompt: p })), agent, sandbox, maxIterations });
   console.log();
   for (const r of results) {
     console.log(`bunker: [${r.status}] ${r.branch} (${r.commits.length} commit(s)) ${r.prompt}`);
     for (const c of r.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
+    if (r.usage) console.log(`  cost ${formatUsage(r.usage)}`);
     if (r.error) console.log(`  ${r.error.trimEnd().replaceAll("\n", "\n  ")}`);
   }
   if (results.some((r) => r.status !== "merged")) process.exit(1);
