@@ -142,4 +142,18 @@ describe("cli", () => {
 
     expect(await new Response(proc.stderr).text()).not.toContain("claude setup-token");
   }, 30_000);
+
+  test("a positional prompt together with --task exits 2 and prints usage", async () => {
+    const repo = await tempDir();
+    await $`git init -q ${repo}`;
+
+    const proc = Bun.spawn(["bun", cli, "--task", "a thing", "do a thing"], {
+      cwd: repo,
+      env: bareEnv,
+      stderr: "pipe",
+    });
+
+    expect(await proc.exited).toBe(2);
+    expect(await new Response(proc.stderr).text()).toContain("--task");
+  });
 });
