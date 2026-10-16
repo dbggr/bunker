@@ -116,6 +116,22 @@ Result: `{ status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-fa
 
 CLI: `--issue <N> [--verify "<cmd>"] [--model] [--reviewer-model] [--max-rounds] [--no-sandbox] [--image]`. Exits 0 only when a PR was opened; can't be combined with a prompt, `--task` or `--review`.
 
+## Merging
+
+`bunker --issue 12 --verify "bun test" --merge` finishes the job: once the PR is open it runs `gh pr merge <url> --squash --delete-branch`, then checks the squash really landed — it fetches, lists the files the branch changed, and requires each to be identical on `origin/<default>` and the branch tip. `--merge` requires `--verify` (exit 2 otherwise) and exits 0 only for `merged`.
+
+| status | meaning |
+| --- | --- |
+| `merged` | merged and verified; worktree and local branch removed |
+| `merge-failed` | `gh pr merge` failed; PR left open, worktree kept |
+| `merge-unverified` | merged, but some files differ on the default branch (listed in the error); worktree and branch kept |
+
+### Scoped token
+
+Set `BUNKER_GH_TOKEN` (exported, or in `~/.config/bunker/.env` / `.bunker/.env`) and bunker's own `gh` calls run with `GH_TOKEN=$BUNKER_GH_TOKEN`; pushes and fetches go over HTTPS to `https://github.com/<owner>/<repo>.git` using `gh auth git-credential`, so your SSH key and full `gh` login aren't used. Unset, bunker behaves as before. The token never reaches an agent: `docker()` doesn't pass it, and `noSandbox()` strips `GH_TOKEN`, `GITHUB_TOKEN` and `BUNKER_GH_TOKEN` from the agent's environment.
+
+Create the token at GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token. Restrict it to the one repository, set a short expiry, and grant repository permissions: **Contents: Read and write**, **Pull requests: Read and write**, **Issues: Read** (Metadata: Read is added automatically). Nothing else.
+
 ## Agent images: base + per-repo
 
 The container only runs the agent, so it needs no Bun or Node of its own, just git and claude. Anything else the agent needs to *verify* its work (run tests, lint) is the target repo's toolchain, so each repo adds that itself.
