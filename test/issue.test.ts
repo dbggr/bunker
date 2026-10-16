@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { $ } from "bun";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { noSandbox, type Agent } from "../src/index.ts";
 import { issueBranch, runIssue } from "../src/issue.ts";
 
@@ -66,7 +66,7 @@ interface Env {
 }
 
 // A repo with a bare local origin and a fake `gh` first on PATH.
-async function setup(issue: object, mergeMode: "ff" | "drop" | "fail" | "none" = "none"): Promise<Env> {
+async function setup(issue: object, mergeMode: "ff" | "drop" | "fail" | "none" | "ff-exit1" = "none"): Promise<Env> {
   const root = await tmp("bunker-issue-");
   const origin = join(root, "origin.git");
   const repo = join(root, "repo");
@@ -96,9 +96,15 @@ if [ "$1 $2" = "pr merge" ]; then
   ${
     mergeMode === "fail"
       ? "exit 1"
-      : `git --git-dir="${origin}" update-ref refs/heads/main "refs/heads/feature/7-add-feature${mergeMode === "drop" ? "~1" : ""}"; exit 0`
+      : `git --git-dir="${origin}" update-ref refs/heads/main "refs/heads/feature/7-add-feature${mergeMode === "drop" ? "~1" : ""}"; echo "fatal: 'main' is already used by worktree" >&2; exit ${mergeMode === "ff-exit1" ? 1 : 0}`
   }
 fi
+if [ "$1 $2" = "pr view" ]; then
+  echo "$*" >> "${root}/view.log"
+  echo '{"state":"${mergeMode === "ff-exit1" ? "MERGED" : "OPEN"}"}'
+  exit 0
+fi
+if [ "$1" = "api" ]; then echo "$*" >> "${root}/api.log"; exit 0; fi
 exit 1
 `,
   );
@@ -262,7 +268,10 @@ describe("runIssue() --merge", () => {
     const r = await run(repo);
     expect(r.status).toBe("merged");
     expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
-    expect((await Bun.file(mergeLog).text()).trim()).toBe("|pr merge https://github.com/o/r/pull/99 --squash --delete-branch");
+    expect((await Bun.file(mergeLog).text()).trim()).toBe("|pr merge https://github.com/o/r/pull/99 --squash");
+    expect((await Bun.file(join(dirname(mergeLog), "api.log")).text()).trim()).toBe(
+      "api -X DELETE repos/{owner}/{repo}/git/refs/heads/feature/7-add-feature",
+    );
     expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(false);
     expect(await branches(repo)).toEqual(["main"]);
     expect((await $`git -C ${origin} show main:feature.txt`.text()).trim()).toBe("hi");
@@ -283,6 +292,20 @@ describe("runIssue() --merge", () => {
     expect(r.status).toBe("merge-failed");
     expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
     expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
+  });
+
+  test("merge exits non-zero but PR is MERGED → landing check → merged", async () => {
+    const { repo } = await setup(issue(), "ff-exit1");
+    const r = await run(repo);
+    expect(r.status).toBe("merged");
+    expect(await branches(repo)).toEqual(["main"]);
+  });
+
+  test("merge-failed error carries the full gh output and PR state", async () => {
+    const { repo } = await setup(issue(), "fail");
+    const r = await run(repo);
+    expect(r.error).toContain("gh pr merge failed");
+    expect(r.error).toContain("PR state: OPEN");
   });
 
   test("no merge flag → never calls pr merge", async () => {

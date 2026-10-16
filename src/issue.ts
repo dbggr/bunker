@@ -169,8 +169,20 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   const opened = { review: result, ...(prUrl ? { prUrl } : {}) };
   if (!merge || !prUrl) return fail("pr-opened", opened);
 
-  const merged = await $`gh pr merge ${prUrl} --squash --delete-branch`.cwd(worktree).env(env).nothrow().quiet();
-  if (merged.exitCode !== 0) return fail("merge-failed", { ...opened, error: `gh pr merge failed:\n${merged.stderr}` });
+  // No --delete-branch: gh would also switch/delete the local branch, which fails in a worktree.
+  const merged = await $`gh pr merge ${prUrl} --squash`.cwd(worktree).env(env).nothrow().quiet();
+  if (merged.exitCode !== 0) {
+    // gh can merge on GitHub and still exit non-zero; trust the PR's actual state.
+    const view = await $`gh pr view ${prUrl} --json state`.cwd(worktree).env(env).nothrow().quiet();
+    let state = "unknown";
+    try {
+      state = JSON.parse(view.stdout.toString()).state ?? state;
+    } catch {}
+    if (state !== "MERGED") {
+      return fail("merge-failed", { ...opened, error: `gh pr merge failed (exit ${merged.exitCode}, PR state: ${state}):\n${merged.stderr}${merged.stdout}` });
+    }
+  }
+  await $`gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/${branch}`.cwd(worktree).env(env).nothrow().quiet();
 
   // Squash-merges have silently dropped late commits: check every file the branch touched.
   const refspec = `+refs/heads/${defaultBranch}:refs/remotes/origin/${defaultBranch}`;
