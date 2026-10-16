@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { noSandbox, type Agent } from "../src/index.ts";
 import { issueBranch, runIssue } from "../src/issue.ts";
+import { output } from "../src/output.ts";
+import { createProgress, type BunkerEvent } from "../src/events.ts";
 
 const dirs: string[] = [];
 const origPath = process.env.PATH;
@@ -682,5 +684,58 @@ describe("redaction", () => {
     expect(r.verifyOutput).toContain("[REDACTED]");
     expect(r.verifyOutput).not.toContain("super-secret-token-value");
     expect(r.verifyOutput).not.toContain("ghp_");
+  });
+});
+
+describe("quiet output", () => {
+  const verifyEvents = async (verify: string, agent = fakeAgent(APPROVE)) => {
+    const { repo } = await setup(issue());
+    const sink: string[] = [];
+    output.write = (s) => sink.push(s);
+    let term = "";
+    const p = createProgress({ write: (s) => (term += s), tty: false });
+    const r = await runIssue({ cwd: repo, issue: 7, agent, sandbox: noSandbox(), verify, onEvent: (e: BunkerEvent) => p.onEvent(e) });
+    return { r, sink: sink.join(""), term };
+  };
+
+  test("passing verify prints exactly one summary line, output stays out of the terminal", async () => {
+    const { term, sink } = await verifyEvents("printf ' 151 pass\\n 8 skip\\n 0 fail\\n'");
+    expect(term.split("\n").filter((l) => l.includes("verify passed"))).toHaveLength(1);
+    expect(term).toMatch(/bunker: #7 · verify passed \(151 pass, 8 skip, [\d.]+s\)\n/);
+    expect(term).not.toContain("0 fail");
+    expect(sink).toBe("");
+  });
+
+  test("unparseable counts: just the duration", async () => {
+    const { term } = await verifyEvents("echo whatever");
+    expect(term).toMatch(/bunker: #7 · verify passed \([\d.]+s\)\n/);
+  });
+
+  test("failing verify prints the last 40 lines and the log path", async () => {
+    const { r, term, sink } = await verifyEvents("seq 1 60; exit 4");
+    expect(r.status).toBe("verify-failed");
+    expect(term).toContain("verify failed (exit 4)");
+    expect(term).toMatch(/\n21\n/);
+    expect(term).toContain("\n60\n");
+    expect(term).not.toMatch(/\n20\n/);
+    expect(term).toContain("log: " + r.logPath);
+    expect(sink).toBe("");
+  });
+
+  test("a fake agent's text doesn't reach stdout by default", async () => {
+    const agent: Agent = { command: (p, m = "write") => (m === "write" ? ["sh", "-c", 'echo hi > feature.txt && git add . && git commit -qm "feat: impl" && echo AGENTTEXT'] : ["sh", "-c", `echo '${APPROVE}'`]) };
+    const { sink } = await verifyEvents("true", agent);
+    expect(sink).toBe("");
+  });
+
+  test("--verbose streams everything", async () => {
+    const { repo } = await setup(issue());
+    const sink: string[] = [];
+    output.write = (s) => sink.push(s);
+    output.verbose = true;
+    const agent: Agent = { command: (p, m = "write") => (m === "write" ? ["sh", "-c", 'echo hi > feature.txt && git add . && git commit -qm "feat: impl" && echo AGENTTEXT'] : ["sh", "-c", `echo '${APPROVE}'`]) };
+    await runIssue({ cwd: repo, issue: 7, agent, sandbox: noSandbox(), verify: "echo VERIFYTEXT" });
+    expect(sink.join("")).toContain("AGENTTEXT");
+    expect(sink.join("")).toContain("VERIFYTEXT");
   });
 });

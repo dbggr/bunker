@@ -13,6 +13,7 @@ Common options (all modes):
   --image <name>             use this docker image as-is
   --no-sandbox               run the agent on the host instead of in docker
   -h, --help                 show this help (wins over every other flag)
+  --verbose                  stream all agent, setup and verify output (also BUNKER_VERBOSE=1)
   --version                  print the version
 
 Single prompt and --task:

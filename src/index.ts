@@ -2,6 +2,7 @@ import { $ } from "bun";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { redact } from "./redact.ts";
+import { output, tailLines } from "./output.ts";
 import { emit, findStreamResult, parseClaudeStreamLine, type OnEvent, type Stage, type StreamEvent } from "./events.ts";
 export type { BunkerEvent, OnEvent } from "./events.ts";
 import baseDockerfile from "../images/base/Dockerfile" with { type: "text" };
@@ -139,11 +140,13 @@ function prefixLines(text: string, prefix: string): string {
   return prefix ? text.replace(/^(?=.)/gm, prefix) : text;
 }
 
-/** Waits for the process, echoing its (redacted) stdout live, each line led by `prefix`, while capturing it unprefixed. */
+/** Waits for the process, echoing its (redacted) stdout live (verbose only), each line led by `prefix`, while capturing it unprefixed. */
 async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">, prefix = "", onLine?: (line: string) => void): Promise<{ code: number; stdout: string }> {
   // With onLine, lines are handed over (redacted) instead of echoed.
   const out = (text: string) => {
-    if (!onLine) process.stdout.write(prefixLines(redact(text), prefix));
+    if (!onLine) {
+      if (output.verbose) output.write(prefixLines(redact(text), prefix));
+    }
     else for (const line of text.split("\n")) if (line) onLine(redact(line));
   };
   const decoder = new TextDecoder();
@@ -597,7 +600,7 @@ export async function review({
   try {
     emitStage({ onEvent }, "setup");
     const prep = await runSetup(sandbox, ctx, setup);
-    if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${prep.stdout.slice(-2000)}`);
+    if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${tailLines(prep.stdout)}`);
     for (let i = 0; i < maxRounds; i++) {
       const feedback = rounds.at(-1)?.feedback;
       const task = feedback === undefined ? prompt : `${prompt}\n\nA reviewer requested changes:\n${feedback}`;

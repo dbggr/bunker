@@ -24,5 +24,6 @@ export const options = {
   ui: { type: "boolean", default: false },
   port: { type: "string" },
   "ui-keep": { type: "boolean", default: false },
+  verbose: { type: "boolean", default: false },
   version: { type: "boolean", default: false },
 } as const satisfies ParseArgsOptionsConfig;

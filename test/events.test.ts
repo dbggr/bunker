@@ -90,6 +90,26 @@ describe("createProgress()", () => {
     expect(out.trim().split("\n")).toHaveLength(2);
   });
 
+  test("TTY: the last bytes are the final status line, not a \\r progress line", () => {
+    let out = "";
+    const p = createProgress({ write: (s) => (out += s), tty: true });
+    p.onEvent({ type: "stage", name: "waiting for merge", issue: 7, at });
+    p.onEvent({ type: "toolCall", name: "Edit x", issue: 7, at: at + 1000 });
+    p.onEvent({ type: "meta", url: "https://github.com/o/r/pull/9", at: at + 2000 });
+    p.onEvent({ type: "stage", name: "merged", issue: 7, at: at + 3000 });
+    p.onEvent({ type: "toolCall", name: "late", issue: 7, at: at + 4000 });
+    p.clear();
+    expect(out.endsWith("bunker: #7 · merged · PR https://github.com/o/r/pull/9\n")).toBe(true);
+    expect(out.slice(out.lastIndexOf("\r") + 1).startsWith("\x1b[K")).toBe(true);
+  });
+
+  test("note events are permanent lines, no \\r off a TTY", () => {
+    let out = "";
+    const p = createProgress({ write: (s) => (out += s), tty: false });
+    p.onEvent({ type: "note", issue: 3, text: "verify passed (1 pass, 0.1s)", at });
+    expect(out).toBe("bunker: #3 · verify passed (1 pass, 0.1s)\n");
+  });
+
   test("hyperlink() is an OSC 8 file:// link", () => {
     expect(hyperlink("/a/b.log")).toBe("\x1b]8;;file:///a/b.log\x1b\\/a/b.log\x1b]8;;\x1b\\");
   });

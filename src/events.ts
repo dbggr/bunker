@@ -8,14 +8,14 @@ export type Stage = "setup" | "implement" | "review" | "verify" | "PR" | "waitin
 
 /** Progress from a run. `name` is the stage, or the tool call (e.g. "Edit src/cli.ts"). */
 export interface BunkerEvent {
-  type: "stage" | "text" | "toolCall" | "result" | "meta";
+  type: "stage" | "text" | "toolCall" | "result" | "meta" | "note";
   issue?: number;
   /** Index of the task, for runAll(). */
   task?: number;
   round?: number;
   role?: "implementer" | "reviewer";
   name?: string;
-  /** Agent text, or the failure status on a "failed" stage. */
+  /** Agent text, the failure status on a "failed" stage, or the message of a "note" (a permanent line, may span lines). */
   text?: string;
   /** On "result": what that agent run cost. */
   costUsd?: number;
@@ -106,6 +106,9 @@ export function createProgress({ write, tty, columns = 100 }: ProgressOptions): 
   let tool = "";
   let startedAt: number | undefined;
   let where = "";
+  let url = "";
+  // After merged/failed the run is over: late events must not bring the live line back.
+  let done = false;
   const clear = () => {
     if (live) write("\r\x1b[K");
     live = false;
@@ -115,16 +118,28 @@ export function createProgress({ write, tty, columns = 100 }: ProgressOptions): 
       .filter(Boolean)
       .join(" ");
   const onEvent: OnEvent = (e) => {
-    if (e.type === "meta") return;
+    if (e.type === "meta") {
+      if (e.url) url = e.url;
+      return;
+    }
     startedAt ??= e.at;
+    if (e.type === "note") {
+      clear();
+      where = who(e) || where;
+      write(`bunker: ${[where, e.text].filter(Boolean).join(" · ")}\n`);
+      return;
+    }
     if (e.type === "stage") {
       clear();
       tool = "";
       tools = 0;
       where = who(e);
-      write(`bunker: ${[where, e.name, e.text && e.name === "failed" ? `(${e.text})` : ""].filter(Boolean).join(" · ")}\n`);
+      done = e.name === "merged" || e.name === "failed";
+      write(`bunker: ${[where, e.name, e.text && e.name === "failed" ? `(${e.text})` : "", e.name === "merged" && url ? `PR ${url}` : ""].filter(Boolean).join(" · ")}\n`);
+      if (done) url = "";
       return;
     }
+    if (done) return;
     if (e.type === "toolCall") {
       tools++;
       tool = e.name ?? "";
