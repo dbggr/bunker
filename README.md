@@ -97,6 +97,25 @@ Nothing is thrown for the four statuses. A non-zero exit from either agent is `f
 
 CLI: `--review "<prompt>" [--max-rounds <n>] [--reviewer-model <id>]` (single prompt only) prints one line per round and the final status, and exits 1 unless approved.
 
+## Issue to PR
+
+```bash
+bunker --issue 19 --verify "bun test"
+```
+
+Run from the target repo's main checkout. `runIssue({ issue, agent, sandbox, verify?, reviewer?, maxRounds? })` (`src/issue.ts`):
+
+1. `gh issue view <N>`. A closed issue (or a `gh` failure) throws; the CLI exits 2.
+2. Branch `fix/<N>-<slug>` if the issue has a `bug` label, else `feature/<N>-<slug>` (`issueBranch()`: title lowercased, non-alphanumerics → `-`, a conventional prefix like `feat:` stripped, slug max 40 chars). It's a worktree at `<repo>/.worktrees/<N>-<slug>` from the current HEAD; `.worktrees/` is added to `.git/info/exclude`. Your checkout and branch are never touched.
+3. `review()` runs with that worktree as `cwd`, prompted with `Implement GitHub issue #<N>: <title>` + the body + instructions to use Conventional Commits and write tests first.
+4. Not approved → stop, nothing pushed.
+5. Approved and `verify` given → the command runs on the host in the worktree (so docker-dependent tests can run). Non-zero → stop, nothing pushed, `verifyOutput` has the tail of its output.
+6. `git push -u origin <branch>`, then `gh pr create` with the issue title and a body of `Closes #<N>`, one line per review round and (if run) `Verify: \`<cmd>\` passed`. No AI attribution. The URL is `prUrl`.
+
+Result: `{ status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed", branch, worktree, prUrl?, review?, verifyOutput?, error? }`. Nothing is thrown for those statuses, and the worktree and branch are always kept.
+
+CLI: `--issue <N> [--verify "<cmd>"] [--model] [--reviewer-model] [--max-rounds] [--no-sandbox] [--image]`. Exits 0 only when a PR was opened; can't be combined with a prompt, `--task` or `--review`.
+
 ## Agent images: base + per-repo
 
 The container only runs the agent, so it needs no Bun or Node of its own, just git and claude. Anything else the agent needs to *verify* its work (run tests, lint) is the target repo's toolchain, so each repo adds that itself.
