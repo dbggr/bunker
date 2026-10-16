@@ -183,6 +183,21 @@ describe("runIssue()", () => {
     expect((await $`git -C ${repo} branch ${"--format=%(refname:short)"}`.text()).trim()).toBe("main");
   });
 
+  test("branches from origin's main, not a stale local HEAD", async () => {
+    const { repo, origin } = await setup(issue());
+    const other = join(repo, "..", "other");
+    await $`git clone -q ${origin} ${other}`;
+    await $`git -C ${other} config user.name Test`;
+    await $`git -C ${other} config user.email test@example.com`;
+    await $`git -C ${other} commit -q --allow-empty -m upstream`;
+    await $`git -C ${other} push -q origin main`;
+    const upstream = (await $`git -C ${other} rev-parse HEAD`.text()).trim();
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() });
+    expect(r.status).toBe("pr-opened");
+    const base = (await $`git -C ${origin} rev-parse ${r.branch}~1`.text()).trim();
+    expect(base).toBe(upstream);
+  });
+
   test("bug label → fix/ branch", async () => {
     const { repo, origin } = await setup(issue({ labels: [{ name: "bug" }] }));
     const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() });
