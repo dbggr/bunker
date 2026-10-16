@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { $ } from "bun";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -8,8 +8,18 @@ import { issueBranch, runIssue } from "../src/issue.ts";
 
 const dirs: string[] = [];
 const origPath = process.env.PATH;
+const TOKEN_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "BUNKER_GH_TOKEN"];
+const origTokens = Object.fromEntries(TOKEN_VARS.map((k) => [k, process.env[k]]));
+// Tests must not depend on (or print) whatever token the outer env exports.
+beforeEach(() => {
+  for (const k of TOKEN_VARS) delete process.env[k];
+});
 afterEach(async () => {
   process.env.PATH = origPath;
+  for (const k of TOKEN_VARS) {
+    if (origTokens[k] === undefined) delete process.env[k];
+    else process.env[k] = origTokens[k];
+  }
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
