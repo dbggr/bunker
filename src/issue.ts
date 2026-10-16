@@ -494,7 +494,9 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       return [];
     }
     try {
-      return JSON.parse(list.stdout.toString()) as { number: number; title: string; createdAt: string }[];
+      const parsed: unknown = JSON.parse(list.stdout.toString());
+      if (!Array.isArray(parsed)) throw new Error("not an array");
+      return parsed.filter((i): i is { number: number; title: string; createdAt: string } => i !== null && typeof i === "object" && typeof i.number === "number");
     } catch {
       console.warn("bunker: gh issue list returned unparseable output");
       return [];
@@ -520,6 +522,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
     let live: Pick<IssueInfo, "state" | "labels" | "body" | "comments">;
     try {
       live = JSON.parse(view.stdout.toString());
+      if (live === null || typeof live !== "object" || !Array.isArray(live.labels)) throw new Error("unexpected shape");
     } catch {
       console.warn(`bunker: skipping #${q.number}, gh issue view returned unparseable output`);
       continue;

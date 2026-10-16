@@ -67,12 +67,14 @@ if [ "$1 $2" = "issue list" ]; then
   if [ -f "${root}/list-fail-always" ]; then echo "HTTP 502" >&2; exit 1; fi
   if [ -f "${root}/list-fail-once" ]; then rm "${root}/list-fail-once"; echo "HTTP 502" >&2; exit 1; fi
   if [ -f "${root}/list-bad-once" ]; then rm "${root}/list-bad-once"; echo "<html>oops"; exit 0; fi
+  if [ -f "${root}/list-raw-once" ]; then cat "${root}/list-raw-once"; rm "${root}/list-raw-once"; exit 0; fi
   if [ -f "${root}/list-empty-once" ]; then rm "${root}/list-empty-once"; echo '[]'; exit 0; fi
   if [ -f "${root}/list-partial-once" ]; then cat "${root}/list-partial-once"; rm "${root}/list-partial-once"; exit 0; fi
   cat "${root}/list.json"; exit 0
 fi
 if [ "$1 $2" = "issue view" ]; then
   if [ -f "${root}/view-fail-$3" ]; then echo "HTTP 502" >&2; exit 1; fi
+  if [ -f "${root}/view-raw-$3" ]; then cat "${root}/view-raw-$3"; exit 0; fi
   if [ -f "${root}/view-bad-$3" ]; then echo "<html>oops"; exit 0; fi
   cat "${root}/issue-$3.json"; exit 0
 fi
@@ -220,6 +222,24 @@ describe("runQueue()", () => {
       await Bun.write(join(repo, "..", f), "");
       const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), listRetryMs: 10 });
       expect(rs.map((r) => r.issue)).toEqual([1]);
+    }
+  });
+
+  test("ignores a valid-but-wrong-shaped list response", async () => {
+    for (const raw of ["null", '{"message":"rate limited"}', "42", '"x"', '[null, 7, {"title":"no number"}]']) {
+      const { repo } = await setup(issues);
+      await Bun.write(join(repo, "..", "list-raw-once"), raw);
+      const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), listRetryMs: 10 });
+      expect(rs.map((r) => r.issue)).toEqual([1]);
+    }
+  });
+
+  test("skips an issue whose view is valid JSON of the wrong shape", async () => {
+    for (const raw of ["null", "[]", '{"state":"OPEN"}', '{"state":"OPEN","labels":"bunker"}']) {
+      const { repo } = await setup(issues);
+      await Bun.write(join(repo, "..", "view-raw-1"), raw);
+      const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10, listRetryMs: 10 });
+      expect(rs.map((r) => r.issue)).not.toContain(1);
     }
   });
 
