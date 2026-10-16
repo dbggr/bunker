@@ -23,6 +23,29 @@ import { run, claudeCode, docker } from "./src/index.ts";
 const { commits } = await run({ prompt: "...", agent: claudeCode(), sandbox: docker() });
 ```
 
+## Parallel runs
+
+```ts
+import { runAll, claudeCode, docker } from "./src/index.ts";
+const results = await runAll({
+  tasks: [{ prompt: "add a greet() helper" }, { prompt: "add a farewell() helper" }],
+  agent: claudeCode(),
+  sandbox: docker(),
+});
+```
+
+`runAll()` gives each task its own worktree, all from the same base commit. Worktrees are created one at a time (git locks the shared `.git`), agents run concurrently, and merges land one at a time in task order.
+
+Each task gets a status in its result: `merged`, `conflict` or `failed`. Nothing is thrown for a single task; failed and conflicting branches are kept (`bunker/<id>`) for inspection.
+
+CLI form:
+
+```bash
+bun ~/Projects/Management/tool-bunker/src/cli.ts --task "add a greet() helper" --task "add a farewell() helper"
+```
+
+It prints one line per task and exits 1 if any task isn't `merged`.
+
 ## Agent images: base + per-repo
 
 The container only runs the agent, so it needs no Bun or Node of its own, just git and claude. Anything else the agent needs to *verify* its work (run tests, lint) is the target repo's toolchain, so each repo adds that itself.

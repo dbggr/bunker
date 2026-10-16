@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
-import { claudeCode, docker, noSandbox, run } from "./index.ts";
+import { claudeCode, docker, noSandbox, run, runAll } from "./index.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -9,12 +9,17 @@ const { values, positionals } = parseArgs({
     "no-sandbox": { type: "boolean", default: false },
     image: { type: "string" },
     model: { type: "string" },
+    task: { type: "string", multiple: true },
   },
 });
 
 const prompt = positionals.join(" ");
-if (!prompt) {
-  console.error('usage: bunker "<prompt>" [--model <id>] [--image <name>] [--no-sandbox]');
+const tasks = values.task ?? [];
+if (!prompt === !tasks.length) {
+  console.error(
+    'usage: bunker "<prompt>" [--model <id>] [--image <name>] [--no-sandbox]\n' +
+      '       bunker --task "<prompt>" --task "<prompt>" ...   (parallel, one worktree each)',
+  );
   process.exit(2);
 }
 
@@ -25,11 +30,20 @@ if (!values["no-sandbox"] && !hasAuth()) {
   process.exit(2);
 }
 
-const result = await run({
-  prompt,
-  agent: claudeCode({ model: values.model }),
-  sandbox: values["no-sandbox"] ? noSandbox() : docker({ image: values.image }),
-});
+const agent = claudeCode({ model: values.model });
+const sandbox = values["no-sandbox"] ? noSandbox() : docker({ image: values.image });
 
-console.log(`\nbunker: ${result.commits.length} commit(s) merged from ${result.branch}`);
-for (const c of result.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
+if (prompt) {
+  const result = await run({ prompt, agent, sandbox });
+  console.log(`\nbunker: ${result.commits.length} commit(s) merged from ${result.branch}`);
+  for (const c of result.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
+} else {
+  const results = await runAll({ tasks: tasks.map((p) => ({ prompt: p })), agent, sandbox });
+  console.log();
+  for (const r of results) {
+    console.log(`bunker: [${r.status}] ${r.branch} (${r.commits.length} commit(s)) ${r.prompt}`);
+    for (const c of r.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
+    if (r.error) console.log(`  ${r.error.split("\n")[0]}`);
+  }
+  if (results.some((r) => r.status !== "merged")) process.exit(1);
+}
