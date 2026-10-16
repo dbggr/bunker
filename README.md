@@ -187,3 +187,7 @@ The container has no access to your host login, so `docker()` needs a token pass
    `ANTHROPIC_API_KEY` is there commented out if you'd rather bill an API key.
 
 To use a different token for one repo, put it in that repo's `.bunker/.env` (gitignored). Precedence: exported variables > `<repo>/.bunker/.env` > `~/.config/bunker/.env`. The CLI exits with a `claude setup-token` hint if neither variable is set. `--no-sandbox` skips the check, since claude on the host uses your normal login.
+
+## Audit
+
+`bunker --audit [--max-issues <n>] [--focus "<text>"] [--setup "<cmd>"]`, run from the repo's main checkout, creates a throwaway worktree of origin's default branch and runs one read-only agent over it, asking for the most valuable concrete improvements as `<issue title="...">body with acceptance criteria</issue>` blocks (at most `--max-issues`, default 5). Titles matching an open issue are skipped; the rest are filed with `gh issue create --label discovered` (never `bunker`: relabelling is the human gate). The worktree is removed afterwards and the filed issue numbers are printed.

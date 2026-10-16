@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
 import { claudeCode, docker, noSandbox, review, run, runAll } from "./index.ts";
+import { runAudit } from "./audit.ts";
 import { runIssue, runQueue } from "./issue.ts";
 import { redact } from "./redact.ts";
 
@@ -30,12 +31,35 @@ const { values, positionals } = parseArgs({
     "ci-timeout": { type: "string" },
     queue: { type: "boolean", default: false },
     limit: { type: "string" },
+    audit: { type: "boolean", default: false },
+    "max-issues": { type: "string" },
+    focus: { type: "string" },
   },
 });
 
 const prompt = positionals.join(" ");
 const tasks = values.task ?? [];
-if (values.queue) {
+if (values.audit) {
+  if (prompt || tasks.length || values.review || values.issue !== undefined || values.queue) {
+    console.error("bunker: --audit can't be combined with a prompt, --task, --review, --issue or --queue");
+    process.exit(2);
+  }
+  if (values.verify !== undefined || values.merge || values["verify-on-host"]) {
+    console.error("bunker: --verify, --verify-on-host and --merge don't apply to --audit");
+    process.exit(2);
+  }
+} else if (values["max-issues"] !== undefined || values.focus !== undefined) {
+  console.error("bunker: --max-issues and --focus only apply to --audit");
+  process.exit(2);
+}
+const maxIssues = values["max-issues"] === undefined ? 5 : Number(values["max-issues"]);
+if (!Number.isInteger(maxIssues) || maxIssues < 1) {
+  console.error("bunker: --max-issues must be a positive integer");
+  process.exit(2);
+}
+if (values.audit) {
+  // checked above
+} else if (values.queue) {
   if (prompt || tasks.length || values.review || values.issue !== undefined) {
     console.error("bunker: --queue can't be combined with a prompt, --task, --review or --issue");
     process.exit(2);
@@ -65,16 +89,17 @@ if (values.queue) {
     process.exit(2);
   }
 }
-if (values.issue === undefined && !values.queue && (values.verify !== undefined || values.setup !== undefined || values.merge || values["verify-on-host"])) {
+if (!values.audit && values.issue === undefined && !values.queue && (values.verify !== undefined || values.setup !== undefined || values.merge || values["verify-on-host"])) {
   console.error("bunker: --setup, --verify, --verify-on-host and --merge only apply to --issue or --queue");
   process.exit(2);
 }
-if (values.issue === undefined && !values.queue && !prompt === !tasks.length) {
+if (!values.audit && values.issue === undefined && !values.queue && !prompt === !tasks.length) {
   console.error(
     'usage: bunker "<prompt>" [--model <id>] [--image <name>] [--no-sandbox] [--max-iterations <n>]\n' +
       '       bunker --review "<prompt>" [--max-rounds <n>] [--reviewer-model <id>]   (implement → review → fix)\n' +
       '       bunker --issue <n> [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--max-rounds <n>] [--reviewer-model <id>]   (issue → reviewed PR)\n' +
       '       bunker --queue [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--limit <n>]   (work the `bunker` label queue)\n' +
+      '       bunker --audit [--max-issues <n>] [--focus "<text>"] [--setup "<cmd>"]   (file improvement ideas as `discovered` issues)\n' +
       '       bunker --task "<prompt>" --task "<prompt>" ...   (parallel, one worktree each)',
   );
   process.exit(2);
@@ -121,7 +146,19 @@ if (values["ci-timeout"] !== undefined) {
 const agent = claudeCode({ model: values.model });
 const sandbox = values["no-sandbox"] ? noSandbox() : docker({ image: values.image });
 
-if (values.queue) {
+if (values.audit) {
+  let result;
+  try {
+    result = await runAudit({ agent, sandbox, maxIssues, focus: values.focus, setup: values.setup });
+  } catch (e) {
+    console.error(`bunker: ${e instanceof Error ? e.message : e}`);
+    process.exit(2);
+  }
+  console.log();
+  for (const t of result.skipped) console.log(`bunker: skipped (already open): ${t}`);
+  if (!result.filed.length) console.log("bunker: no issues filed");
+  for (const f of result.filed) console.log(`filed #${f.number}: ${f.title}`);
+} else if (values.queue) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"] }) : agent;
   let results;
   try {
