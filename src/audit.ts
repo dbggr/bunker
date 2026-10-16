@@ -1,7 +1,7 @@
 import { $ } from "bun";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runSetup, type Agent, type Sandbox } from "./index.ts";
+import { runSetup, type Agent, type Sandbox, type Usage } from "./index.ts";
 import { parseIssueBlocks } from "./issue.ts";
 
 export interface AuditOptions {
@@ -22,6 +22,8 @@ export interface AuditResult {
   filed: { number: number; title: string }[];
   /** Titles dropped because an open issue already has that title. */
   skipped: string[];
+  /** What the audit agent cost, when it reported usage. */
+  usage?: Usage;
 }
 
 const norm = (t: string) => t.trim().replace(/\s+/g, " ").toLowerCase();
@@ -69,18 +71,21 @@ export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues 
   if (add.exitCode !== 0) throw new Error(`could not create worktree:\n${add.stderr}`);
 
   let output: string;
+  let usage: Usage | undefined;
   try {
     const ctx = { worktree, gitCommonDir };
     const prep = await runSetup(sandbox, ctx, setup);
     if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${prep.stdout.slice(-2000)}`);
     const res = await sandbox.exec(agent.command(auditPrompt(maxIssues, focus), "review"), ctx);
     if (res.code !== 0) throw new Error(`agent exited with ${res.code}`);
-    output = agent.parse?.(res.stdout).text ?? res.stdout;
+    const parsed = agent.parse?.(res.stdout);
+    output = parsed?.text ?? res.stdout;
+    usage = parsed?.usage;
   } finally {
     await $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet();
   }
 
-  const result: AuditResult = { filed: [], skipped: [] };
+  const result: AuditResult = { filed: [], skipped: [], ...(usage ? { usage } : {}) };
   const fresh: { title: string; body: string }[] = [];
   for (const b of parseIssueBlocks(output)) {
     if (existing.has(norm(b.title))) result.skipped.push(b.title);
