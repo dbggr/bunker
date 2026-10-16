@@ -146,34 +146,112 @@ async function commitsBetween(cwd: string, base: string, branch: string): Promis
     });
 }
 
-/**
- * Branch → sandbox → collect → merge. On agent failure the worktree is removed
- * but the branch is kept so you can inspect what it got done.
- */
-export async function run({ prompt, agent, sandbox, cwd = process.cwd() }: RunOptions): Promise<RunResult> {
-  const id = crypto.randomUUID().slice(0, 8);
-  const branch = `bunker/${id}`;
-  const worktree = join(tmpdir(), `bunker-${id}`);
+interface Worktree {
+  branch: string;
+  path: string;
+}
+
+async function repoInfo(cwd: string) {
   const base = (await $`git -C ${cwd} rev-parse HEAD`.text()).trim();
   const gitCommonDir = (await $`git -C ${cwd} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
+  return { base, gitCommonDir };
+}
 
-  await $`git -C ${cwd} worktree add -q -b ${branch} ${worktree} ${base}`;
-  let commits: Commit[];
+async function addWorktree(cwd: string, base: string): Promise<Worktree> {
+  const id = crypto.randomUUID().slice(0, 8);
+  const wt = { branch: `bunker/${id}`, path: join(tmpdir(), `bunker-${id}`) };
+  await $`git -C ${cwd} worktree add -q -b ${wt.branch} ${wt.path} ${base}`;
+  return wt;
+}
+
+/** Runs the agent in the worktree and returns its commits. The worktree is always removed; the branch never is. */
+async function runAgent(
+  cwd: string,
+  base: string,
+  gitCommonDir: string,
+  wt: Worktree,
+  prompt: string,
+  agent: Agent,
+  sandbox: Sandbox,
+): Promise<Commit[]> {
   try {
-    const code = await sandbox.exec(agent.command(prompt), { worktree, gitCommonDir });
-    if (code !== 0) throw new Error(`agent exited with ${code}; work kept on ${branch}`);
-    commits = await commitsBetween(cwd, base, branch);
+    const code = await sandbox.exec(agent.command(prompt), { worktree: wt.path, gitCommonDir });
+    if (code !== 0) throw new Error(`agent exited with ${code}; work kept on ${wt.branch}`);
+    return await commitsBetween(cwd, base, wt.branch);
   } finally {
-    await $`git -C ${cwd} worktree remove --force ${worktree}`.quiet();
+    await $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet();
   }
+}
 
+/** Merges the branch into the caller's checkout and deletes it. On conflict: aborts, keeps the branch, returns the error. */
+async function mergeBack(cwd: string, branch: string, commits: Commit[]): Promise<string | undefined> {
   if (commits.length > 0) {
     const merge = await $`git -C ${cwd} merge -q --no-edit ${branch}`.nothrow().quiet();
     if (merge.exitCode !== 0) {
       await $`git -C ${cwd} merge --abort`.nothrow().quiet();
-      throw new Error(`merge of ${branch} failed; branch kept:\n${merge.stderr}`);
+      return `merge conflict on ${branch}; branch kept:\n${merge.stdout}${merge.stderr}`;
     }
   }
   await $`git -C ${cwd} branch -q -D ${branch}`;
-  return { branch, commits };
+}
+
+/**
+ * Branch → sandbox → collect → merge. On agent failure or merge conflict it throws,
+ * keeping the branch so you can inspect what it got done.
+ */
+export async function run({ prompt, agent, sandbox, cwd = process.cwd() }: RunOptions): Promise<RunResult> {
+  const { base, gitCommonDir } = await repoInfo(cwd);
+  const wt = await addWorktree(cwd, base);
+  const commits = await runAgent(cwd, base, gitCommonDir, wt, prompt, agent, sandbox);
+  const conflict = await mergeBack(cwd, wt.branch, commits);
+  if (conflict) throw new Error(conflict);
+  return { branch: wt.branch, commits };
+}
+
+export interface RunAllOptions {
+  tasks: { prompt: string }[];
+  agent: Agent;
+  sandbox: Sandbox;
+  cwd?: string;
+}
+
+export interface TaskResult {
+  prompt: string;
+  status: "merged" | "conflict" | "failed";
+  branch: string;
+  commits: Commit[];
+  error?: string;
+}
+
+/**
+ * One worktree per task, all from the same base. Worktrees are created one at a
+ * time (git takes locks on the shared .git), agents run concurrently, and merges
+ * land one at a time in task order. A task's failure or conflict is reported in
+ * its result, never thrown, and its branch is kept.
+ */
+export async function runAll({ tasks, agent, sandbox, cwd = process.cwd() }: RunAllOptions): Promise<TaskResult[]> {
+  const { base, gitCommonDir } = await repoInfo(cwd);
+  const worktrees: Worktree[] = [];
+  for (const _ of tasks) worktrees.push(await addWorktree(cwd, base));
+
+  const outcomes = await Promise.allSettled(
+    tasks.map((task, i) => runAgent(cwd, base, gitCommonDir, worktrees[i]!, task.prompt, agent, sandbox)),
+  );
+
+  const results: TaskResult[] = [];
+  for (const [i, outcome] of outcomes.entries()) {
+    const { prompt } = tasks[i]!;
+    const { branch } = worktrees[i]!;
+    if (outcome.status === "rejected") {
+      const error = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+      results.push({ prompt, status: "failed", branch, commits: [], error });
+      continue;
+    }
+    const commits = outcome.value;
+    const conflict = await mergeBack(cwd, branch, commits);
+    results.push(
+      conflict ? { prompt, status: "conflict", branch, commits, error: conflict } : { prompt, status: "merged", branch, commits },
+    );
+  }
+  return results;
 }
