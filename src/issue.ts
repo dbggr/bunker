@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { redact } from "./redact.ts";
-import { review, type Agent, type ReviewResult, type Sandbox } from "./index.ts";
+import { review, runSetup, type Agent, type ReviewResult, type Sandbox } from "./index.ts";
 
 export interface IssueInfo {
   number: number;
@@ -195,20 +195,11 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   const add = await $`git -C ${repo} worktree add -q -b ${branch} ${worktree} FETCH_HEAD`.nothrow().quiet();
   if (add.exitCode !== 0) return fail("failed", { error: `could not create worktree:\n${add.stderr}` });
 
-  // Explicit `setup` wins; else the repo's own .bunker/setup script. Same sandbox as the agent.
-  const setupScript = join(worktree, ".bunker", "setup");
-  const setupCmd = setup ?? ((await Bun.file(setupScript).exists()) ? "sh .bunker/setup" : undefined);
-  if (setupCmd) {
-    const out = await sandbox.exec(["sh", "-c", `(${setupCmd}) 2>&1`], { worktree, gitCommonDir });
-    log(`setup (exit ${out.code})`, out.stdout);
-    if (out.code !== 0) return fail("failed", { error: `setup failed (exit ${out.code}):\n${out.stdout.slice(-VERIFY_TAIL)}` });
-  }
-
   const prompt =
     `Implement GitHub issue #${number}: ${issue.title}\n\n${issue.body}\n\n` +
     "Use Conventional Commits for your commit messages, write tests first, and make the repo's tests pass.\n\n" +
     ISSUE_CONVENTION;
-  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, reviewerInstruction: ISSUE_CONVENTION });
+  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, setup, reviewerInstruction: ISSUE_CONVENTION });
 
   for (const [i, r] of result.rounds.entries()) {
     log(`round ${i + 1}: agent output`, r.output);
@@ -231,6 +222,12 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   if (result.status !== "approved") return fail(result.status, { review: result, ...(result.error ? { error: result.error } : {}) });
 
   if (verify) {
+    // The issue worktree is a fresh checkout too (the agent ran in review()'s own), so it needs setup as well.
+    const prep = await runSetup(sandbox, { worktree, gitCommonDir }, setup);
+    if (prep) {
+      log(`setup (exit ${prep.code})`, prep.stdout);
+      if (prep.code !== 0) return fail("failed", { review: result, error: `setup failed (exit ${prep.code}):\n${prep.stdout.slice(-VERIFY_TAIL)}` });
+    }
     let code: number;
     let text: string;
     if (verifyOnHost) {

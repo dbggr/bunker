@@ -107,7 +107,7 @@ Run from the target repo's main checkout. `runIssue({ issue, agent, sandbox, ver
 
 1. `gh issue view <N>`. A closed issue (or a `gh` failure) throws; the CLI exits 2.
 2. Branch `fix/<N>-<slug>` if the issue has a `bug` label, else `feature/<N>-<slug>` (`issueBranch()`: title lowercased, non-alphanumerics → `-`, a conventional prefix like `feat:` stripped, slug max 40 chars). It's a worktree at `<repo>/.worktrees/<N>-<slug>` from the current HEAD; `.worktrees/` is added to `.git/info/exclude`. Your checkout and branch are never touched.
-3. Setup: `--setup "<cmd>"` (`setup`) runs in the worktree inside the sandbox, before the first agent run (worktrees have no `node_modules`). Default: the repo's `.bunker/setup` script, if present (this repo uses `bun install --frozen-lockfile`). Non-zero → `failed`, `error` has its output.
+3. Setup: `--setup "<cmd>"` (`setup`) runs in the worktree inside the sandbox, before the first agent run (worktrees have no `node_modules`). Default: the repo's `.bunker/setup` script, if present (this repo uses `bun install --frozen-lockfile`). It also runs in the issue worktree before `verify`. Non-zero → `failed`, `error` has its output.
 4. `review()` runs with that worktree as `cwd`, prompted with `Implement GitHub issue #<N>: <title>` + the body + instructions to use Conventional Commits and write tests first.
 5. Not approved → stop, nothing pushed.
 6. Approved and `verify` given → the command runs in the worktree inside the same sandbox as the agent, so agent-written code never runs on the host with your credentials. `--verify-on-host` (`verifyOnHost: true`) opts into running it on the host instead. Non-zero → stop, nothing pushed, `verifyOutput` has the tail of its output.
