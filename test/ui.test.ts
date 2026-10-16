@@ -123,6 +123,17 @@ describe("connectHub()", () => {
     c.ws.close();
   });
 
+  test("flush delivers queued closing events (awaited before every process.exit in the CLI)", async () => {
+    hub = startHub({ port: 0, token: TOKEN });
+    const c = await connect(hub.url);
+    const pub = await connectHub({ port: hub.server.port!, repo: "a/one", token: TOKEN });
+    pub!.onEvent({ type: "text", text: "failed", at: 1 });
+    await pub!.flush();
+    await until(() => c.messages.length === 1);
+    expect(c.messages.map((m) => m.event.text)).toEqual(["failed"]);
+    c.ws.close();
+  });
+
   test("no hub running: returns undefined, no errors", async () => {
     const tmp = startHub({ port: 0, token: TOKEN });
     const port = tmp.server.port!;

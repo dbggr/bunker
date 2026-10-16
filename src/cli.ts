@@ -257,6 +257,7 @@ if (values.audit) {
     result = await runAudit({ agent, sandbox, maxIssues, focus: values.focus, setup: values.setup });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
+    await publisher?.flush();
     process.exit(2);
   }
   console.log();
@@ -279,6 +280,7 @@ if (values.audit) {
     await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, signal: ctl.signal, ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
+    await publisher?.flush();
     process.exit(2);
   }
 } else if (values.queue) {
@@ -288,6 +290,7 @@ if (values.audit) {
     results = await runQueue({ onEvent, agent, reviewer, sandbox, maxRounds, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
+    await publisher?.flush();
     process.exit(2);
   }
   console.log();
@@ -304,6 +307,7 @@ if (values.audit) {
   const issue = Number(values.issue);
   if (!Number.isInteger(issue) || issue < 1) {
     console.error("bunker: --issue must be a positive integer");
+    await publisher?.flush();
     process.exit(2);
   }
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
@@ -312,6 +316,7 @@ if (values.audit) {
     result = await runIssue({ onEvent, issue, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
+    await publisher?.flush();
     process.exit(2);
   }
   console.log();
@@ -335,7 +340,7 @@ if (values.audit) {
   for (const c of result.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
   if (result.error) console.log(`  ${result.error.trimEnd().replaceAll("\n", "\n  ")}`);
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
-  if (result.status !== "approved") process.exit(1);
+  if (result.status !== "approved") { await publisher?.flush(); process.exit(1); }
 } else if (prompt) {
   let result;
   try {
@@ -343,6 +348,7 @@ if (values.audit) {
   } catch (e) {
     console.error(`\nbunker: ${e instanceof Error ? e.message : e}`);
     if (e instanceof AgentFailure && e.usage) console.log(`bunker: cost ${formatUsage(e.usage)}`);
+    await publisher?.flush();
     process.exit(1);
   }
   console.log(`\nbunker: ${result.commits.length} commit(s) merged from ${result.branch}`);
@@ -357,7 +363,7 @@ if (values.audit) {
     if (r.usage) console.log(`  cost ${formatUsage(r.usage)}`);
     if (r.error) console.log(`  ${r.error.trimEnd().replaceAll("\n", "\n  ")}`);
   }
-  if (results.some((r) => r.status !== "merged")) process.exit(1);
+  if (results.some((r) => r.status !== "merged")) { await publisher?.flush(); process.exit(1); }
 }
 
 await publisher?.flush();
