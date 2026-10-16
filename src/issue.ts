@@ -240,6 +240,7 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
     }
   }
   if (merge && !verify) return fail("failed", { error: "merge requires --verify or a .bunker/verify file" });
+  if (verifyOnHost && !verify) return fail("failed", { error: "--verify-on-host requires --verify or a .bunker/verify file" });
   const add = await $`git -C ${repo} worktree add -q -b ${branch} ${worktree} FETCH_HEAD`.nothrow().quiet();
   if (add.exitCode !== 0) return fail("failed", { error: `could not create worktree:\n${add.stderr}` });
 

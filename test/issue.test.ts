@@ -478,6 +478,39 @@ describe("runIssue()", () => {
     expect(r.status).toBe("merged");
   });
 
+  test("a blank .bunker/verify on origin does not satisfy merge", async () => {
+    const { repo, origin } = await setup(issue(), "ff");
+    await $`mkdir -p ${repo}/.bunker`;
+    await Bun.write(join(repo, ".bunker", "verify"), "  \n");
+    await $`git -C ${repo} add .bunker/verify && git -C ${repo} commit -qm "chore: verify" && git -C ${repo} push -q origin main`;
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), merge: true, ciPollMs: 10 });
+    expect(r.status).toBe("failed");
+    expect(r.error).toContain(".bunker/verify");
+    expect(await originBranches(origin)).toEqual(["main"]);
+  });
+
+  test("a .bunker/verify that exists only on origin satisfies merge; one only in the checkout does not", async () => {
+    const { repo } = await setup(issue(), "ff");
+    await $`mkdir -p ${repo}/.bunker`;
+    await Bun.write(join(repo, ".bunker", "verify"), "test -f feature.txt\n");
+    const local = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), merge: true, ciPollMs: 10 });
+    expect(local.status).toBe("failed");
+    expect(local.error).toContain("merge requires");
+    await $`git -C ${repo} add .bunker/verify && git -C ${repo} commit -qm "chore: verify" && git -C ${repo} push -q origin main`;
+    await $`git -C ${repo} reset -q --hard HEAD~1`;
+    expect(await Bun.file(join(repo, ".bunker", "verify")).exists()).toBe(false);
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), merge: true, ciPollMs: 10 });
+    expect(r.status).toBe("merged");
+  });
+
+  test("verifyOnHost without any verify command fails before any work", async () => {
+    const { repo, origin } = await setup(issue());
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verifyOnHost: true });
+    expect(r.status).toBe("failed");
+    expect(r.error).toContain("--verify-on-host requires");
+    expect(await originBranches(origin)).toEqual(["main"]);
+  });
+
   test("rejected → nothing pushed, worktree kept", async () => {
     const { repo, origin, prLog } = await setup(issue());
     const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent("nope"), sandbox: noSandbox(), maxRounds: 1 });

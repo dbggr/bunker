@@ -150,7 +150,10 @@ describe("cli", () => {
     const proc = Bun.spawn(["bun", cli, "--issue", "1", "--merge"], { cwd: repo, env: bareEnv, stderr: "pipe" });
 
     await proc.exited;
-    expect(await new Response(proc.stderr).text()).not.toContain("--merge requires");
+    const err = await new Response(proc.stderr).text();
+    expect(err).not.toContain("--merge requires");
+    expect(err).not.toContain("--verify-on-host requires");
+    expect(err).not.toContain("TypeError");
   }, 30_000);
 
   test("a local-only .bunker/verify file does not change the CLI's decision", async () => {
@@ -162,7 +165,10 @@ describe("cli", () => {
     const proc = Bun.spawn(["bun", cli, "--queue", "--merge"], { cwd: repo, env: bareEnv, stderr: "pipe" });
 
     await proc.exited;
-    expect(await new Response(proc.stderr).text()).not.toContain("--merge requires");
+    const err = await new Response(proc.stderr).text();
+    expect(err).not.toContain("--merge requires");
+    expect(err).not.toContain("--verify-on-host requires");
+    expect(err).not.toContain("TypeError");
   }, 30_000);
 
   test("a positional prompt together with --task exits 2 and prints usage", async () => {
