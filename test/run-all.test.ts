@@ -116,3 +116,27 @@ describe("runAll()", () => {
     expect(await branches(repo)).toEqual(["main"]);
   });
 });
+
+describe("runAll() live output", () => {
+  test("prefixes each line with the task index; results stay unprefixed", async () => {
+    const repo = await makeRepo();
+    const written: string[] = [];
+    const orig = process.stdout.write;
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      written.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      await runAll({
+        cwd: repo,
+        agent: shellAgent,
+        sandbox: noSandbox(),
+        tasks: [{ prompt: "echo one; echo two" }, { prompt: "printf tail" }],
+      });
+    } finally {
+      process.stdout.write = orig;
+    }
+    const lines = written.join("").split("\n").filter(Boolean).sort();
+    expect(lines).toEqual(["[0] one", "[0] two", "[1] tail"]);
+  });
+});
