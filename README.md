@@ -10,7 +10,6 @@ run(prompt) → git worktree on bunker/<id> → agent runs in sandbox → collec
 
 ```bash
 bun install
-docker build -t bunker-claude .           # agent image (git + claude)
 claude setup-token                        # then export CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY)
 
 cd /some/repo
@@ -23,6 +22,24 @@ Or as a library:
 import { run, claudeCode, docker } from "./src/index.ts";
 const { commits } = await run({ prompt: "...", agent: claudeCode(), sandbox: docker() });
 ```
+
+## Agent images: base + per-repo
+
+The container only runs the agent, so it needs no Bun or Node of its own, just git and claude. Anything else the agent needs to *verify* its work (run tests, lint) is the target repo's toolchain, so each repo adds that itself.
+
+- **Base** `bunker-claude` ([`images/base/Dockerfile`](images/base/Dockerfile)): debian trixie-slim + git, ca-certificates, bash, ripgrep + the native `claude` binary (pinned via `CLAUDE_VERSION`). Built automatically on first use.
+- **Per repo** `.bunker/Dockerfile`: if the target repo has one, `docker()` builds it (tag `bunker-repo-<name>-<hash>`, layer-cached) and runs the agent there. Build context is `.bunker/`. Example, this repo's own:
+
+  ```dockerfile
+  FROM bunker-claude
+  COPY --from=oven/bun:1.4.2-slim /usr/local/bin/bun /usr/local/bin/bun
+  RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx
+  ```
+
+  A PHP repo would `RUN apt-get install -y php-cli composer`, a Vite site would copy in node, and so on.
+- **Override**: `docker({ image })` uses that image as-is; `docker({ baseImage })` changes what the base is assumed to be.
+
+The `.bunker/Dockerfile` is read from the agent's worktree, so it must be committed to take effect.
 
 ## How it works (`src/index.ts`)
 

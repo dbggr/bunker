@@ -1,6 +1,6 @@
 import { $ } from "bun";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 /** Turns a prompt into the command line that runs the agent. */
 export interface Agent {
@@ -53,19 +53,59 @@ export function noSandbox(): Sandbox {
   };
 }
 
+const BASE_IMAGE = "bunker-claude";
+const BASE_CONTEXT = join(import.meta.dir, "..", "images", "base");
+
+async function dockerBuild(tag: string, context: string, dockerfile = join(context, "Dockerfile")) {
+  console.error(`bunker: building ${tag}`);
+  const code = await Bun.spawn(["docker", "build", "-q", "-t", tag, "-f", dockerfile, context], {
+    stdio: ["ignore", "ignore", "inherit"],
+  }).exited;
+  if (code !== 0) throw new Error(`docker build of ${tag} failed (exit ${code})`);
+}
+
+/**
+ * Picks the agent image: an explicit `image`, else the repo's .bunker/Dockerfile
+ * (built FROM the base), else the base. The base is built on first use.
+ */
+async function resolveImage(opts: DockerOptions, worktree: string, gitCommonDir: string): Promise<string> {
+  if (opts.image) return opts.image;
+  const base = opts.baseImage ?? BASE_IMAGE;
+  if (base === BASE_IMAGE && (await $`docker image inspect ${base}`.quiet().nothrow()).exitCode !== 0) {
+    await dockerBuild(base, BASE_CONTEXT);
+  }
+  const repoDockerfile = join(worktree, ".bunker", "Dockerfile");
+  if (!(await Bun.file(repoDockerfile).exists())) return base;
+  // One tag per repo; docker's layer cache makes rebuilding on every run cheap.
+  const repo = dirname(gitCommonDir);
+  const slug = basename(repo).toLowerCase().replace(/[^a-z0-9_.-]/g, "-");
+  const tag = `bunker-repo-${slug}-${Bun.hash(repo).toString(16).slice(0, 8)}`;
+  await dockerBuild(tag, dirname(repoDockerfile), repoDockerfile);
+  return tag;
+}
+
+export interface DockerOptions {
+  /** Use this image as-is, skipping the base and any .bunker/Dockerfile. */
+  image?: string;
+  /** Image a repo's .bunker/Dockerfile builds FROM. Defaults to bunker-claude (images/base). */
+  baseImage?: string;
+  /** Env var names passed through to the container. */
+  env?: string[];
+}
+
 /**
  * Runs the agent in a throwaway container. A worktree's .git is a file pointing at
  * <repo>/.git/worktrees/<id> by absolute path, so both the worktree and the repo's
  * .git are mounted at their host paths. Running as the host uid keeps every file
  * the agent writes (including git objects) owned by you, not root.
  */
-export function docker(opts: { image?: string; env?: string[] } = {}): Sandbox {
-  const image = opts.image ?? "bunker-claude";
+export function docker(opts: DockerOptions = {}): Sandbox {
   const env = opts.env ?? ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
   return {
     async exec(cmd, { worktree, gitCommonDir }) {
       const [entrypoint, ...args] = cmd;
       if (!entrypoint) throw new Error("empty agent command");
+      const image = await resolveImage(opts, worktree, gitCommonDir);
       // ~/.gitconfig isn't in the container, so carry the commit identity over.
       const name = (await $`git -C ${worktree} config user.name`.nothrow().text()).trim();
       const email = (await $`git -C ${worktree} config user.email`.nothrow().text()).trim();
