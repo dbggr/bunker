@@ -368,10 +368,17 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, ...opts }: Queue
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
   const listIssues = async () => {
     const list = await $`gh issue list --label bunker --state open --limit 1000 --json number,title,createdAt`.cwd(cwd).env(env).nothrow().quiet();
-    if (list.exitCode !== 0) throw new Error(`gh issue list failed:\n${list.stderr}`);
-    return (JSON.parse(list.stdout.toString()) as { number: number; title: string; createdAt: string }[]).sort(
-      (a, b) => a.createdAt.localeCompare(b.createdAt) || a.number - b.number,
-    );
+    // A transient failure of one list must not abort the queue; the other list may still succeed.
+    if (list.exitCode !== 0) {
+      console.warn(`bunker: gh issue list failed:\n${list.stderr}`);
+      return [];
+    }
+    try {
+      return JSON.parse(list.stdout.toString()) as { number: number; title: string; createdAt: string }[];
+    } catch {
+      console.warn("bunker: gh issue list returned unparseable output");
+      return [];
+    }
   };
   // The list can lag with a partial result too, so always list twice and merge.
   const first = await listIssues();
@@ -388,7 +395,13 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, ...opts }: Queue
       console.warn(`bunker: skipping #${q.number}, gh issue view failed:\n${view.stderr}`);
       continue;
     }
-    const live = JSON.parse(view.stdout.toString()) as { state: string; labels: { name: string }[] };
+    let live: { state: string; labels: { name: string }[] };
+    try {
+      live = JSON.parse(view.stdout.toString());
+    } catch {
+      console.warn(`bunker: skipping #${q.number}, gh issue view returned unparseable output`);
+      continue;
+    }
     if (live.state !== "OPEN" || !live.labels.some((l) => l.name === "bunker")) continue;
     const result = await runIssue({ ...opts, cwd, issue: q.number });
     done.push({ ...result, issue: q.number, title: q.title });
