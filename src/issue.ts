@@ -119,6 +119,10 @@ async function waitForChecks(
   pollMs: number,
 ): Promise<{ outcome: "passed" | "failed" | "timeout"; detail?: string }> {
   const deadline = Date.now() + timeoutMs;
+  // GitHub may not have registered checks right after PR creation, so an empty rollup
+  // only counts as "no checks configured" once seen on several consecutive polls.
+  const emptyPollsNeeded = 3;
+  let emptyPolls = 0;
   for (;;) {
     const view = await $`gh pr view ${prUrl} --json statusCheckRollup`.cwd(cwd).env(env).nothrow().quiet();
     // A failed or unparseable response is "pending", never "no checks".
@@ -128,8 +132,9 @@ async function waitForChecks(
         rollup = JSON.parse(view.stdout.toString()).statusCheckRollup ?? [];
       } catch {}
     }
+    emptyPolls = rollup?.length === 0 ? emptyPolls + 1 : 0;
     const { outcome, failed } = rollup ? judgeChecks(rollup) : { outcome: "pending" as const, failed: [] };
-    if (outcome === "passed") return { outcome };
+    if (outcome === "passed" && (emptyPolls === 0 || emptyPolls >= emptyPollsNeeded)) return { outcome };
     if (outcome === "failed") return { outcome, detail: `CI checks failed: ${failed.join(", ")}` };
     if (Date.now() >= deadline) return { outcome: "timeout", detail: `CI checks still pending after ${timeoutMs / 60_000} min` };
     await Bun.sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
