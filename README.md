@@ -130,7 +130,17 @@ CLI: `--issue <N> [--verify "<cmd>"] [--model] [--reviewer-model] [--max-rounds]
 
 Set `BUNKER_GH_TOKEN` (exported, or in `~/.config/bunker/.env` / `.bunker/.env`) and bunker's own `gh` calls run with `GH_TOKEN=$BUNKER_GH_TOKEN`; pushes and fetches go over HTTPS to `https://github.com/<owner>/<repo>.git` using `gh auth git-credential`, so your SSH key and full `gh` login aren't used. Unset, bunker behaves as before. The token never reaches an agent: `docker()` doesn't pass it, and `noSandbox()` strips `GH_TOKEN`, `GITHUB_TOKEN` and `BUNKER_GH_TOKEN` from the agent's environment.
 
-Create the token at GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token. Restrict it to the one repository, set a short expiry, and grant repository permissions: **Contents: Read and write**, **Pull requests: Read and write**, **Issues: Read** (Metadata: Read is added automatically). Nothing else.
+Create the token at GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token. Restrict it to the one repository, set a short expiry, and grant repository permissions: **Contents: Read and write**, **Pull requests: Read and write**, **Issues: Read** (Read and write if agents may file `discovered` issues) (Metadata: Read is added automatically). Nothing else.
+
+## Work queue
+
+Labels: `bunker` = queued for bunker; `discovered` = filed by an agent, waiting for human triage (relabel to `bunker` to queue it).
+
+`bunker --queue [--verify "<cmd>" [--verify-on-host] [--merge]] [--limit <n>]`, run from the repo's main checkout, lists open issues labelled `bunker` (`gh issue list`), oldest first, and runs the `--issue` pipeline on each, one at a time. Without `--merge` it stops after the first PR opens (the next issue waits for you to merge). With `--merge` it moves on only after `merged` and stops at the first other outcome. `--limit` (default 5) caps issues per run. One line per issue: number, status, PR URL. Exits 0 only if every issue run ended in the success status.
+
+### Agent-filed issues
+
+Implementer and reviewer prompts tell the agent not to fix out-of-scope problems but to print `<issue title="...">one-paragraph body</issue>`. After the run bunker collects every such block from all agent output, dedupes by title and runs `gh issue create --label discovered` with the body plus `Found while working on #<N>.` They are never labelled `bunker`, so agents can't queue work. `IssueResult.filed` lists `{ number, title }` for each. `review()` takes an optional `reviewerInstruction` appended to the reviewer prompt; its defaults are unchanged. Creating issues needs **Issues: Read and write** on `BUNKER_GH_TOKEN`.
 
 ## Agent images: base + per-repo
 

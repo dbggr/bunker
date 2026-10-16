@@ -37,11 +37,27 @@ export interface IssueResult {
   /** Tail of the verify command's output, when it failed. */
   verifyOutput?: string;
   error?: string;
+  /** Issues filed (label `discovered`) from `<issue>` blocks the agents printed. */
+  filed: { number: number; title: string }[];
 }
 
 const CONVENTIONAL_PREFIX = /^\s*(feat|fix|chore|docs|refactor|test|perf|build|ci|style|revert)(\([^)]*\))?!?:\s*/i;
 const MAX_SLUG = 40;
 const VERIFY_TAIL = 2000;
+
+const ISSUE_CONVENTION =
+  "For problems you find outside this task's scope, do not fix them; instead print " +
+  '<issue title="short title">one-paragraph body</issue> for each one.';
+
+/** Every `<issue title="...">body</issue>` block in `text`, deduped by title (first wins). */
+export function parseIssueBlocks(text: string): { title: string; body: string }[] {
+  const seen = new Map<string, string>();
+  for (const m of text.matchAll(/<issue\s+title="([^"]*)"\s*>([\s\S]*?)<\/issue>/g)) {
+    const title = m[1]!.trim();
+    if (title && !seen.has(title)) seen.set(title, m[2]!.trim());
+  }
+  return [...seen].map(([title, body]) => ({ title, body }));
+}
 
 /** `fix/<N>-<slug>` for a bug-labelled issue, else `feature/<N>-<slug>`. */
 export function issueBranch(issue: Pick<IssueInfo, "number" | "title" | "labels">): { branch: string; slug: string } {
@@ -82,7 +98,8 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   const { branch, slug } = issueBranch(issue);
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const worktree = join(repo, ".worktrees", `${number}-${slug}`);
-  const fail = (status: IssueResult["status"], extra: Partial<IssueResult> = {}): IssueResult => ({ status, branch, worktree, ...extra });
+  const filed: IssueResult["filed"] = [];
+  const fail = (status: IssueResult["status"], extra: Partial<IssueResult> = {}): IssueResult => ({ status, branch, worktree, filed, ...extra });
 
   // Keep .worktrees out of the caller's `git status` without editing a tracked file.
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
@@ -108,8 +125,19 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
 
   const prompt =
     `Implement GitHub issue #${number}: ${issue.title}\n\n${issue.body}\n\n` +
-    "Use Conventional Commits for your commit messages, write tests first, and make the repo's tests pass.";
-  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds });
+    "Use Conventional Commits for your commit messages, write tests first, and make the repo's tests pass.\n\n" +
+    ISSUE_CONVENTION;
+  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, reviewerInstruction: ISSUE_CONVENTION });
+
+  // Follow-ups the agents found: filed for human triage, never queued.
+  const blocks = parseIssueBlocks(result.rounds.flatMap((r) => [r.output, r.feedback]).join("\n"));
+  for (const b of blocks) {
+    const body = `${b.body}\n\nFound while working on #${number}.`;
+    const created = await $`gh issue create --label discovered --title ${b.title} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
+    if (created.exitCode !== 0) continue;
+    const n = Number(/\/issues\/(\d+)/.exec(created.stdout.toString())?.[1]);
+    filed.push({ number: Number.isInteger(n) ? n : 0, title: b.title });
+  }
   if (result.status !== "approved") return fail(result.status, { review: result, ...(result.error ? { error: result.error } : {}) });
 
   if (verify) {
@@ -160,4 +188,37 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   await $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet();
   await $`git -C ${repo} branch -D ${branch}`.nothrow().quiet();
   return fail("merged", opened);
+}
+
+export interface QueueOptions extends Omit<IssueOptions, "issue"> {
+  /** Max issues per run. Defaults to 5. */
+  limit?: number;
+}
+
+export interface QueueEntry extends IssueResult {
+  issue: number;
+  title: string;
+}
+
+/**
+ * Works open issues labelled `bunker`, oldest first, one at a time. Without `merge`
+ * stops after the first PR opens; with `merge` continues only after `merged`.
+ * Stops at the first other outcome, or after `limit` issues.
+ */
+export async function runQueue({ limit = 5, ...opts }: QueueOptions): Promise<QueueEntry[]> {
+  const cwd = opts.cwd ?? process.cwd();
+  const token = process.env.BUNKER_GH_TOKEN;
+  const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
+  const list = await $`gh issue list --label bunker --state open --json number,title,createdAt`.cwd(cwd).env(env).nothrow().quiet();
+  if (list.exitCode !== 0) throw new Error(`gh issue list failed:\n${list.stderr}`);
+  const queue = (JSON.parse(list.stdout.toString()) as { number: number; title: string; createdAt: string }[])
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.number - b.number)
+    .slice(0, limit);
+  const done: QueueEntry[] = [];
+  for (const q of queue) {
+    const result = await runIssue({ ...opts, cwd, issue: q.number });
+    done.push({ ...result, issue: q.number, title: q.title });
+    if (!opts.merge || result.status !== "merged") break;
+  }
+  return done;
 }

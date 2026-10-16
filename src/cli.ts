@@ -2,7 +2,7 @@
 import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
 import { claudeCode, docker, noSandbox, review, run, runAll } from "./index.ts";
-import { runIssue } from "./issue.ts";
+import { runIssue, runQueue } from "./issue.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -19,12 +19,30 @@ const { values, positionals } = parseArgs({
     verify: { type: "string" },
     "verify-on-host": { type: "boolean", default: false },
     merge: { type: "boolean", default: false },
+    queue: { type: "boolean", default: false },
+    limit: { type: "string" },
   },
 });
 
 const prompt = positionals.join(" ");
 const tasks = values.task ?? [];
-if (values.issue !== undefined) {
+if (values.queue) {
+  if (prompt || tasks.length || values.review || values.issue !== undefined) {
+    console.error("bunker: --queue can't be combined with a prompt, --task, --review or --issue");
+    process.exit(2);
+  }
+  if (values.merge && values.verify === undefined) {
+    console.error("bunker: --merge requires --verify");
+    process.exit(2);
+  }
+  if (values["verify-on-host"] && values.verify === undefined) {
+    console.error("bunker: --verify-on-host requires --verify");
+    process.exit(2);
+  }
+} else if (values.limit !== undefined) {
+  console.error("bunker: --limit only applies to --queue");
+  process.exit(2);
+} else if (values.issue !== undefined) {
   if (prompt || tasks.length || values.review) {
     console.error("bunker: --issue can't be combined with a prompt, --task or --review");
     process.exit(2);
@@ -37,15 +55,17 @@ if (values.issue !== undefined) {
     console.error("bunker: --verify-on-host requires --verify");
     process.exit(2);
   }
-} else if (values.verify !== undefined || values.merge || values["verify-on-host"]) {
-  console.error("bunker: --verify, --verify-on-host and --merge only apply to --issue");
+}
+if (values.issue === undefined && !values.queue && (values.verify !== undefined || values.merge || values["verify-on-host"])) {
+  console.error("bunker: --verify, --verify-on-host and --merge only apply to --issue or --queue");
   process.exit(2);
 }
-if (values.issue === undefined && !prompt === !tasks.length) {
+if (values.issue === undefined && !values.queue && !prompt === !tasks.length) {
   console.error(
     'usage: bunker "<prompt>" [--model <id>] [--image <name>] [--no-sandbox] [--max-iterations <n>]\n' +
       '       bunker --review "<prompt>" [--max-rounds <n>] [--reviewer-model <id>]   (implement → review → fix)\n' +
       '       bunker --issue <n> [--verify "<cmd>" [--verify-on-host] [--merge]] [--max-rounds <n>] [--reviewer-model <id>]   (issue → reviewed PR)\n' +
+      '       bunker --queue [--verify "<cmd>" [--verify-on-host] [--merge]] [--limit <n>]   (work the `bunker` label queue)\n' +
       '       bunker --task "<prompt>" --task "<prompt>" ...   (parallel, one worktree each)',
   );
   process.exit(2);
@@ -67,6 +87,12 @@ if (values.review && !prompt) {
   process.exit(2);
 }
 
+const limit = values.limit === undefined ? 5 : Number(values.limit);
+if (!Number.isInteger(limit) || limit < 1) {
+  console.error("bunker: --limit must be a positive integer");
+  process.exit(2);
+}
+
 await loadBunkerEnv(process.cwd());
 if (!values["no-sandbox"] && !hasAuth()) {
   // On the host claude can use your login; in a container it only has what we pass in.
@@ -77,7 +103,24 @@ if (!values["no-sandbox"] && !hasAuth()) {
 const agent = claudeCode({ model: values.model });
 const sandbox = values["no-sandbox"] ? noSandbox() : docker({ image: values.image });
 
-if (values.issue !== undefined) {
+if (values.queue) {
+  const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"] }) : agent;
+  let results;
+  try {
+    results = await runQueue({ agent, reviewer, sandbox, maxRounds, limit, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge });
+  } catch (e) {
+    console.error(`bunker: ${e instanceof Error ? e.message : e}`);
+    process.exit(2);
+  }
+  console.log();
+  if (!results.length) console.log("bunker: queue is empty");
+  for (const r of results) {
+    console.log(`#${r.issue} [${r.status}] ${r.prUrl ?? "-"}`);
+    if (r.error) console.log(`  ${r.error.split("\n")[0]}`);
+    for (const f of r.filed) console.log(`  filed #${f.number}: ${f.title}`);
+  }
+  if (results.some((r) => r.status !== (values.merge ? "merged" : "pr-opened"))) process.exit(1);
+} else if (values.issue !== undefined) {
   const issue = Number(values.issue);
   if (!Number.isInteger(issue) || issue < 1) {
     console.error("bunker: --issue must be a positive integer");
