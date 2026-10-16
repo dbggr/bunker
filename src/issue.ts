@@ -175,7 +175,6 @@ function commentsSection(comments: IssueInfo["comments"]): string {
  * The caller's checkout and branch are never touched.
  */
 export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, setup, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent }: IssueOptions): Promise<IssueResult> {
-  if (merge && !verify) throw new Error("merge requires verify");
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -231,6 +230,16 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   if (fetch.exitCode !== 0) return fail("failed", { error: `could not fetch origin/${defaultBranch}:\n${fetch.stderr}` });
 
   const baseSha = (await $`git -C ${repo} rev-parse FETCH_HEAD`.text()).trim();
+  // Default verify: the base branch's .bunker/verify, read now so the agent can't weaken it in its worktree.
+  let verifySource = "--verify";
+  if (!verify) {
+    const file = await $`git -C ${repo} show FETCH_HEAD:.bunker/verify`.nothrow().quiet();
+    if (file.exitCode === 0 && file.stdout.toString().trim()) {
+      verify = file.stdout.toString().trim();
+      verifySource = ".bunker/verify";
+    }
+  }
+  if (merge && !verify) return fail("failed", { error: "merge requires --verify or a .bunker/verify file" });
   const add = await $`git -C ${repo} worktree add -q -b ${branch} ${worktree} FETCH_HEAD`.nothrow().quiet();
   if (add.exitCode !== 0) return fail("failed", { error: `could not create worktree:\n${add.stderr}` });
 
@@ -293,7 +302,7 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   const push = await $`git ${gitCfg} -C ${worktree} push -q ${token ? [] : ['-u']} ${remote} ${branch}`.env(env).nothrow().quiet();
   if (push.exitCode !== 0) return fail("failed", { review: result, error: `git push failed:\n${push.stderr}` });
 
-  const body = [`Closes #${number}`, reviewLines(result), ...(verify ? [`Verify: \`${verify}\` passed`] : [])].join("\n\n");
+  const body = [`Closes #${number}`, reviewLines(result), ...(verify ? [`Verify: \`${verify}\` passed (${verifySource})`] : [])].join("\n\n");
   const pr = await $`gh pr create --head ${branch} --title ${issue.title} --body ${body}`.cwd(worktree).env(env).nothrow().quiet();
   if (pr.exitCode !== 0) return fail("failed", { review: result, error: `gh pr create failed:\n${pr.stderr}` });
   const prUrl = pr.stdout.toString().trim().split("\n").at(-1);
