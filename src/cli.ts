@@ -257,7 +257,10 @@ const onEvent = publisher ? (e: BunkerEvent) => (progress.onEvent(e), publisher.
 clearProgress = progress.clear;
 // Keep the caller's checkout current (lags otherwise: .bunker/verify lookup, docs); --watch pulls on every pass itself.
 const pull = !values["no-pull"] && !watchOpts && (values.audit || values.queue || values.issue !== undefined);
-if (pull) console.log((await safePull(process.cwd())).message);
+if (pull) {
+  const r = await safePull(process.cwd());
+  if (!r.pulled) console.log(r.message);
+}
 const agent = claudeCode({ model: values.model, json: true });
 const sandbox = values["no-sandbox"] ? noSandbox() : docker({ image: values.image });
 

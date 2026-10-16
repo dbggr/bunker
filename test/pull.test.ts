@@ -101,13 +101,53 @@ describe("cli", () => {
     expect(p.stdout.toString()).toMatch(/^\d+\.\d+\.\d+ \(\w+\)/);
   });
 
-  test("--no-pull leaves the checkout untouched", async () => {
+  // `--issue 0` fails validation right after the pull step, so nothing else (agent, gh, docker) runs.
+  const runIssue0 = (repo: string, ...flags: string[]) =>
+    Bun.spawnSync(["bun", CLI, "--issue", "0", ...flags], { cwd: repo, env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "sk-test-token-0123456789" } });
+  const CONTINUED = "--issue must be a positive integer";
+
+  test("pulls by default, not with --no-pull", async () => {
     const f = await fixture();
     await f.advance();
     const before = await f.head();
-    // --issue 0 fails validation after the pull step would have run
-    const p = Bun.spawnSync(["bun", CLI, "--audit", "--no-pull", "--no-sandbox"], { cwd: f.repo, env: { ...process.env, PATH: "/nonexistent:" + process.env.PATH, CLAUDE_CODE_OAUTH_TOKEN: "sk-test-token-0123456789" } });
-    void p;
+    const skipped = runIssue0(f.repo, "--no-pull");
+    expect(skipped.stderr.toString()).toContain(CONTINUED);
+    expect(await f.head()).toBe(before);
+    const pulled = runIssue0(f.repo);
+    expect(pulled.stderr.toString()).toContain(CONTINUED);
+    expect(await f.head()).not.toBe(before);
+    expect(pulled.stdout.toString()).not.toContain("not pulling");
+  });
+
+  test("dirty tree: warns on stdout and the run continues", async () => {
+    const f = await fixture();
+    await f.advance();
+    await Bun.write(join(f.repo, "a.txt"), "changed\n");
+    const before = await f.head();
+    const p = runIssue0(f.repo);
+    expect(p.stdout.toString()).toMatch(/bunker: not pulling — .*uncommitted/);
+    expect(p.stderr.toString()).toContain(CONTINUED);
+    expect(await f.head()).toBe(before);
+  });
+
+  test("other branch: warns and the run continues", async () => {
+    const f = await fixture();
+    await $`git -C ${f.repo} checkout -q -b feature`;
+    await f.advance();
+    const p = runIssue0(f.repo);
+    expect(p.stdout.toString()).toMatch(/bunker: not pulling — .*feature/);
+    expect(p.stderr.toString()).toContain(CONTINUED);
+  });
+
+  test("diverged: warns and the run continues", async () => {
+    const f = await fixture();
+    await Bun.write(join(f.repo, "local.txt"), "l\n");
+    await $`git -C ${f.repo} add . && git -C ${f.repo} commit -q -m local`;
+    await f.advance();
+    const before = await f.head();
+    const p = runIssue0(f.repo);
+    expect(p.stdout.toString()).toMatch(/bunker: not pulling — /);
+    expect(p.stderr.toString()).toContain(CONTINUED);
     expect(await f.head()).toBe(before);
   });
 
