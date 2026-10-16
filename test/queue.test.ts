@@ -61,6 +61,7 @@ async function setup(issues: [number, string, string][], mergeMode: "ff" | "none
 if [ "$1 $2" = "issue list" ]; then
   echo "$*" >> "${root}/list.log"
   if [ -f "${root}/list-empty-once" ]; then rm "${root}/list-empty-once"; echo '[]'; exit 0; fi
+  if [ -f "${root}/list-partial-once" ]; then cat "${root}/list-partial-once"; rm "${root}/list-partial-once"; exit 0; fi
   cat "${root}/list.json"; exit 0
 fi
 if [ "$1 $2" = "issue view" ]; then cat "${root}/issue-$3.json"; exit 0; fi
@@ -177,6 +178,16 @@ describe("runQueue()", () => {
     const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), listRetryMs: 10 });
     expect(rs.map((r) => r.issue)).toEqual([1]);
     const log = (await Bun.file(join(repo, "..", "list.log")).text()).trim().split("\n");
+    expect(log).toHaveLength(2);
+  });
+
+  test("re-lists once even when the first list is partial, merging both", async () => {
+    const { repo } = await setup(issues);
+    const root = join(repo, "..");
+    await Bun.write(join(root, "list-partial-once"), JSON.stringify([{ number: 2, title: issues[1]![1], createdAt: issues[1]![2] }]));
+    const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), listRetryMs: 10 });
+    expect(rs.map((r) => r.issue)).toEqual([1]);
+    const log = (await Bun.file(join(root, "list.log")).text()).trim().split("\n");
     expect(log).toHaveLength(2);
   });
 });
