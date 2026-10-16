@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { $ } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -115,6 +115,12 @@ describe.skipIf(!dockerUp)("run() with docker", () => {
     await $`printf 'FROM alpine:3\nRUN apk add --no-cache git\n' | docker build -q -t ${GIT_IMAGE} -`.quiet();
   }, 120_000);
 
+  afterAll(async () => {
+    const repos = (await $`docker image ls ${"--format={{.Repository}}"}`.text()).split("\n");
+    const tags = repos.filter((r) => r.startsWith("bunker-repo-bunker-test-"));
+    if (tags.length) await $`docker image rm -f ${tags}`.quiet();
+  });
+
   test("runs the agent in a container and merges its commits back", async () => {
     const repo = await makeRepo();
     const agent = fakeAgent(
@@ -125,6 +131,27 @@ describe.skipIf(!dockerUp)("run() with docker", () => {
 
     expect(result.commits.map((c) => c.subject)).toEqual(["agent: from container"]);
     expect((await Bun.file(join(repo, "os.txt")).text()).trim()).toMatch(/^\d+\.\d+/);
+  }, 60_000);
+
+  test("builds and uses the repo's .bunker/Dockerfile", async () => {
+    const repo = await makeRepo();
+    await Bun.write(join(repo, ".bunker/Dockerfile"), `FROM ${GIT_IMAGE}\nRUN echo extended > /extended\n`);
+    await $`git -C ${repo} add .bunker && git -C ${repo} commit -qm bunker-image`;
+    const agent = fakeAgent("cp /extended e.txt && git add e.txt && git commit -qm extended");
+
+    await run({ cwd: repo, prompt: "x", agent, sandbox: docker({ baseImage: GIT_IMAGE }) });
+
+    expect(await Bun.file(join(repo, "e.txt")).text()).toBe("extended\n");
+  }, 120_000);
+
+  test("an explicit image overrides the repo's .bunker/Dockerfile", async () => {
+    const repo = await makeRepo();
+    await Bun.write(join(repo, ".bunker/Dockerfile"), "FROM bunker-no-such-image\n");
+    await $`git -C ${repo} add .bunker && git -C ${repo} commit -qm broken-image`;
+
+    const result = await run({ cwd: repo, prompt: "x", agent: commitsA, sandbox: docker({ image: GIT_IMAGE }) });
+
+    expect(result.commits.map((c) => c.subject)).toEqual(["agent: add a"]);
   }, 60_000);
 
   test("files are owned by the host user, not root", async () => {
