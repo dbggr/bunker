@@ -1,0 +1,19 @@
+{
+  "name": "@dbggr/bunker",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "bin": {
+    "bunker": "src/cli.ts"
+  }
+}
