@@ -12,7 +12,7 @@ export interface IssueInfo {
   state: string;
   labels: { name: string }[];
   /** Oldest first, as `gh issue view --json comments` returns them. */
-  comments?: { author?: { login?: string } | null; body: string }[];
+  comments?: { author?: { login?: string } | null; authorAssociation?: string; body: string }[];
 }
 
 export interface IssueOptions {
@@ -129,10 +129,14 @@ async function waitForMerge(
   }
 }
 
-/** The issue's comments as prompt text (oldest first, with author), or "" if there are none. */
+/** Comment authors trusted to instruct the agent; anyone else can comment on a public repo. */
+const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+
+/** Comments by the repo's owner, members and collaborators as prompt text (oldest first, with author), or "" if there are none. */
 function commentsSection(comments: IssueInfo["comments"]): string {
-  if (!comments?.length) return "";
-  const items = comments.map((c) => `@${c.author?.login ?? "unknown"}:\n${c.body}`);
+  const trusted = comments?.filter((c) => TRUSTED_ASSOCIATIONS.has(c.authorAssociation ?? "")) ?? [];
+  if (!trusted.length) return "";
+  const items = trusted.map((c) => `@${c.author?.login ?? "unknown"}:\n${c.body}`);
   return `Comments on the issue (oldest first; later comments may add or refine requirements):\n\n${items.join("\n\n---\n\n")}\n\n`;
 }
 
