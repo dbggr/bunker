@@ -1,4 +1,5 @@
 import { $ } from "bun";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { redact } from "./redact.ts";
@@ -42,6 +43,8 @@ export interface IssueResult {
   /** Tail of the verify command's output, when it failed. */
   verifyOutput?: string;
   error?: string;
+  /** Per-run log: `<repo>/.bunker/runs/<N>-<timestamp>.log` (redacted). */
+  logPath?: string;
   /** Issues filed (label `discovered`) from `<issue>` blocks the agents printed. */
   filed: { number: number; title: string }[];
 }
@@ -153,17 +156,26 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const worktree = join(repo, ".worktrees", `${number}-${slug}`);
   const filed: IssueResult["filed"] = [];
-  const fail = (status: IssueResult["status"], extra: Partial<IssueResult> = {}): IssueResult => ({
-    status, branch, worktree, filed, ...extra,
+  const logPath = join(repo, ".bunker", "runs", `${number}-${new Date().toISOString().replace(/[:.]/g, "-")}.log`);
+  mkdirSync(join(repo, ".bunker", "runs"), { recursive: true });
+  const log = (title: string, text = "") => appendFileSync(logPath, redact(`== ${title} ==\n${text.trimEnd()}\n\n`));
+  log(`issue #${number}: ${issue.title}`, `branch ${branch}`);
+  const fail = (status: IssueResult["status"], extra: Partial<IssueResult> = {}): IssueResult => {
+    log(`final status: ${status}`, [extra.error, extra.prUrl].filter(Boolean).join("\n"));
+    return finish(status, extra);
+  };
+  const finish = (status: IssueResult["status"], extra: Partial<IssueResult>): IssueResult => ({
+    status, branch, worktree, filed, logPath, ...extra,
     ...(extra.error !== undefined ? { error: redact(extra.error) } : {}),
     ...(extra.verifyOutput !== undefined ? { verifyOutput: redact(extra.verifyOutput) } : {}),
   });
 
-  // Keep .worktrees out of the caller's `git status` without editing a tracked file.
+  // Keep .worktrees and run logs out of the caller's `git status` without editing a tracked file.
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
   const exclude = join(gitCommonDir, "info", "exclude");
   const excluded = (await Bun.file(exclude).exists()) ? await Bun.file(exclude).text() : "";
-  if (!excluded.split("\n").includes("/.worktrees/")) await appendFile(exclude, `${excluded && !excluded.endsWith("\n") ? "\n" : ""}/.worktrees/\n`);
+  const missing = ["/.worktrees/", "/.bunker/runs/"].filter((p) => !excluded.split("\n").includes(p));
+  if (missing.length) await appendFile(exclude, `${excluded && !excluded.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
 
   // Branch from origin's default branch, not the caller's possibly-stale HEAD.
   let remote = "origin";
@@ -187,12 +199,21 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
     ISSUE_CONVENTION;
   const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, reviewerInstruction: ISSUE_CONVENTION });
 
+  for (const [i, r] of result.rounds.entries()) {
+    log(`round ${i + 1}: agent output`, r.output);
+    log(`round ${i + 1}: reviewer output (${r.approved ? "approved" : "changes requested"})`, r.feedback);
+  }
+  if (result.error) log("review error", result.error);
+
   // Follow-ups the agents found: filed for human triage, never queued.
   const blocks = parseIssueBlocks(result.rounds.flatMap((r) => [r.output, r.feedback]).join("\n"));
   for (const b of blocks) {
     const body = `${b.body}\n\nFound while working on #${number}.`;
     const created = await $`gh issue create --label discovered --title ${b.title} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
-    if (created.exitCode !== 0) continue;
+    if (created.exitCode !== 0) {
+      log(`gh issue create failed: ${b.title}`, created.stderr.toString());
+      continue;
+    }
     const n = Number(/\/issues\/(\d+)/.exec(created.stdout.toString())?.[1]);
     filed.push({ number: Number.isInteger(n) ? n : 0, title: b.title });
   }
@@ -211,6 +232,7 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
       code = out.code;
       text = out.stdout;
     }
+    log(`verify (exit ${code})`, text);
     if (code !== 0) {
       const output = text.slice(-VERIFY_TAIL);
       return fail("verify-failed", { review: result, verifyOutput: output });

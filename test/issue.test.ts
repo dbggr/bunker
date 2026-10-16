@@ -166,6 +166,29 @@ describe("runIssue()", () => {
     expect((await $`git -C ${repo} status --porcelain`.text()).trim()).toBe("");
   });
 
+  test("writes a per-run log under .bunker/runs, excluded from git status", async () => {
+    const { repo } = await setup(issue());
+    process.env.BUNKER_GH_TOKEN = "secret-token-value";
+    let r;
+    try {
+      r = await runIssue({
+        cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(),
+        verify: "echo verify-says-hi secret-token-value; exit 3",
+      });
+    } finally {
+      delete process.env.BUNKER_GH_TOKEN;
+    }
+    expect(r.status).toBe("verify-failed");
+    expect(dirname(r.logPath!)).toBe(join(repo, ".bunker", "runs"));
+    expect(r.logPath).toMatch(/\/7-[^/]+\.log$/);
+    const log = await Bun.file(r.logPath!).text();
+    expect(log).toContain("verify-says-hi");
+    expect(log).toContain("verify-failed");
+    expect(log).toContain(APPROVE);
+    expect(log).not.toContain("secret-token-value");
+    expect((await $`git -C ${repo} status --porcelain`.text()).trim()).toBe("");
+  });
+
   for (const token of [false, true]) {
     test(`pr create gets --head <branch> (BUNKER_GH_TOKEN ${token ? "set" : "unset"})`, async () => {
       const { repo, prLog } = await setup(issue());

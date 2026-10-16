@@ -134,6 +134,7 @@ if (values.queue) {
   for (const r of results) {
     console.log(`#${r.issue} [${r.status}] ${r.prUrl ?? "-"}`);
     if (r.error) console.log(`  ${r.error.trimEnd().replaceAll("\n", "\n  ")}`);
+    if (r.logPath) console.log(`  log: ${r.logPath}`);
     for (const f of r.filed) console.log(`  filed #${f.number}: ${f.title}`);
   }
   if (results.some((r) => r.status !== (values.merge ? "merged" : "pr-opened"))) process.exit(1);
@@ -159,6 +160,7 @@ if (values.queue) {
   if (result.error) console.log(`  ${result.error.trimEnd().replaceAll("\n", "\n  ")}`);
   if (result.verifyOutput) console.log(`  verify output:\n${result.verifyOutput}`);
   if (result.prUrl) console.log(result.prUrl);
+  if (result.logPath) console.log(`bunker: log ${result.logPath}`);
   if (result.status !== (values.merge ? "merged" : "pr-opened")) process.exit(1);
 } else if (values.review) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"] }) : agent;
