@@ -163,7 +163,7 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   if (push.exitCode !== 0) return fail("failed", { review: result, error: `git push failed:\n${push.stderr}` });
 
   const body = [`Closes #${number}`, reviewLines(result), ...(verify ? [`Verify: \`${verify}\` passed`] : [])].join("\n\n");
-  const pr = await $`gh pr create --title ${issue.title} --body ${body}`.cwd(worktree).env(env).nothrow().quiet();
+  const pr = await $`gh pr create --head ${branch} --title ${issue.title} --body ${body}`.cwd(worktree).env(env).nothrow().quiet();
   if (pr.exitCode !== 0) return fail("failed", { review: result, error: `gh pr create failed:\n${pr.stderr}` });
   const prUrl = pr.stdout.toString().trim().split("\n").at(-1);
   const opened = { review: result, ...(prUrl ? { prUrl } : {}) };

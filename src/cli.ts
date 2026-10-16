@@ -116,7 +116,7 @@ if (values.queue) {
   if (!results.length) console.log("bunker: queue is empty");
   for (const r of results) {
     console.log(`#${r.issue} [${r.status}] ${r.prUrl ?? "-"}`);
-    if (r.error) console.log(`  ${r.error.split("\n")[0]}`);
+    if (r.error) console.log(`  ${r.error.trimEnd().replaceAll("\n", "\n  ")}`);
     for (const f of r.filed) console.log(`  filed #${f.number}: ${f.title}`);
   }
   if (results.some((r) => r.status !== (values.merge ? "merged" : "pr-opened"))) process.exit(1);
@@ -139,7 +139,7 @@ if (values.queue) {
     console.log(`bunker: round ${i + 1}: ${r.commits.length} commit(s), ${r.approved ? "approved" : "changes requested"}`);
   }
   console.log(`bunker: [${result.status}] ${result.branch} (worktree ${result.worktree})`);
-  if (result.error) console.log(`  ${result.error.split("\n")[0]}`);
+  if (result.error) console.log(`  ${result.error.trimEnd().replaceAll("\n", "\n  ")}`);
   if (result.verifyOutput) console.log(`  verify output:\n${result.verifyOutput}`);
   if (result.prUrl) console.log(result.prUrl);
   if (result.status !== (values.merge ? "merged" : "pr-opened")) process.exit(1);
@@ -152,7 +152,7 @@ if (values.queue) {
   }
   console.log(`bunker: [${result.status}] ${result.branch} (${result.commits.length} commit(s))`);
   for (const c of result.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
-  if (result.error) console.log(`  ${result.error.split("\n")[0]}`);
+  if (result.error) console.log(`  ${result.error.trimEnd().replaceAll("\n", "\n  ")}`);
   if (result.status !== "approved") process.exit(1);
 } else if (prompt) {
   const result = await run({ prompt, agent, sandbox, maxIterations });
@@ -164,7 +164,7 @@ if (values.queue) {
   for (const r of results) {
     console.log(`bunker: [${r.status}] ${r.branch} (${r.commits.length} commit(s)) ${r.prompt}`);
     for (const c of r.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
-    if (r.error) console.log(`  ${r.error.split("\n")[0]}`);
+    if (r.error) console.log(`  ${r.error.trimEnd().replaceAll("\n", "\n  ")}`);
   }
   if (results.some((r) => r.status !== "merged")) process.exit(1);
 }
