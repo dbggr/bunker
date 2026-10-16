@@ -111,6 +111,20 @@ exit 1
   return { repo, createLog };
 }
 
+describe("code in filed blocks", () => {
+  test("a real block keeps inline code and fenced snippets in title and body", () => {
+    const body = "fix `src/issue.ts` now\n```ts\nconst a = 1;\n```\nend";
+    expect(parseIssueBlocks(`<issue title="Use \`--flag\`">${body}</issue>`)).toEqual([{ title: "Use `--flag`", body }]);
+    expect(parseBlockedBy('<blocked-by title="T">see `x.ts`</blocked-by>')).toEqual({ title: "T", body: "see `x.ts`" });
+  });
+  test("a real block between inline code spans keeps those spans", () => {
+    expect(parseIssueBlocks('use `a` <issue title="Real">has `b` inside</issue> and `c`')).toEqual([{ title: "Real", body: "has `b` inside" }]);
+  });
+  test("a block quoted in backticks is still ignored", () => {
+    expect(parseIssueBlocks('say `<issue title="Q">x</issue>` ok')).toEqual([]);
+  });
+});
+
 describe("parseIssueBlocks()", () => {
   test("extracts blocks, dedupes by title", () => {
     const out = 'x <issue title="A">body a</issue>\n<issue title="B">line1\nline2</issue> <issue title="A">again</issue>';
