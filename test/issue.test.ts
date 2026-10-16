@@ -111,6 +111,11 @@ if [ "$1 $2" = "pr merge" ]; then
 fi
 if [ "$1 $2" = "pr view" ]; then
   echo "$*" >> "${root}/view.log"
+  case "$*" in *statusCheckRollup*)
+    echo "$*" >> "${root}/checks-view.log"
+    if [ -f "${root}/checks.json" ]; then cat "${root}/checks.json"; else echo '{"statusCheckRollup":[]}'; fi
+    exit 0;;
+  esac
   echo '{"state":"${mergeMode === "ff-exit1" ? "MERGED" : "OPEN"}"}'
   exit 0
 fi
@@ -316,6 +321,64 @@ describe("runIssue() --merge", () => {
     const r = await run(repo);
     expect(r.error).toContain("gh pr merge failed");
     expect(r.error).toContain("PR state: OPEN");
+  });
+
+  describe("CI checks", () => {
+    const withChecks = async (rollup: object[]) => {
+      const env = await setup(issue(), "ff");
+      await Bun.write(join(dirname(env.repo), "checks.json"), JSON.stringify({ statusCheckRollup: rollup }));
+      return env;
+    };
+    const pass = { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" };
+
+    test("passing checks → merged", async () => {
+      const { repo } = await withChecks([pass, { __typename: "StatusContext", context: "x", state: "SUCCESS" }]);
+      expect((await run(repo, { ciPollMs: 10 })).status).toBe("merged");
+    });
+
+    test("pending then passing → waits, then merged", async () => {
+      const { repo } = await withChecks([{ ...pass, status: "IN_PROGRESS", conclusion: "" }]);
+      const root = dirname(repo);
+      setTimeout(() => Bun.write(join(root, "checks.json"), JSON.stringify({ statusCheckRollup: [pass] })), 150);
+      expect((await run(repo, { ciPollMs: 20 })).status).toBe("merged");
+    });
+
+    test("failing check → ci-failed, PR left open, worktree kept, never merges", async () => {
+      const { repo, mergeLog } = await withChecks([pass, { ...pass, name: "lint", conclusion: "FAILURE" }]);
+      const r = await run(repo, { ciPollMs: 10 });
+      expect(r.status).toBe("ci-failed");
+      expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
+      expect(r.error).toContain("lint");
+      expect(await Bun.file(mergeLog).exists()).toBe(false);
+      expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
+      expect(await branches(repo)).toContain(r.branch);
+    });
+
+    test("failed status context → ci-failed", async () => {
+      const { repo } = await withChecks([{ __typename: "StatusContext", context: "ci/x", state: "ERROR" }]);
+      expect((await run(repo, { ciPollMs: 10 })).status).toBe("ci-failed");
+    });
+
+    test("still pending at the timeout → ci-timeout, worktree kept", async () => {
+      const { repo, mergeLog } = await withChecks([{ ...pass, status: "QUEUED", conclusion: "" }]);
+      const r = await run(repo, { ciPollMs: 10, ciTimeoutMin: 0.002 });
+      expect(r.status).toBe("ci-timeout");
+      expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
+      expect(await Bun.file(mergeLog).exists()).toBe(false);
+      expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
+    });
+
+    test("no checks configured → merges straight away", async () => {
+      const { repo } = await withChecks([]);
+      expect((await run(repo, { ciPollMs: 10 })).status).toBe("merged");
+    });
+
+    test("without --merge checks are not polled", async () => {
+      const { repo } = await withChecks([{ ...pass, conclusion: "FAILURE" }]);
+      const r = await run(repo, { merge: false });
+      expect(r.status).toBe("pr-opened");
+      expect(await Bun.file(join(dirname(repo), "checks-view.log")).exists()).toBe(false);
+    });
   });
 
   test("no merge flag → never calls pr merge", async () => {
