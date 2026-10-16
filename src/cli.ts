@@ -9,6 +9,7 @@ import { createProgress, type BunkerEvent, hyperlink } from "./events.ts";
 import { startUi } from "./ui.ts";
 import { HELP } from "./help.ts";
 import { options } from "./options.ts";
+import { output } from "./output.ts";
 import pkg from "../package.json" with { type: "json" };
 
 // Anything printed first wipes the in-place progress line, if one is showing.
@@ -151,11 +152,14 @@ if (values["ci-timeout"] !== undefined) {
   }
 }
 
+if (values.verbose) output.verbose = true;
+// The in-place progress line must not outlive the run.
+process.on("exit", () => clearProgress());
 const startedAt = Date.now();
 process.on("exit", () => console.log(`bunker: elapsed ${formatDuration(Date.now() - startedAt)} (wall-clock)`));
 
 const tty = !!process.stdout.isTTY;
-const progress = createProgress({ write: (s) => process.stdout.write(redact(s)), tty, columns: process.stdout.columns ?? 100 });
+const progress = createProgress({ write: (s) => output.write(redact(s)), tty, columns: process.stdout.columns ?? 100 });
 let ui;
 if (values.ui) {
   try {
@@ -223,7 +227,6 @@ if (values.audit) {
   }
   console.log(`bunker: [${result.status}] ${result.branch} (worktree ${result.worktree})`);
   if (result.error) console.log(`  ${result.error.trimEnd().replaceAll("\n", "\n  ")}`);
-  if (result.verifyOutput) console.log(`  verify output:\n${result.verifyOutput}`);
   if (result.prUrl) console.log(result.prUrl);
   if (result.review?.usage) console.log(`bunker: cost ${formatUsage(result.review.usage)}`);
   if (result.logPath) console.log(`bunker: log ${tty ? hyperlink(result.logPath) : result.logPath}`);

@@ -183,6 +183,10 @@ The `.bunker/Dockerfile` is read from the agent's worktree, so it must be commit
 - **Secrets**: auth env vars are passed as `-e NAME` (name only), so values never appear in argv.
 - **Failure**: worktree is always removed; on agent failure or merge conflict the `bunker/<id>` branch is kept for inspection.
 
+## Output
+
+The terminal is quiet by default: stage lines, one live progress line on a TTY, and a summary per step (`bunker: #83 · verify passed (151 pass, 8 skip, 29.9s)`). Setup, verify and agent output go only to the run log (redacted). When setup or verify fails, the last 40 lines and the log path are shown. Pass `--verbose` (or set `BUNKER_VERBOSE=1`) to stream everything live, for debugging.
+
 ## Test
 
 ```bash

@@ -3,6 +3,7 @@ import { $ } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { output } from "../src/output.ts";
 import { noSandbox, runAll, type Agent } from "../src/index.ts";
 
 const dirs: string[] = [];
@@ -121,21 +122,14 @@ describe("runAll() live output", () => {
   test("prefixes each line with the task index; results stay unprefixed", async () => {
     const repo = await makeRepo();
     const written: string[] = [];
-    const orig = process.stdout.write;
-    process.stdout.write = ((chunk: string | Uint8Array) => {
-      written.push(String(chunk));
-      return true;
-    }) as typeof process.stdout.write;
-    try {
-      await runAll({
-        cwd: repo,
-        agent: shellAgent,
-        sandbox: noSandbox(),
-        tasks: [{ prompt: "echo one; echo two" }, { prompt: "printf tail" }],
-      });
-    } finally {
-      process.stdout.write = orig;
-    }
+    output.verbose = true;
+    output.write = (chunk) => written.push(chunk);
+    await runAll({
+      cwd: repo,
+      agent: shellAgent,
+      sandbox: noSandbox(),
+      tasks: [{ prompt: "echo one; echo two" }, { prompt: "printf tail" }],
+    });
     const lines = written.join("").split("\n").filter(Boolean).sort();
     expect(lines).toEqual(["[0] one", "[0] two", "[1] tail"]);
   });

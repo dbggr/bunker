@@ -4,6 +4,8 @@ import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { redact } from "./redact.ts";
 import { emit } from "./events.ts";
+import { tailLines, testCounts } from "./output.ts";
+import { hyperlink } from "./events.ts";
 import { emitStage, review, runSetup, type Agent, type OnEvent, type ReviewResult, type Sandbox } from "./index.ts";
 
 export interface IssueInfo {
@@ -204,6 +206,11 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
     else if (status !== "pr-opened") emitStage({ onEvent }, "failed", status);
     return finish(status, extra);
   };
+  // The terminal gets the tail of a failed step's output and where the full log is; the rest lives in the log.
+  const failNote = (title: string, text: string) => {
+    const where = process.stdout.isTTY ? hyperlink(logPath) : logPath;
+    emit(onEvent, { type: "note", text: `${title}\n${redact(tailLines(text))}\nlog: ${where}` });
+  };
   const finish = (status: IssueResult["status"], extra: Partial<IssueResult>): IssueResult => ({
     status, branch, worktree, filed, logPath, ...extra,
     ...(extra.error !== undefined ? { error: redact(extra.error) } : {}),
@@ -278,10 +285,14 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
     const prep = await runSetup(sandbox, { worktree, gitCommonDir }, setup);
     if (prep) {
       log(`setup (exit ${prep.code})`, prep.stdout);
-      if (prep.code !== 0) return fail("failed", { review: result, error: `setup failed (exit ${prep.code}):\n${prep.stdout.slice(-VERIFY_TAIL)}` });
+      if (prep.code !== 0) {
+        failNote(`setup failed (exit ${prep.code})`, prep.stdout);
+        return fail("failed", { review: result, error: `setup failed (exit ${prep.code}):\n${tailLines(prep.stdout).slice(-VERIFY_TAIL)}` });
+      }
     }
     let code: number;
     let text: string;
+    const verifyStart = Date.now();
     if (verifyOnHost) {
       const out = await $`sh -c ${verify}`.cwd(worktree).env(env).nothrow().quiet();
       code = out.exitCode;
@@ -294,9 +305,11 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
     }
     log(`verify (exit ${code})`, text);
     if (code !== 0) {
-      const output = text.slice(-VERIFY_TAIL);
-      return fail("verify-failed", { review: result, verifyOutput: output });
+      failNote(`verify failed (exit ${code})`, text);
+      return fail("verify-failed", { review: result, verifyOutput: tailLines(text).slice(-VERIFY_TAIL) });
     }
+    const counts = testCounts(text);
+    emit(onEvent, { type: "note", text: `verify passed (${[counts, `${((Date.now() - verifyStart) / 1000).toFixed(1)}s`].filter(Boolean).join(", ")})` });
   }
 
   emitStage({ onEvent }, "PR");
