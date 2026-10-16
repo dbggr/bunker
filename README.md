@@ -24,6 +24,8 @@ bun run build && install -m 755 dist/bunker ~/.local/bin/bunker
 
 Then run `bunker "…"` from any repo. The base image's Dockerfile is embedded in the binary.
 
+Run `bunker --help` for every mode, flag, default and the auth setup (`bunker --version` prints the version).
+
 Or as a library:
 
 ```ts
@@ -74,7 +76,7 @@ The engine never adds the signal to your prompt, so tell the agent about it your
 
 Agent stdout is still streamed live; `Sandbox.exec` also returns it as `{ code, stdout }` so the signal can be detected.
 
-CLI: `--max-iterations <n>` applies to a single prompt and to every `--task`.
+CLI: `--max-iterations <n>` applies to a single prompt and to every `--task` (see `bunker --help`).
 
 ## Review pipeline
 
@@ -103,7 +105,7 @@ Agents get a mode: `Agent.command(prompt, "write" | "review")`. `claudeCode()` o
 
 Nothing is thrown for the four statuses. A non-zero exit from either agent is `failed`. The branch is kept for `rejected`, `failed` and `conflict` and deleted after a clean merge; the worktree is always removed. `feedback` is the reviewer's stdout.
 
-CLI: `--review "<prompt>" [--max-rounds <n>] [--reviewer-model <id>]` (single prompt only) prints one line per round and the final status, and exits 1 unless approved.
+CLI: `--review "<prompt>"` (single prompt only; flags in `bunker --help`) prints one line per round and the final status, and exits 1 unless approved.
 
 ## Issue to PR
 
@@ -123,7 +125,7 @@ Run from the target repo's main checkout. `runIssue({ issue, agent, sandbox, ver
 
 Result: `{ status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed", branch, worktree, prUrl?, review?, verifyOutput?, error? }`. Nothing is thrown for those statuses, and the worktree and branch are always kept.
 
-CLI: `--issue <N> [--setup "<cmd>"] [--verify "<cmd>"] [--model] [--reviewer-model] [--max-rounds] [--no-sandbox] [--image]`. Exits 0 only when a PR was opened; can't be combined with a prompt, `--task` or `--review`.
+CLI: `--issue <N>` (flags in `bunker --help`). Exits 0 only when a PR was opened; can't be combined with a prompt, `--task` or `--review`.
 
 ## Merging
 
