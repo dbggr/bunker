@@ -164,8 +164,8 @@ if (!values.audit && values.issue === undefined && !values.queue && !prompt === 
     'usage: bunker "<prompt>" [--model <id>] [--image <name>] [--no-sandbox] [--max-iterations <n>]\n' +
       '       bunker --review "<prompt>" [--max-rounds <n>] [--reviewer-model <id>]   (implement → review → fix)\n' +
       '       bunker --issue <n> [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--max-rounds <n>] [--reviewer-model <id>]   (issue → reviewed PR)\n' +
-      '       bunker --queue [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--limit <n>]   (work the `bunker` label queue)\n' +
-      '       bunker --watch [--interval <min>] [--for <duration>] [--max-cost <usd>] [--verify "<cmd>"]   (work the queue unattended, auto-merging)\n' +
+      '       bunker --queue [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--limit <n>] [--parallel <n>]   (work the `bunker` label queue)\n' +
+      '       bunker --watch [--interval <min>] [--for <duration>] [--max-cost <usd>] [--parallel <n>] [--verify "<cmd>"]   (work the queue unattended, auto-merging)\n' +
       '       bunker --audit [--max-issues <n>] [--focus "<text>"] [--setup "<cmd>"]   (file improvement ideas as `discovered` issues)\n' +
       '       bunker --task "<prompt>" --task "<prompt>" ...   (parallel, one worktree each)\n' +
       "run bunker --help for all options",
@@ -207,6 +207,23 @@ const limit = values.limit === undefined ? 5 : Number(values.limit);
 if (!Number.isInteger(limit) || limit < 1) {
   console.error("bunker: --limit must be a positive integer");
   process.exit(2);
+}
+
+let parallel = 1;
+if (values.parallel !== undefined) {
+  parallel = Number(values.parallel);
+  if (!Number.isInteger(parallel) || parallel < 1) {
+    console.error("bunker: --parallel must be a positive integer");
+    process.exit(2);
+  }
+  if (!values.queue) {
+    console.error("bunker: --parallel only applies to --queue and --watch");
+    process.exit(2);
+  }
+  if (parallel > 1 && !values.merge) {
+    console.error("bunker: --parallel above 1 needs --merge (--watch always merges)");
+    process.exit(2);
+  }
 }
 
 await loadBunkerEnv(process.cwd());
@@ -290,7 +307,7 @@ if (values.audit) {
     });
   }
   try {
-    await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, signal: ctl.signal, pull: !values["no-pull"], ...watchOpts });
+    await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, parallel, signal: ctl.signal, pull: !values["no-pull"], ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -300,7 +317,7 @@ if (values.audit) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
   let results;
   try {
-    results = await runQueue({ onEvent, agent, reviewer, sandbox, maxRounds, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
+    results = await runQueue({ onEvent, agent, reviewer, sandbox, maxRounds, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin, parallel });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();

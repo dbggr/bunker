@@ -19,6 +19,7 @@ export const options = {
   "ci-timeout": { type: "string" },
   queue: { type: "boolean", default: false },
   limit: { type: "string" },
+  parallel: { type: "string" },
   watch: { type: "boolean", default: false },
   interval: { type: "string" },
   for: { type: "string" },

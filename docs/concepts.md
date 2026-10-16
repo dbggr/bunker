@@ -41,3 +41,7 @@ Every issue run writes a redacted log to `<repo>/.bunker/runs/<N>-<timestamp>.lo
 ## Live view
 
 `bunker ui` serves a page on `127.0.0.1:4321` with one tab per repo: stage, round, time, cost, PR link and feed per issue. Runs publish to it automatically when it is reachable; `--ui` starts one for the run if none is up. See [security.md](security.md).
+
+## Parallel queue
+
+`--queue` is sequential by default: two PRs that are each green against an old main can break main together. `--parallel <n>` (with `--merge`, or under `--watch`) works up to n issues at once, each in its own worktree and container, but keeps merges safe: they happen one at a time in queue order, and before a PR is created bunker merges the latest `origin/<default>` into its branch and re-runs verify in the sandbox. A conflict, or verify failing on the updated branch, gets one fresh attempt of that issue from the new main (a new branch, `-2` suffix); a second failure is handled like any other (`bunker-failed` under `--watch`). `--limit` and the `--watch` spend cap count all concurrent work, though cost is only recorded when an issue finishes, so a cap can be overshot by the issues already in flight. The trade-off is more concurrent spend and rework when issues touch the same files; 2 is recommended. Also consider requiring branches to be up to date in the repo's branch protection as a backstop.
