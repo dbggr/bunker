@@ -5,6 +5,7 @@ import { claudeCode, docker, noSandbox, review, run, runAll } from "./index.ts";
 import { runAudit } from "./audit.ts";
 import { runIssue, runQueue } from "./issue.ts";
 import { redact } from "./redact.ts";
+import pkg from "../package.json" with { type: "json" };
 
 // Everything the CLI prints goes through redact().
 for (const method of ["log", "error", "warn"] as const) {
@@ -34,8 +35,14 @@ const { values, positionals } = parseArgs({
     audit: { type: "boolean", default: false },
     "max-issues": { type: "string" },
     focus: { type: "string" },
+    version: { type: "boolean", default: false },
   },
 });
+
+if (values.version) {
+  console.log(pkg.version);
+  process.exit(0);
+}
 
 const prompt = positionals.join(" ");
 const tasks = values.task ?? [];

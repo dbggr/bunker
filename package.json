@@ -2,6 +2,7 @@
   "name": "@dbggr/bunker",
   "module": "src/index.ts",
   "type": "module",
+  "version": "0.1.0",
   "private": true,
   "devDependencies": {
     "@types/bun": "latest"
@@ -11,6 +12,7 @@
   },
   "scripts": {
     "test": "bun test",
+    "build": "bun build --compile src/cli.ts --outfile dist/bunker",
     "typecheck": "tsc --noEmit"
   },
   "bin": {

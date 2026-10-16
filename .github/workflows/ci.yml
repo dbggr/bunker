@@ -15,3 +15,10 @@ jobs:
       - run: bun run typecheck
       # Docker is available on ubuntu runners, so the docker sandbox tests run here too.
       - run: bun test
+      - run: bun run build
+      - name: smoke-test the binary
+        run: |
+          dist/bunker --version
+          set +e
+          dist/bunker
+          [ $? -eq 2 ]
