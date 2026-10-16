@@ -26,10 +26,14 @@ export interface IssueOptions {
   verifyOnHost?: boolean;
   /** After the PR opens, squash-merge it and check the merge landed. Requires `verify`. */
   merge?: boolean;
+  /** With `merge`: minutes to wait for the PR's checks before giving up. Defaults to 20. */
+  ciTimeoutMin?: number;
+  /** Milliseconds between check polls. Defaults to 10000. */
+  ciPollMs?: number;
 }
 
 export interface IssueResult {
-  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "merged" | "merge-failed" | "merge-unverified";
+  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified";
   branch: string;
   worktree: string;
   prUrl?: string;
@@ -77,13 +81,62 @@ function reviewLines(result: ReviewResult): string {
     .join("\n");
 }
 
+interface Rollup {
+  name?: string;
+  context?: string;
+  status?: string;
+  conclusion?: string;
+  state?: string;
+}
+
+/** "pending" if any check is unfinished, "failed" if any finished badly, "passed" otherwise (including no checks). */
+function judgeChecks(rollup: Rollup[]): { outcome: "passed" | "failed" | "pending"; failed: string[] } {
+  const failed: string[] = [];
+  let pending = false;
+  for (const c of rollup) {
+    const label = c.name ?? c.context ?? "unnamed check";
+    if (c.state !== undefined) {
+      if (c.state === "PENDING" || c.state === "EXPECTED") pending = true;
+      else if (c.state !== "SUCCESS") failed.push(`${label} (${c.state})`);
+    } else if (c.status !== "COMPLETED") pending = true;
+    else if (!["SUCCESS", "NEUTRAL", "SKIPPED"].includes(c.conclusion ?? "")) failed.push(`${label} (${c.conclusion || "unknown"})`);
+  }
+  return { outcome: failed.length ? "failed" : pending ? "pending" : "passed", failed };
+}
+
+/** Polls the PR's status check rollup until every check finished, one failed, or the timeout passed. */
+async function waitForChecks(
+  prUrl: string,
+  cwd: string,
+  env: Record<string, string>,
+  timeoutMs: number,
+  pollMs: number,
+): Promise<{ outcome: "passed" | "failed" | "timeout"; detail?: string }> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const view = await $`gh pr view ${prUrl} --json statusCheckRollup`.cwd(cwd).env(env).nothrow().quiet();
+    // A failed or unparseable response is "pending", never "no checks".
+    let rollup: Rollup[] | undefined;
+    if (view.exitCode === 0) {
+      try {
+        rollup = JSON.parse(view.stdout.toString()).statusCheckRollup ?? [];
+      } catch {}
+    }
+    const { outcome, failed } = rollup ? judgeChecks(rollup) : { outcome: "pending" as const, failed: [] };
+    if (outcome === "passed") return { outcome };
+    if (outcome === "failed") return { outcome, detail: `CI checks failed: ${failed.join(", ")}` };
+    if (Date.now() >= deadline) return { outcome: "timeout", detail: `CI checks still pending after ${timeoutMs / 60_000} min` };
+    await Bun.sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
+  }
+}
+
 /**
  * Issue → worktree on its own branch → review() → optional sandboxed verify →
  * push + PR. Throws only when the issue can't be used (gh failure, closed);
  * every later outcome is a status, and the worktree and branch are always kept.
  * The caller's checkout and branch are never touched.
  */
-export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, verify, verifyOnHost, merge }: IssueOptions): Promise<IssueResult> {
+export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, verify, verifyOnHost, merge, ciTimeoutMin = 20, ciPollMs = 10_000 }: IssueOptions): Promise<IssueResult> {
   if (merge && !verify) throw new Error("merge requires verify");
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -168,6 +221,11 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   const prUrl = pr.stdout.toString().trim().split("\n").at(-1);
   const opened = { review: result, ...(prUrl ? { prUrl } : {}) };
   if (!merge || !prUrl) return fail("pr-opened", opened);
+
+  const ci = await waitForChecks(prUrl, worktree, env, ciTimeoutMin * 60_000, ciPollMs);
+  if (ci.outcome !== "passed") {
+    return fail(ci.outcome === "failed" ? "ci-failed" : "ci-timeout", { ...opened, error: ci.detail });
+  }
 
   // No --delete-branch: gh would also switch/delete the local branch, which fails in a worktree.
   const merged = await $`gh pr merge ${prUrl} --squash`.cwd(worktree).env(env).nothrow().quiet();

@@ -118,11 +118,13 @@ CLI: `--issue <N> [--verify "<cmd>"] [--model] [--reviewer-model] [--max-rounds]
 
 ## Merging
 
-`bunker --issue 12 --verify "bun test" --merge` finishes the job: once the PR is open it runs `gh pr merge <url> --squash --delete-branch`, then checks the squash really landed — it fetches, lists the files the branch changed, and requires each to be identical on `origin/<default>` and the branch tip. `--merge` requires `--verify` (exit 2 otherwise) and exits 0 only for `merged`.
+`bunker --issue 12 --verify "bun test" --merge` finishes the job: once the PR is open it runs `gh pr merge <url> --squash --delete-branch`, after waiting for the PR's CI checks (polled via `gh pr view --json statusCheckRollup`; a repo with no checks merges straight away), then checks the squash really landed — it fetches, lists the files the branch changed, and requires each to be identical on `origin/<default>` and the branch tip. `--merge` requires `--verify` (exit 2 otherwise) and exits 0 only for `merged`.
 
 | status | meaning |
 | --- | --- |
 | `merged` | merged and verified; worktree and local branch removed |
+| `ci-failed` | a PR check failed; PR left open, worktree kept |
+| `ci-timeout` | checks still pending after `--ci-timeout <min>` (default 20); PR left open, worktree kept |
 | `merge-failed` | `gh pr merge` failed; PR left open, worktree kept |
 | `merge-unverified` | merged, but some files differ on the default branch (listed in the error); worktree and branch kept |
 
