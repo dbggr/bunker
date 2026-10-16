@@ -4,6 +4,8 @@ node_modules
 # output
 out
 dist
+# compiled CLI if built to the repo root (`bun build --compile ... --outfile=bunker`)
+/bunker
 *.tgz
 
 # code coverage
