@@ -4,7 +4,7 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, type Agent } from "../src/index.ts";
-import { parseIssueBlocks, runIssue, runQueue } from "../src/issue.ts";
+import { parseBlockedBy, parseIssueBlocks, runIssue, runQueue } from "../src/issue.ts";
 
 const dirs: string[] = [];
 const origPath = process.env.PATH;
@@ -58,6 +58,10 @@ async function setup(issues: [number, string, string][], mergeMode: "ff" | "none
   await Bun.write(
     join(bin, "gh"),
     `#!/bin/sh
+if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker-blocked"; then
+  if [ -f "${root}/blocked-list.json" ]; then cat "${root}/blocked-list.json"; else echo '[]'; fi
+  exit 0
+fi
 if [ "$1 $2" = "issue list" ]; then
   echo "$*" >> "${root}/list.log"
   if [ -f "${root}/list-fail-always" ]; then echo "HTTP 502" >&2; exit 1; fi
@@ -77,6 +81,16 @@ if [ "$1 $2" = "issue create" ]; then
   for a in "$@"; do printf '%s\\n' "$a"; done >> "${createLog}"
   echo "---" >> "${createLog}"
   echo "https://github.com/o/r/issues/100"
+  exit 0
+fi
+if [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue comment" ] || [ "$1 $2" = "label create" ]; then
+  echo "$*" >> "${root}/edits.log"
+  if [ "$1 $2" = "issue edit" ]; then
+    case "$*" in
+      *"--add-label bunker-blocked"*) sed -i 's/"name":"bunker"/"name":"bunker-blocked"/' "${root}/issue-$3.json" ;;
+      *"--add-label bunker"*) sed -i 's/"name":"bunker-blocked"/"name":"bunker"/' "${root}/issue-$3.json" ;;
+    esac
+  fi
   exit 0
 fi
 if [ "$1 $2" = "pr create" ]; then echo "https://github.com/o/r/pull/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"; exit 0; fi
@@ -232,5 +246,110 @@ describe("runQueue()", () => {
     expect(rs.map((r) => r.issue)).toEqual([1]);
     const log = (await Bun.file(join(root, "list.log")).text()).trim().split("\n");
     expect(log).toHaveLength(2);
+  });
+});
+
+describe("parseBlockedBy()", () => {
+  const b = (t: string) => `<blocked-by title="${t}">why</blocked-by>`;
+  test("extracts the first real block", () => {
+    expect(parseBlockedBy(`x ${b("Need A")} ${b("Need B")}`)).toEqual({ title: "Need A", body: "why" });
+    expect(parseBlockedBy("no block")).toBeUndefined();
+  });
+  test("ignores code spans, fences and placeholders", () => {
+    expect(parseBlockedBy(`see \`${b("Quoted")}\``)).toBeUndefined();
+    expect(parseBlockedBy("```\n" + b("Fenced") + "\n```")).toBeUndefined();
+    expect(parseBlockedBy(`${b("…")} ${b("short title")}`)).toBeUndefined();
+  });
+});
+
+describe("blocked issues", () => {
+  const issues: [number, string, string][] = [
+    [1, "First", "2026-01-01T00:00:00Z"],
+    [2, "Second", "2026-02-01T00:00:00Z"],
+    [3, "Third", "2026-03-01T00:00:00Z"],
+  ];
+  const BLOCK = '<blocked-by title="Need the thing">Cannot proceed. Accept: thing exists.</blocked-by>';
+  // Issue 1's implementer says it is blocked; everyone else is fine.
+  function blockingAgent(): Agent {
+    const ok = fakeAgent();
+    const blocked = fakeAgent(APPROVE, BLOCK);
+    return {
+      command(prompt, mode = "write") {
+        return (/issue #1[:.]/.test(prompt) ? blocked : ok).command(prompt, mode);
+      },
+    };
+  }
+
+  test("files the blocker as discovered, relabels, comments, no push or PR, cleans up", async () => {
+    const { repo, createLog } = await setup(issues);
+    const r = await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: blockingAgent() });
+    expect(r.status).toBe("blocked");
+    expect(r.blockedBy).toEqual({ number: 100, title: "Need the thing" });
+    const log = await Bun.file(createLog).text();
+    expect(log).toContain("--label\ndiscovered");
+    expect(log).toMatch(/Blocks #1\.\n---/);
+    const edits = await Bun.file(join(repo, "..", "edits.log")).text();
+    expect(edits).toContain("label create bunker-blocked");
+    expect(edits).toContain("issue edit 1 --remove-label bunker --add-label bunker-blocked");
+    expect(edits).toContain("issue comment 1 --body Blocked by #100: Need the thing");
+    expect((await $`git -C ${repo} ls-remote --heads origin`.text()).includes("feature/1")).toBe(false);
+    expect((await $`git -C ${repo} branch --list ${"feature/1-*"}`.text()).trim()).toBe("");
+    expect(await Bun.file(r.worktree).exists()).toBe(false);
+  });
+
+  test("a quoted <blocked-by> is not a block", async () => {
+    const { repo } = await setup(issues);
+    const r = await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: fakeAgent(APPROVE, `\`${BLOCK}\``) });
+    expect(r.status).toBe("pr-opened");
+  });
+
+  test("blocked doesn't use a --limit slot and doesn't stop the queue", async () => {
+    const { repo } = await setup(issues, "ff");
+    const rs = await runQueue({ cwd: repo, agent: blockingAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10, listRetryMs: 10 });
+    expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "blocked"], [2, "merged"]]);
+  });
+
+  test("skips an issue whose body or trusted comment says Blocked by / Depends on an open issue", async () => {
+    const { repo } = await setup(issues, "ff");
+    const root = join(repo, "..");
+    const mk = (n: number, extra: object) => Bun.write(join(root, `issue-${n}.json`), JSON.stringify({ number: n, title: "t", body: "Do it.", state: "OPEN", labels: [{ name: "bunker" }], ...extra }));
+    await mk(1, { body: "blocked BY #50 please" });
+    await mk(2, { comments: [{ authorAssociation: "OWNER", body: "Depends on #50" }] });
+    await mk(50, {});
+    const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10, listRetryMs: 10 });
+    expect(rs.map((r) => [r.issue, r.status])).toEqual([[3, "merged"]]);
+  });
+
+  test("a reference to a closed issue doesn't block", async () => {
+    const { repo } = await setup(issues, "ff");
+    const root = join(repo, "..");
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "t", body: "Depends on #50", state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "t", body: "", state: "CLOSED", stateReason: "COMPLETED", labels: [] }));
+    const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10, listRetryMs: 10 });
+    expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"]]);
+  });
+
+  test("auto-resume: a bunker-blocked issue whose blockers closed goes back to bunker and is worked", async () => {
+    const { repo } = await setup(issues, "ff");
+    const root = join(repo, "..");
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Do it.", state: "OPEN", labels: [{ name: "bunker-blocked" }], comments: [{ authorAssociation: "OWNER", body: "Blocked by #50: thing" }] }));
+    await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "thing", body: "", state: "CLOSED", stateReason: "COMPLETED", labels: [] }));
+    await Bun.write(join(root, "blocked-list.json"), JSON.stringify([{ number: 1, title: "First", createdAt: "2026-01-01T00:00:00Z" }]));
+    const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10, listRetryMs: 10 });
+    expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"]]);
+    const edits = await Bun.file(join(root, "edits.log")).text();
+    expect(edits).toContain("issue edit 1 --remove-label bunker-blocked --add-label bunker");
+    expect(edits).toContain("issue comment 1 --body Unblocked: #50 is closed");
+  });
+
+  test("auto-resume leaves an issue blocked while any blocker is open", async () => {
+    const { repo } = await setup(issues);
+    const root = join(repo, "..");
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Depends on #50, blocked by #51", state: "OPEN", labels: [{ name: "bunker-blocked" }] }));
+    await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, state: "CLOSED", stateReason: "COMPLETED", labels: [] }));
+    await Bun.write(join(root, "issue-51.json"), JSON.stringify({ number: 51, state: "OPEN", labels: [] }));
+    await Bun.write(join(root, "blocked-list.json"), JSON.stringify([{ number: 1, title: "First", createdAt: "2026-01-01T00:00:00Z" }]));
+    await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), listRetryMs: 10, limit: 1 });
+    expect(await Bun.file(join(root, "edits.log")).exists()).toBe(false);
   });
 });

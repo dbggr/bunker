@@ -46,7 +46,9 @@ export interface IssueOptions {
 }
 
 export interface IssueResult {
-  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified";
+  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked";
+  /** With status `blocked`: the `discovered` issue filed for what this one waits on. */
+  blockedBy?: { number: number; title: string };
   branch: string;
   worktree: string;
   prUrl?: string;
@@ -66,19 +68,42 @@ const VERIFY_TAIL = 2000;
 
 const ISSUE_CONVENTION =
   "For problems you find outside this task's scope, do not fix them; instead print " +
-  '<issue title="short title">one-paragraph body</issue> for each one.';
+  '<issue title="short title">one-paragraph body</issue> for each one. ' +
+  "If this issue cannot be done until something else is done, do not work around it: instead print " +
+  '<blocked-by title="short title">why it blocks, plus acceptance criteria</blocked-by> and stop.';
+
+/** Text without fenced code or inline code spans: blocks an agent merely quotes are not findings. */
+function prose(text: string): string {
+  return text
+    .replace(/^ *(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^ *\1[`~]*[ \t]*$|(?![\s\S]))/gm, "")
+    .replace(/(?<!`)(`+)(?!`)[^\n]*?(?<!`)\1(?!`)/g, "");
+}
+
+const isPlaceholder = (title: string) => !/[\p{L}\p{N}]/u.test(title) || title.toLowerCase() === "short title";
+
+/** The first real `<blocked-by title="...">body</blocked-by>` block in `text`, if any. */
+export function parseBlockedBy(text: string): { title: string; body: string } | undefined {
+  for (const m of prose(text).matchAll(/<blocked-by\s+title="([^"]*)"\s*>([\s\S]*?)<\/blocked-by>/g)) {
+    const title = m[1]!.trim();
+    if (!isPlaceholder(title)) return { title, body: m[2]!.trim() };
+  }
+  return undefined;
+}
+
+/** Issue numbers named by `Blocked by #N` / `Depends on #N` (case-insensitive) in the body and trusted comments. */
+export function blockerRefs(issue: Pick<IssueInfo, "body" | "comments">): number[] {
+  const texts = [issue.body ?? "", ...(issue.comments ?? []).filter((c) => TRUSTED_ASSOCIATIONS.has(c.authorAssociation ?? "")).map((c) => c.body)];
+  const refs = new Set<number>();
+  for (const t of texts) for (const m of t.matchAll(/\b(?:blocked\s+by|depends\s+on)\s+#(\d+)/gi)) refs.add(Number(m[1]));
+  return [...refs];
+}
 
 /** Every `<issue title="...">body</issue>` block in `text`, deduped by title (first wins). */
 export function parseIssueBlocks(text: string): { title: string; body: string }[] {
   const seen = new Map<string, string>();
-  // Blocks an agent merely quotes (fenced code or inline code spans) are not findings.
-  const prose = text
-    .replace(/^ *(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^ *\1[`~]*[ \t]*$|(?![\s\S]))/gm, "")
-    .replace(/(?<!`)(`+)(?!`)[^\n]*?(?<!`)\1(?!`)/g, "");
-  for (const m of prose.matchAll(/<issue\s+title="([^"]*)"\s*>([\s\S]*?)<\/issue>/g)) {
+  for (const m of prose(text).matchAll(/<issue\s+title="([^"]*)"\s*>([\s\S]*?)<\/issue>/g)) {
     const title = m[1]!.trim();
-    const placeholder = !/[\p{L}\p{N}]/u.test(title) || title.toLowerCase() === "short title";
-    if (!placeholder && !seen.has(title)) seen.set(title, m[2]!.trim());
+    if (!isPlaceholder(title) && !seen.has(title)) seen.set(title, m[2]!.trim());
   }
   return [...seen].map(([title, body]) => ({ title, body }));
 }
@@ -103,6 +128,63 @@ function reviewLines(result: ReviewResult): string {
   return result.rounds
     .map((r, i) => `Round ${i + 1}: ${r.commits.length} commit(s), ${r.approved ? "approved" : "changes requested"}`)
     .join("\n");
+}
+
+const BLOCKED_LABEL = "bunker-blocked";
+
+type Env = Record<string, string>;
+
+/** Swaps `bunker` for `bunker-blocked` on the issue and says what it waits on. */
+async function markBlocked(issue: number, blocker: { number: number; title: string }, cwd: string, env: Env): Promise<void> {
+  await $`gh label create ${BLOCKED_LABEL} --description ${"waiting on another issue; bunker relabels it `bunker` once that is closed"} --color FBCA04`.cwd(cwd).env(env).nothrow().quiet();
+  const edit = await $`gh issue edit ${issue} --remove-label bunker --add-label ${BLOCKED_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
+  if (edit.exitCode !== 0) console.warn(`bunker: could not relabel #${issue}: ${edit.stderr.toString().trim()}`);
+  await $`gh issue comment ${issue} --body ${`Blocked by #${blocker.number}: ${blocker.title}`}`.cwd(cwd).env(env).nothrow().quiet();
+}
+
+/** Whether #n is closed as completed; undefined if gh can't say. */
+async function isDone(n: number, cwd: string, env: Env): Promise<boolean | undefined> {
+  const v = await $`gh issue view ${n} --json state,stateReason`.cwd(cwd).env(env).nothrow().quiet();
+  if (v.exitCode !== 0) return undefined;
+  try {
+    const j = JSON.parse(v.stdout.toString()) as { state: string; stateReason?: string };
+    return j.state.toUpperCase() === "CLOSED" && j.stateReason?.toUpperCase() !== "NOT_PLANNED";
+  } catch {
+    return undefined;
+  }
+}
+
+/** Open issues labelled `bunker-blocked` whose blockers are all closed go back to `bunker`. Best effort. */
+export async function resumeBlocked(cwd: string, env: Env): Promise<number[]> {
+  const list = await $`gh issue list --label ${BLOCKED_LABEL} --state open --limit 1000 --json number`.cwd(cwd).env(env).nothrow().quiet();
+  if (list.exitCode !== 0) return [];
+  let numbers: number[];
+  try {
+    numbers = (JSON.parse(list.stdout.toString()) as { number: number }[]).map((i) => i.number);
+  } catch {
+    return [];
+  }
+  const resumed: number[] = [];
+  for (const n of numbers) {
+    const v = await $`gh issue view ${n} --json body,comments,state,labels`.cwd(cwd).env(env).nothrow().quiet();
+    if (v.exitCode !== 0) continue;
+    let info: IssueInfo;
+    try {
+      info = JSON.parse(v.stdout.toString());
+    } catch {
+      continue;
+    }
+    if (info.state.toUpperCase() !== "OPEN" || !info.labels.some((l) => l.name === BLOCKED_LABEL)) continue;
+    const refs = blockerRefs(info);
+    if (!refs.length) continue;
+    const states = await Promise.all(refs.map((r) => isDone(r, cwd, env)));
+    if (!states.every((s) => s === true)) continue;
+    const edit = await $`gh issue edit ${n} --remove-label ${BLOCKED_LABEL} --add-label bunker`.cwd(cwd).env(env).nothrow().quiet();
+    if (edit.exitCode !== 0) continue;
+    await $`gh issue comment ${n} --body ${`Unblocked: ${refs.map((r) => `#${r}`).join(", ")} ${refs.length === 1 ? "is" : "are"} closed`}`.cwd(cwd).env(env).nothrow().quiet();
+    resumed.push(n);
+  }
+  return resumed;
 }
 
 /** Polls the PR (Pull requests: Read only) until GitHub merged or closed it, or the timeout passed. */
@@ -277,6 +359,22 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
     const n = Number(/\/issues\/(\d+)/.exec(created.stdout.toString())?.[1]);
     filed.push({ number: Number.isInteger(n) ? n : 0, title: b.title });
   }
+  // The issue can't be done yet: file what it waits on, park it, and leave nothing behind.
+  const blocker = parseBlockedBy(result.rounds.flatMap((r) => [r.output, r.feedback]).join("\n"));
+  if (blocker) {
+    const created = await $`gh issue create --label discovered --title ${blocker.title} --body ${`${blocker.body}\n\nBlocks #${number}.`}`.cwd(cwd).env(env).nothrow().quiet();
+    const m = created.exitCode === 0 ? /\/issues\/(\d+)/.exec(created.stdout.toString()) : null;
+    if (!m) {
+      log(`gh issue create failed: ${blocker.title}`, created.stderr.toString());
+    } else {
+      const blockedBy = { number: Number(m[1]), title: blocker.title };
+      await markBlocked(number, blockedBy, cwd, env);
+      await $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet();
+      await $`git -C ${repo} branch -D ${branch}`.nothrow().quiet();
+      emit(onEvent, { type: "note", text: `blocked by #${blockedBy.number}: ${blockedBy.title}` });
+      return fail("blocked", { review: result, blockedBy });
+    }
+  }
   if (result.status !== "approved") return fail(result.status, { review: result, ...(result.error ? { error: result.error } : {}) });
 
   if (verify) {
@@ -402,6 +500,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       return [];
     }
   };
+  await resumeBlocked(cwd, env);
   // The list can lag with a partial result too, so always list twice and merge.
   const first = await listIssues();
   await Bun.sleep(listRetryMs);
@@ -409,16 +508,16 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
   const queue = [...merged.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.number - b.number);
   const done: QueueEntry[] = [];
   for (const q of queue) {
-    if (done.length >= limit || shouldStop?.()) break;
+    if (done.filter((d) => d.status !== "blocked").length >= limit || shouldStop?.()) break;
     if (skip?.(q.number)) continue;
     // The list lags label changes by seconds, so confirm the live state before working it.
-    const view = await $`gh issue view ${q.number} --json state,labels`.cwd(cwd).env(env).nothrow().quiet();
+    const view = await $`gh issue view ${q.number} --json state,labels,body,comments`.cwd(cwd).env(env).nothrow().quiet();
     if (view.exitCode !== 0) {
       // A transient API error on one candidate must not discard the results already collected.
       console.warn(`bunker: skipping #${q.number}, gh issue view failed:\n${view.stderr}`);
       continue;
     }
-    let live: { state: string; labels: { name: string }[] };
+    let live: Pick<IssueInfo, "state" | "labels" | "body" | "comments">;
     try {
       live = JSON.parse(view.stdout.toString());
     } catch {
@@ -426,6 +525,17 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       continue;
     }
     if (live.state !== "OPEN" || !live.labels.some((l) => l.name === "bunker")) continue;
+    let waiting: number | undefined;
+    for (const ref of blockerRefs(live)) {
+      if ((await isDone(ref, cwd, env)) === false) {
+        waiting = ref;
+        break;
+      }
+    }
+    if (waiting !== undefined) {
+      console.log(`bunker: #${q.number} waiting on #${waiting}`);
+      continue;
+    }
     let result: IssueResult;
     try {
       result = await runIssue({ ...opts, cwd, issue: q.number });
@@ -436,6 +546,8 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
     const entry = { ...result, issue: q.number, title: q.title };
     done.push(entry);
     await onResult?.(entry);
+    if (result.status === "merged") await resumeBlocked(cwd, env);
+    else if (result.status === "blocked") continue;
     if (!keepGoing && (!opts.merge || result.status !== "merged")) break;
   }
   return done;

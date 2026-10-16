@@ -175,7 +175,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
           if (e.status === "merged") {
             merged++;
             summary.merged++;
-          } else {
+          } else if (e.status !== "blocked") {
             summary.failed++;
             await markFailed(e);
           }

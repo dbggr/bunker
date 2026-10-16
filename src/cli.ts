@@ -302,7 +302,7 @@ if (values.audit) {
     if (r.review?.usage) console.log(`  cost ${formatUsage(r.review.usage)}`);
     for (const f of r.filed) console.log(`  filed #${f.number}: ${f.title}`);
   }
-  if (results.some((r) => r.status !== (values.merge ? "merged" : "pr-opened"))) process.exitCode = 1;
+  if (results.some((r) => r.status !== "blocked" && r.status !== (values.merge ? "merged" : "pr-opened"))) process.exitCode = 1;
 } else if (values.issue !== undefined) {
   const issue = Number(values.issue);
   if (!Number.isInteger(issue) || issue < 1) {
