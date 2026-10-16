@@ -3,7 +3,7 @@ import { $ } from "bun";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { noSandbox, type Agent } from "../src/index.ts";
+import { noSandbox, type Agent, type Sandbox } from "../src/index.ts";
 import { parseBlockedBy, parseIssueBlocks, runIssue, runQueue } from "../src/issue.ts";
 
 const dirs: string[] = [];
@@ -166,6 +166,21 @@ describe("runQueue()", () => {
     const log = await Bun.file(join(repo, "..", "list.log")).text();
     const m = log.match(/--limit (\d+)/);
     expect(Number(m?.[1])).toBeGreaterThanOrEqual(1000);
+  });
+
+  test("keepGoing: a throw after the agents ran still reports the usage they spent", async () => {
+    const { repo } = await setup(issues);
+    const agent: Agent = {
+      ...fakeAgent(),
+      parse: (stdout) => ({ text: stdout, usage: { costUsd: 2, durationMs: 1 } }),
+    };
+    const inner = noSandbox();
+    // The agents run fine; the sandboxed verify step blows up.
+    const sandbox: Sandbox = { exec: (cmd, ctx) => (cmd.join(" ").includes("(true)") ? Promise.reject(new Error("sandbox exploded")) : inner.exec(cmd, ctx)) };
+    const rs = await runQueue({ cwd: repo, agent, sandbox, verify: "true", keepGoing: true, limit: 1 });
+    expect(rs[0]!.status).toBe("failed");
+    expect(rs[0]!.error).toContain("sandbox exploded");
+    expect(rs[0]!.usage?.costUsd).toBeCloseTo(4);
   });
 
   test("without merge: oldest first, stops after the first PR", async () => {
