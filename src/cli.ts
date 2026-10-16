@@ -1,6 +1,4 @@
 #!/usr/bin/env bun
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
 import { AgentFailure, claudeCode, formatDuration, formatUsage, docker, noSandbox, review, run, runAll } from "./index.ts";
@@ -67,20 +65,12 @@ if (!Number.isInteger(maxIssues) || maxIssues < 1) {
   console.error("bunker: --max-issues must be a positive integer");
   process.exit(2);
 }
-const hasVerify = values.verify !== undefined || existsSync(join(process.cwd(), ".bunker", "verify"));
+// Whether --merge has a verify command is decided by runIssue, from origin's default branch.
 if (values.audit) {
   // checked above
 } else if (values.queue) {
   if (prompt || tasks.length || values.review || values.issue !== undefined) {
     console.error("bunker: --queue can't be combined with a prompt, --task, --review or --issue");
-    process.exit(2);
-  }
-  if (values.merge && !hasVerify) {
-    console.error("bunker: --merge requires --verify or a .bunker/verify file");
-    process.exit(2);
-  }
-  if (values["verify-on-host"] && !hasVerify) {
-    console.error("bunker: --verify-on-host requires --verify or a .bunker/verify file");
     process.exit(2);
   }
 } else if (values.limit !== undefined) {
@@ -89,14 +79,6 @@ if (values.audit) {
 } else if (values.issue !== undefined) {
   if (prompt || tasks.length || values.review) {
     console.error("bunker: --issue can't be combined with a prompt, --task or --review");
-    process.exit(2);
-  }
-  if (values.merge && !hasVerify) {
-    console.error("bunker: --merge requires --verify or a .bunker/verify file");
-    process.exit(2);
-  }
-  if (values["verify-on-host"] && !hasVerify) {
-    console.error("bunker: --verify-on-host requires --verify or a .bunker/verify file");
     process.exit(2);
   }
 }
