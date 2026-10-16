@@ -1,6 +1,7 @@
 import { $ } from "bun";
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
+import { redact } from "./redact.ts";
 import { review, type Agent, type ReviewResult, type Sandbox } from "./index.ts";
 
 export interface IssueInfo {
@@ -152,7 +153,11 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const worktree = join(repo, ".worktrees", `${number}-${slug}`);
   const filed: IssueResult["filed"] = [];
-  const fail = (status: IssueResult["status"], extra: Partial<IssueResult> = {}): IssueResult => ({ status, branch, worktree, filed, ...extra });
+  const fail = (status: IssueResult["status"], extra: Partial<IssueResult> = {}): IssueResult => ({
+    status, branch, worktree, filed, ...extra,
+    ...(extra.error !== undefined ? { error: redact(extra.error) } : {}),
+    ...(extra.verifyOutput !== undefined ? { verifyOutput: redact(extra.verifyOutput) } : {}),
+  });
 
   // Keep .worktrees out of the caller's `git status` without editing a tracked file.
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();

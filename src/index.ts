@@ -1,6 +1,7 @@
 import { $ } from "bun";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { redact } from "./redact.ts";
 
 export type AgentMode = "write" | "review";
 
@@ -70,16 +71,27 @@ export function claudeCode(opts: { model?: string; attribution?: boolean } = {})
   };
 }
 
-/** Waits for the process, echoing its stdout live to the terminal while capturing it. */
+/** Waits for the process, echoing its (redacted) stdout live to the terminal while capturing it. */
 async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">): Promise<{ code: number; stdout: string }> {
   const decoder = new TextDecoder();
   let stdout = "";
+  // Echo whole lines only, so a secret split across chunks is still caught.
+  let pending = "";
   for await (const chunk of proc.stdout) {
-    process.stdout.write(chunk);
-    stdout += decoder.decode(chunk, { stream: true });
+    const text = decoder.decode(chunk, { stream: true });
+    stdout += text;
+    pending += text;
+    const nl = pending.lastIndexOf("\n");
+    if (nl >= 0) {
+      process.stdout.write(redact(pending.slice(0, nl + 1)));
+      pending = pending.slice(nl + 1);
+    }
   }
-  stdout += decoder.decode();
-  return { code: await proc.exited, stdout };
+  const tail = decoder.decode();
+  stdout += tail;
+  pending += tail;
+  if (pending) process.stdout.write(redact(pending));
+  return { code: await proc.exited, stdout: redact(stdout) };
 }
 
 /** GitHub credentials bunker itself uses; an agent must never see them. */
@@ -256,7 +268,7 @@ async function mergeBack(cwd: string, branch: string, commits: Commit[]): Promis
     const merge = await $`git -C ${cwd} merge -q --no-edit ${branch}`.nothrow().quiet();
     if (merge.exitCode !== 0) {
       await $`git -C ${cwd} merge --abort`.nothrow().quiet();
-      return `merge conflict on ${branch}; branch kept:\n${merge.stdout}${merge.stderr}`;
+      return redact(`merge conflict on ${branch}; branch kept:\n${merge.stdout}${merge.stderr}`);
     }
   }
   await $`git -C ${cwd} branch -q -D ${branch}`;
@@ -315,7 +327,7 @@ export async function runAll({ tasks, cwd = process.cwd(), ...opts }: RunAllOpti
     const { prompt } = tasks[i]!;
     const { branch } = worktrees[i]!;
     if (outcome.status === "rejected") {
-      const error = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+      const error = redact(outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason));
       results.push({ prompt, status: "failed", branch, commits: [], iterations: [], error });
       continue;
     }
@@ -427,7 +439,7 @@ export async function review({
     }
   } catch (e) {
     status = "failed";
-    error = e instanceof Error ? e.message : String(e);
+    error = redact(e instanceof Error ? e.message : String(e));
   } finally {
     await $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet();
   }
