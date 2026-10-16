@@ -283,7 +283,7 @@ describe("runIssue()", () => {
     // the fence enclosing the body must be longer than any fence run inside it
     const m = p.match(/(~{3,})\n@alice:\n([\s\S]*?)\n\1\n/);
     expect(m).not.toBeNull();
-    expect(m![2]).toBe(`Title: feat: Add feature\n\n${body}`);
+    expect(m![2]).toBe(body);
     expect(m![1]!.length).toBeGreaterThan(3);
   });
 
