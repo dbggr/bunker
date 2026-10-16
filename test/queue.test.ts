@@ -99,6 +99,7 @@ describe("parseIssueBlocks()", () => {
     expect(parseIssueBlocks("~~~xml\n" + b("Tilde") + "\n~~~")).toEqual([]);
     expect(parseIssueBlocks(`${b("…")} ${b("...")} ${b("  ")} ${b("short title")} ${b("Short Title")}`)).toEqual([]);
     expect(parseIssueBlocks(`\`x\` then ${b("Real")}`)).toEqual([{ title: "Real", body: "body" }]);
+    expect(parseIssueBlocks(`a stray \` tick\n${b("Real")}\nanother \` tick`)).toEqual([{ title: "Real", body: "body" }]);
   });
 });
 
