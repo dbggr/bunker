@@ -88,6 +88,15 @@ describe("parseIssueBlocks()", () => {
       { title: "B", body: "line1\nline2" },
     ]);
   });
+
+  test("ignores quoted examples and placeholder titles, keeps real blocks", () => {
+    const b = (t: string) => `<issue title="${t}">body</issue>`;
+    expect(parseIssueBlocks(`see \`${b("Quoted")}\``)).toEqual([]);
+    expect(parseIssueBlocks("```\n" + b("Fenced") + "\n```")).toEqual([]);
+    expect(parseIssueBlocks("~~~xml\n" + b("Tilde") + "\n~~~")).toEqual([]);
+    expect(parseIssueBlocks(`${b("…")} ${b("...")} ${b("  ")} ${b("short title")} ${b("Short Title")}`)).toEqual([]);
+    expect(parseIssueBlocks(`\`x\` then ${b("Real")}`)).toEqual([{ title: "Real", body: "body" }]);
+  });
 });
 
 describe("filing discovered issues", () => {
