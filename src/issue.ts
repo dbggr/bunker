@@ -115,11 +115,14 @@ async function waitForChecks(
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const view = await $`gh pr view ${prUrl} --json statusCheckRollup`.cwd(cwd).env(env).nothrow().quiet();
-    let rollup: Rollup[] = [];
-    try {
-      rollup = JSON.parse(view.stdout.toString()).statusCheckRollup ?? [];
-    } catch {}
-    const { outcome, failed } = judgeChecks(rollup);
+    // A failed or unparseable response is "pending", never "no checks".
+    let rollup: Rollup[] | undefined;
+    if (view.exitCode === 0) {
+      try {
+        rollup = JSON.parse(view.stdout.toString()).statusCheckRollup ?? [];
+      } catch {}
+    }
+    const { outcome, failed } = rollup ? judgeChecks(rollup) : { outcome: "pending" as const, failed: [] };
     if (outcome === "passed") return { outcome };
     if (outcome === "failed") return { outcome, detail: `CI checks failed: ${failed.join(", ")}` };
     if (Date.now() >= deadline) return { outcome: "timeout", detail: `CI checks still pending after ${timeoutMs / 60_000} min` };

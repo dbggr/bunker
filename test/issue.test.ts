@@ -113,6 +113,7 @@ if [ "$1 $2" = "pr view" ]; then
   echo "$*" >> "${root}/view.log"
   case "$*" in *statusCheckRollup*)
     echo "$*" >> "${root}/checks-view.log"
+    if [ -f "${root}/fail-once" ]; then rm "${root}/fail-once"; echo "boom" >&2; exit 1; fi
     if [ -f "${root}/checks.json" ]; then cat "${root}/checks.json"; else echo '{"statusCheckRollup":[]}'; fi
     exit 0;;
   esac
@@ -371,6 +372,16 @@ describe("runIssue() --merge", () => {
     test("no checks configured → merges straight away", async () => {
       const { repo } = await withChecks([]);
       expect((await run(repo, { ciPollMs: 10 })).status).toBe("merged");
+    });
+
+    test("a failed gh pr view is retried, not treated as no checks", async () => {
+      const { repo } = await withChecks([{ ...pass, status: "IN_PROGRESS", conclusion: "" }]);
+      const root = dirname(repo);
+      await Bun.write(join(root, "fail-once"), "");
+      setTimeout(() => Bun.write(join(root, "checks.json"), JSON.stringify({ statusCheckRollup: [{ ...pass, conclusion: "FAILURE" }] })), 100);
+      const r = await run(repo, { ciPollMs: 20 });
+      expect(r.status).toBe("ci-failed");
+      expect(await Bun.file(join(root, "merge.log")).exists()).toBe(false);
     });
 
     test("without --merge checks are not polled", async () => {

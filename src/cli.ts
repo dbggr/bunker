@@ -65,8 +65,8 @@ if (values.issue === undefined && !values.queue && !prompt === !tasks.length) {
   console.error(
     'usage: bunker "<prompt>" [--model <id>] [--image <name>] [--no-sandbox] [--max-iterations <n>]\n' +
       '       bunker --review "<prompt>" [--max-rounds <n>] [--reviewer-model <id>]   (implement → review → fix)\n' +
-      '       bunker --issue <n> [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]] [--max-rounds <n>] [--reviewer-model <id>]   (issue → reviewed PR)\n' +
-      '       bunker --queue [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]] [--limit <n>]   (work the `bunker` label queue)\n' +
+      '       bunker --issue <n> [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--max-rounds <n>] [--reviewer-model <id>]   (issue → reviewed PR)\n' +
+      '       bunker --queue [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--limit <n>]   (work the `bunker` label queue)\n' +
       '       bunker --task "<prompt>" --task "<prompt>" ...   (parallel, one worktree each)',
   );
   process.exit(2);
