@@ -156,6 +156,15 @@ Labels: `bunker` = queued for bunker; `discovered` = filed by an agent, waiting 
 
 Implementer and reviewer prompts tell the agent not to fix out-of-scope problems but to print `<issue title="...">one-paragraph body</issue>`. After the run bunker collects every such block from all agent output, dedupes by title and runs `gh issue create --label discovered` with the body plus `Found while working on #<N>.` They are never labelled `bunker`, so agents can't queue work. `IssueResult.filed` lists `{ number, title }` for each. `review()` takes an optional `reviewerInstruction` appended to the reviewer prompt; its defaults are unchanged. Creating issues needs **Issues: Read and write** on `BUNKER_GH_TOKEN`.
 
+## Live view (`bunker ui`)
+
+`bunker ui [--port <n>]` starts a long-lived hub on `127.0.0.1:4321` and prints the URL. One page, one tab per repo, each with a status dot (idle / working / waiting for merge / failed) and the repo name; the per-issue view (stage, round, time, cost, PR link, feed) lives inside the tab. A tab stays after its run ends until you close it in the page, and the selected tab is kept in the URL hash.
+
+- Every `--issue`, `--queue` and `--watch` run checks whether a hub is reachable (on `--port`, default 4321). If so it publishes its events there, tagged with the repo id (`owner/repo` from the origin URL, else the folder name). No hub → nothing is published and nothing errors. Several repos can therefore share one page.
+- `--ui` makes sure a hub is up: it publishes to the running one, or starts one for the run and stops it when the run exits (`--ui-keep` keeps it serving). Handing a hub over to a later `bunker ui` is not supported.
+- Security: the hub binds `127.0.0.1` only (no option to change it) and rejects foreign `Host`/`Origin` headers (DNS rebinding). Publishing needs the random token in `~/.config/bunker/ui.token` (created 0600 on first use); browsers never see it. The page and its socket are read-only: nothing can start, stop or change a run. Event text is redacted before it leaves the run, and again by the hub.
+- `--audit` emits no events yet, so it does not appear in the page.
+
 ## Watch mode
 
 `bunker --watch`, run from the repo's main checkout, keeps working the `bunker` queue unattended. It implies `--queue --merge`; verify comes from `.bunker/verify` unless `--verify` is given (neither → exit 2). `--model`, `--reviewer-model`, `--max-rounds`, `--ui` and the rest pass through.
