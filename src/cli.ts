@@ -9,7 +9,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { redact } from "./redact.ts";
 import { createProgress, type BunkerEvent, hyperlink } from "./events.ts";
-import { startUi } from "./ui.ts";
+import { connectHub, hubReachable, readToken, repoId, startHub, type Hub, type Publisher } from "./ui.ts";
 import { HELP } from "./help.ts";
 import { options } from "./options.ts";
 import { output } from "./output.ts";
@@ -47,6 +47,33 @@ if (values.help) {
 if (values.version) {
   console.log(pkg.version);
   process.exit(0);
+}
+
+// `bunker ui [--port <n>]`: the shared live view, a long-lived hub every run publishes to.
+if (positionals.length === 1 && positionals[0] === "ui") {
+  const others = Object.entries(values).filter(([k, v]) => k !== "port" && k !== "verbose" && v !== false && v !== undefined);
+  if (others.length) {
+    console.error("bunker: ui only takes --port");
+    process.exit(2);
+  }
+  const port = values.port === undefined ? 4321 : Number(values.port);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    console.error("bunker: --port must be an integer between 0 and 65535");
+    process.exit(2);
+  }
+  if (await hubReachable(port)) {
+    console.log(`bunker: hub already running at http://127.0.0.1:${port}`);
+    process.exit(0);
+  }
+  let hub;
+  try {
+    hub = startHub({ port, token: readToken() });
+  } catch (e) {
+    console.error(`bunker: could not start the hub: ${e instanceof Error ? e.message : e}`);
+    process.exit(2);
+  }
+  console.log(`bunker: hub at ${hub.url} (Ctrl-C to quit)`);
+  await new Promise(() => {});
 }
 
 const prompt = positionals.join(" ");
@@ -199,17 +226,27 @@ process.on("exit", () => console.log(`bunker: elapsed ${formatDuration(Date.now(
 
 const tty = !!process.stdout.isTTY;
 const progress = createProgress({ write: (s) => output.write(redact(s)), tty, columns: process.stdout.columns ?? 100 });
-let ui;
-if (values.ui) {
+// Publish to the shared hub when one is up; --ui makes sure there is one. No hub, no publishing, no errors.
+let hub: Hub | undefined;
+let publisher: Publisher | undefined;
+const hubUrl = `http://127.0.0.1:${uiPort}`;
+if (values.ui || values.queue || values.issue !== undefined) {
   try {
-    ui = startUi({ port: uiPort });
+    if (values.ui && !(await hubReachable(uiPort))) {
+      hub = startHub({ port: uiPort, token: readToken() });
+    }
+    if (values.ui || (await hubReachable(uiPort))) {
+      publisher = await connectHub({ port: hub?.server.port ?? uiPort, repo: await repoId(), token: readToken() });
+    }
   } catch (e) {
-    console.error(`bunker: could not start --ui: ${e instanceof Error ? e.message : e}`);
-    process.exit(2);
+    if (values.ui) {
+      console.error(`bunker: could not start --ui: ${e instanceof Error ? e.message : e}`);
+      process.exit(2);
+    }
   }
-  console.log(`bunker: live view at ${ui.url}`);
+  if (values.ui) console.log(`bunker: live view at ${hub?.url ?? hubUrl}`);
 }
-const onEvent = ui ? (e: BunkerEvent) => (progress.onEvent(e), ui.onEvent(e)) : progress.onEvent;
+const onEvent = publisher ? (e: BunkerEvent) => (progress.onEvent(e), publisher.onEvent(e)) : progress.onEvent;
 clearProgress = progress.clear;
 const agent = claudeCode({ model: values.model, json: true });
 const sandbox = values["no-sandbox"] ? noSandbox() : docker({ image: values.image });
@@ -220,6 +257,7 @@ if (values.audit) {
     result = await runAudit({ agent, sandbox, maxIssues, focus: values.focus, setup: values.setup });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
+    await publisher?.flush();
     process.exit(2);
   }
   console.log();
@@ -242,6 +280,7 @@ if (values.audit) {
     await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, signal: ctl.signal, ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
+    await publisher?.flush();
     process.exit(2);
   }
 } else if (values.queue) {
@@ -251,6 +290,7 @@ if (values.audit) {
     results = await runQueue({ onEvent, agent, reviewer, sandbox, maxRounds, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
+    await publisher?.flush();
     process.exit(2);
   }
   console.log();
@@ -267,6 +307,7 @@ if (values.audit) {
   const issue = Number(values.issue);
   if (!Number.isInteger(issue) || issue < 1) {
     console.error("bunker: --issue must be a positive integer");
+    await publisher?.flush();
     process.exit(2);
   }
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
@@ -275,6 +316,7 @@ if (values.audit) {
     result = await runIssue({ onEvent, issue, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
+    await publisher?.flush();
     process.exit(2);
   }
   console.log();
@@ -298,7 +340,7 @@ if (values.audit) {
   for (const c of result.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
   if (result.error) console.log(`  ${result.error.trimEnd().replaceAll("\n", "\n  ")}`);
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
-  if (result.status !== "approved") process.exit(1);
+  if (result.status !== "approved") { await publisher?.flush(); process.exit(1); }
 } else if (prompt) {
   let result;
   try {
@@ -306,6 +348,7 @@ if (values.audit) {
   } catch (e) {
     console.error(`\nbunker: ${e instanceof Error ? e.message : e}`);
     if (e instanceof AgentFailure && e.usage) console.log(`bunker: cost ${formatUsage(e.usage)}`);
+    await publisher?.flush();
     process.exit(1);
   }
   console.log(`\nbunker: ${result.commits.length} commit(s) merged from ${result.branch}`);
@@ -320,13 +363,14 @@ if (values.audit) {
     if (r.usage) console.log(`  cost ${formatUsage(r.usage)}`);
     if (r.error) console.log(`  ${r.error.trimEnd().replaceAll("\n", "\n  ")}`);
   }
-  if (results.some((r) => r.status !== "merged")) process.exit(1);
+  if (results.some((r) => r.status !== "merged")) { await publisher?.flush(); process.exit(1); }
 }
 
-if (ui) {
+await publisher?.flush();
+if (hub) {
   if (values["ui-keep"]) {
-    console.log(`bunker: run finished; still serving ${ui.url} (Ctrl-C to quit)`);
+    console.log(`bunker: run finished; still serving ${hub.url} (Ctrl-C to quit)`);
     await new Promise(() => {});
   }
-  await ui.stop();
+  await hub.stop();
 }

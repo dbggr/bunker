@@ -7,6 +7,7 @@ Usage:
   bunker --issue <n>                          GitHub issue -> reviewed PR
   bunker --queue                              work the \`bunker\` label queue
   bunker --watch                              keep working the queue unattended (implies --queue --merge)
+  bunker ui [--port <n>]                      shared live view: one tab per repo (default port 4321)
   bunker --audit                              file improvement ideas as \`discovered\` issues
 
 Common options (all modes):
@@ -36,10 +37,12 @@ Single prompt and --task:
   --merge                    auto-merge the PR once checks pass (requires --verify or .bunker/verify)
   --ci-timeout <min>         (--merge) minutes to wait for the merge (default 30)
 
---issue and --queue, live view:
-  --ui                       serve a read-only live view at http://127.0.0.1:4321
-  --port <n>                 (--ui) port to listen on (default 4321)
-  --ui-keep                  (--ui) keep serving after the run ends (Ctrl-C to quit)
+--issue, --queue, --watch, live view:
+  Every run publishes to a bunker hub (bunker ui) if one is reachable on 127.0.0.1:4321,
+  tagged with the repo (owner/repo from origin); with no hub it just carries on.
+  --ui                       make sure a hub is up (start one for this run if not), publish, print the URL
+  --port <n>                 (--ui) hub port to use (default 4321)
+  --ui-keep                  (--ui) keep the hub this run started alive after it ends (Ctrl-C to quit)
 
 --watch:
   --watch                    loop: work the queue, sleep, repeat until Ctrl-C; needs --verify or .bunker/verify
@@ -67,5 +70,6 @@ Examples:
   bunker --issue 12 --verify "bun test"
   bunker --queue --verify "bun test && bun run typecheck" --merge
   bunker --watch --for 5h --max-cost 10
+  bunker ui
   bunker --audit --focus "error handling"
 `;

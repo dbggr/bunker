@@ -51,4 +51,9 @@ describe("--ui flags", () => {
     expect(cli("--ui", "do a thing").code).toBe(2);
     expect(cli("--issue", "1", "--ui", "--port", "nope").code).toBe(2);
   });
+  test("bunker ui takes only --port", () => {
+    expect(cli("ui", "--port", "nope").code).toBe(2);
+    expect(cli("ui", "--issue", "1").code).toBe(2);
+    expect(cli("--help").out).toContain("bunker ui [--port <n>]");
+  });
 });
