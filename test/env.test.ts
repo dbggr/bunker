@@ -143,6 +143,16 @@ describe("cli", () => {
     expect(await new Response(proc.stderr).text()).not.toContain("claude setup-token");
   }, 30_000);
 
+  test("--merge without --verify exits 2", async () => {
+    const repo = await tempDir();
+    await $`git init -q ${repo}`;
+
+    const proc = Bun.spawn(["bun", cli, "--issue", "1", "--merge"], { cwd: repo, env: bareEnv, stderr: "pipe" });
+
+    expect(await proc.exited).toBe(2);
+    expect(await new Response(proc.stderr).text()).toContain("--verify");
+  });
+
   test("a positional prompt together with --task exits 2 and prints usage", async () => {
     const repo = await tempDir();
     await $`git init -q ${repo}`;

@@ -22,10 +22,12 @@ export interface IssueOptions {
   maxRounds?: number;
   /** Shell command run on the host in the worktree once the review approves. */
   verify?: string;
+  /** After the PR opens, squash-merge it and check the merge landed. Requires `verify`. */
+  merge?: boolean;
 }
 
 export interface IssueResult {
-  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed";
+  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "merged" | "merge-failed" | "merge-unverified";
   branch: string;
   worktree: string;
   prUrl?: string;
@@ -63,8 +65,13 @@ function reviewLines(result: ReviewResult): string {
  * every later outcome is a status, and the worktree and branch are always kept.
  * The caller's checkout and branch are never touched.
  */
-export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, verify }: IssueOptions): Promise<IssueResult> {
-  const env = process.env as Record<string, string>;
+export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, verify, merge }: IssueOptions): Promise<IssueResult> {
+  if (merge && !verify) throw new Error("merge requires verify");
+  // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
+  // credential helper, so neither the user's SSH key nor their gh login is used.
+  const token = process.env.BUNKER_GH_TOKEN;
+  const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
+  const gitCfg = token ? ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"] : [];
   const view = await $`gh issue view ${number} --json number,title,body,state,labels`.cwd(cwd).env(env).nothrow().quiet();
   if (view.exitCode !== 0) throw new Error(`gh issue view ${number} failed:\n${view.stderr}`);
   const issue = JSON.parse(view.stdout.toString()) as IssueInfo;
@@ -82,11 +89,18 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   if (!excluded.split("\n").includes("/.worktrees/")) await appendFile(exclude, `${excluded && !excluded.endsWith("\n") ? "\n" : ""}/.worktrees/\n`);
 
   // Branch from origin's default branch, not the caller's possibly-stale HEAD.
-  const head = await $`git -C ${repo} ls-remote --symref origin HEAD`.nothrow().quiet();
+  let remote = "origin";
+  if (token) {
+    const url = (await $`git -C ${repo} remote get-url origin`.nothrow().quiet().text()).trim();
+    const m = /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(url);
+    if (m) remote = `https://github.com/${m[1]}.git`;
+  }
+  const head = await $`git ${gitCfg} -C ${repo} ls-remote --symref ${remote} HEAD`.env(env).nothrow().quiet();
   const defaultBranch = /^ref: refs\/heads\/(\S+)\s+HEAD$/m.exec(head.stdout.toString())?.[1] ?? "main";
-  const fetch = await $`git -C ${repo} fetch -q origin ${defaultBranch}`.nothrow().quiet();
+  const fetch = await $`git ${gitCfg} -C ${repo} fetch -q ${remote} ${defaultBranch}`.env(env).nothrow().quiet();
   if (fetch.exitCode !== 0) return fail("failed", { error: `could not fetch origin/${defaultBranch}:\n${fetch.stderr}` });
 
+  const baseSha = (await $`git -C ${repo} rev-parse FETCH_HEAD`.text()).trim();
   const add = await $`git -C ${repo} worktree add -q -b ${branch} ${worktree} FETCH_HEAD`.nothrow().quiet();
   if (add.exitCode !== 0) return fail("failed", { error: `could not create worktree:\n${add.stderr}` });
 
@@ -104,12 +118,33 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
     }
   }
 
-  const push = await $`git -C ${worktree} push -q -u origin ${branch}`.env(env).nothrow().quiet();
+  const push = await $`git ${gitCfg} -C ${worktree} push -q ${token ? [] : ['-u']} ${remote} ${branch}`.env(env).nothrow().quiet();
   if (push.exitCode !== 0) return fail("failed", { review: result, error: `git push failed:\n${push.stderr}` });
 
   const body = [`Closes #${number}`, reviewLines(result), ...(verify ? [`Verify: \`${verify}\` passed`] : [])].join("\n\n");
   const pr = await $`gh pr create --title ${issue.title} --body ${body}`.cwd(worktree).env(env).nothrow().quiet();
   if (pr.exitCode !== 0) return fail("failed", { review: result, error: `gh pr create failed:\n${pr.stderr}` });
   const prUrl = pr.stdout.toString().trim().split("\n").at(-1);
-  return fail("pr-opened", { review: result, ...(prUrl ? { prUrl } : {}) });
+  const opened = { review: result, ...(prUrl ? { prUrl } : {}) };
+  if (!merge || !prUrl) return fail("pr-opened", opened);
+
+  const merged = await $`gh pr merge ${prUrl} --squash --delete-branch`.cwd(worktree).env(env).nothrow().quiet();
+  if (merged.exitCode !== 0) return fail("merge-failed", { ...opened, error: `gh pr merge failed:\n${merged.stderr}` });
+
+  // Squash-merges have silently dropped late commits: check every file the branch touched.
+  const refspec = `+refs/heads/${defaultBranch}:refs/remotes/origin/${defaultBranch}`;
+  const refetch = await $`git ${gitCfg} -C ${repo} fetch -q ${remote} ${refspec}`.env(env).nothrow().quiet();
+  if (refetch.exitCode !== 0) return fail("merge-unverified", { ...opened, error: `merged, but could not fetch to verify:\n${refetch.stderr}` });
+  const target = `origin/${defaultBranch}`;
+  const files = (await $`git -C ${repo} diff --name-only ${baseSha} ${branch}`.text()).split("\n").filter(Boolean);
+  const differing = files.length
+    ? (await $`git -C ${repo} diff --name-only ${branch} ${target} -- ${files}`.text()).split("\n").filter(Boolean)
+    : [];
+  if (differing.length) {
+    return fail("merge-unverified", { ...opened, error: `merged, but ${target} differs from ${branch} in:\n${differing.join("\n")}` });
+  }
+
+  await $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet();
+  await $`git -C ${repo} branch -D ${branch}`.nothrow().quiet();
+  return fail("merged", opened);
 }

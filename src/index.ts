@@ -82,14 +82,23 @@ async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">): Pro
   return { code: await proc.exited, stdout };
 }
 
-/** Runs the agent straight on the host, in the worktree. No isolation. */
+/** GitHub credentials bunker itself uses; an agent must never see them. */
+export const GH_TOKEN_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "BUNKER_GH_TOKEN"] as const;
+
+/** Runs the agent straight on the host, in the worktree. No isolation (GitHub tokens are stripped from its env). */
 export function noSandbox(): Sandbox {
   return {
     exec: (cmd, { worktree }) =>
       // Explicit env: Bun.spawn otherwise passes the startup environment, dropping
       // anything set at runtime (e.g. the token loaded from .bunker/.env).
-      teeStdout(Bun.spawn(cmd, { cwd: worktree, env: process.env, stdio: ["ignore", "pipe", "inherit"] })),
+      teeStdout(Bun.spawn(cmd, { cwd: worktree, env: agentEnv(), stdio: ["ignore", "pipe", "inherit"] })),
   };
+}
+
+function agentEnv(): Record<string, string | undefined> {
+  const env = { ...process.env };
+  for (const name of GH_TOKEN_VARS) delete env[name];
+  return env;
 }
 
 const BASE_IMAGE = "bunker-claude";
