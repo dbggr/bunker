@@ -35,3 +35,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # git worktrees (house dev-workflow)
 .worktrees/
+
+# bunker auth (see .env.example)
+.bunker/.env

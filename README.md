@@ -38,3 +38,13 @@ const { commits } = await run({ prompt: "...", agent: claudeCode(), sandbox: doc
 ```bash
 bun test        # docker tests skip when docker isn't running
 ```
+
+## Auth
+
+The container has no access to your host login, so `docker()` needs a token passed in:
+
+1. `claude setup-token` on the host (uses your Claude subscription).
+2. Copy [`.env.example`](.env.example) to `<your-repo>/.bunker/.env` and set `CLAUDE_CODE_OAUTH_TOKEN`. Gitignore that file.
+   `ANTHROPIC_API_KEY` is there commented out if you'd rather bill an API key.
+
+The CLI loads `.bunker/.env` from the current repo (exported variables win) and exits with a `claude setup-token` hint if neither variable is set. `--no-sandbox` skips the check, since claude on the host uses your normal login.
