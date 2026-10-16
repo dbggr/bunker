@@ -29,9 +29,9 @@ Single prompt and --task:
   --queue                    run open issues labelled \`bunker\`, oldest first
   --limit <n>                (--queue) max issues per run (default 5)
   --setup "<cmd>"            run in the worktree before the agent (default: .bunker/setup)
-  --verify "<cmd>"           run after approval; a failure stops before pushing
+  --verify "<cmd>"           run after approval; a failure stops before pushing (default: .bunker/verify)
   --verify-on-host           run --verify on the host instead of in the sandbox
-  --merge                    auto-merge the PR once checks pass (requires --verify)
+  --merge                    auto-merge the PR once checks pass (requires --verify or .bunker/verify)
   --ci-timeout <min>         (--merge) minutes to wait for the merge (default 30)
 
 --issue and --queue, live view:

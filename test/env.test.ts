@@ -153,6 +153,28 @@ describe("cli", () => {
     expect(await new Response(proc.stderr).text()).toContain("--verify");
   });
 
+  test("--merge with only a .bunker/verify file is not rejected for missing --verify", async () => {
+    const repo = await tempDir();
+    await $`git init -q ${repo}`;
+    await $`mkdir -p ${repo}/.bunker`;
+    await Bun.write(`${repo}/.bunker/verify`, "true\n");
+
+    const proc = Bun.spawn(["bun", cli, "--issue", "1", "--merge"], { cwd: repo, env: bareEnv, stderr: "pipe" });
+
+    await proc.exited;
+    expect(await new Response(proc.stderr).text()).not.toContain("--merge requires");
+  }, 30_000);
+
+  test("--merge error with neither mentions both", async () => {
+    const repo = await tempDir();
+    await $`git init -q ${repo}`;
+    const proc = Bun.spawn(["bun", cli, "--queue", "--merge"], { cwd: repo, env: bareEnv, stderr: "pipe" });
+    expect(await proc.exited).toBe(2);
+    const err = await new Response(proc.stderr).text();
+    expect(err).toContain("--verify");
+    expect(err).toContain(".bunker/verify");
+  });
+
   test("a positional prompt together with --task exits 2 and prints usage", async () => {
     const repo = await tempDir();
     await $`git init -q ${repo}`;

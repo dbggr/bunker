@@ -441,6 +441,43 @@ describe("runIssue()", () => {
     expect((await Bun.file(join(r2.worktree, "setup.out")).text()).trim()).toBe("EXPLICIT");
   });
 
+  test(".bunker/verify is the default verify; --verify overrides it; PR body names the source", async () => {
+    const { repo, prLog } = await setup(issue());
+    await $`mkdir -p ${repo}/.bunker`;
+    await Bun.write(join(repo, ".bunker", "verify"), "test -f feature.txt\n");
+    await $`git -C ${repo} add .bunker/verify && git -C ${repo} commit -qm "chore: verify" && git -C ${repo} push -q origin main`;
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() });
+    expect(r.status).toBe("pr-opened");
+    expect(await Bun.file(prLog).text()).toContain("Verify: `test -f feature.txt` passed (.bunker/verify)");
+    await $`git -C ${repo} worktree remove --force ${r.worktree} && git -C ${repo} branch -D ${r.branch}`.quiet();
+    const r2 = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: "true" });
+    expect(r2.status).toBe("pr-opened");
+    expect(await Bun.file(prLog).text()).toContain("Verify: `true` passed (--verify)");
+  });
+
+  test(".bunker/verify failing → verify-failed", async () => {
+    const { repo, origin } = await setup(issue());
+    await $`mkdir -p ${repo}/.bunker`;
+    await Bun.write(join(repo, ".bunker", "verify"), "exit 1\n");
+    await $`git -C ${repo} add .bunker/verify && git -C ${repo} commit -qm "chore: verify" && git -C ${repo} push -q origin main`;
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() });
+    expect(r.status).toBe("verify-failed");
+    expect(await originBranches(origin)).toEqual(["main"]);
+  });
+
+  test("merge with only a .bunker/verify file is accepted; with neither it fails before any work", async () => {
+    const { repo } = await setup(issue(), "ff");
+    const none = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), merge: true, ciPollMs: 10 });
+    expect(none.status).toBe("failed");
+    expect(none.error).toContain(".bunker/verify");
+    expect(none.error).toContain("--verify");
+    await $`mkdir -p ${repo}/.bunker`;
+    await Bun.write(join(repo, ".bunker", "verify"), "test -f feature.txt\n");
+    await $`git -C ${repo} add .bunker/verify && git -C ${repo} commit -qm "chore: verify" && git -C ${repo} push -q origin main`;
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), merge: true, ciPollMs: 10 });
+    expect(r.status).toBe("merged");
+  });
+
   test("rejected → nothing pushed, worktree kept", async () => {
     const { repo, origin, prLog } = await setup(issue());
     const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent("nope"), sandbox: noSandbox(), maxRounds: 1 });

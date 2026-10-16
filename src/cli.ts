@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
 import { claudeCode, formatUsage, docker, noSandbox, review, run, runAll } from "./index.ts";
@@ -65,6 +67,7 @@ if (!Number.isInteger(maxIssues) || maxIssues < 1) {
   console.error("bunker: --max-issues must be a positive integer");
   process.exit(2);
 }
+const hasVerify = values.verify !== undefined || existsSync(join(process.cwd(), ".bunker", "verify"));
 if (values.audit) {
   // checked above
 } else if (values.queue) {
@@ -72,12 +75,12 @@ if (values.audit) {
     console.error("bunker: --queue can't be combined with a prompt, --task, --review or --issue");
     process.exit(2);
   }
-  if (values.merge && values.verify === undefined) {
-    console.error("bunker: --merge requires --verify");
+  if (values.merge && !hasVerify) {
+    console.error("bunker: --merge requires --verify or a .bunker/verify file");
     process.exit(2);
   }
-  if (values["verify-on-host"] && values.verify === undefined) {
-    console.error("bunker: --verify-on-host requires --verify");
+  if (values["verify-on-host"] && !hasVerify) {
+    console.error("bunker: --verify-on-host requires --verify or a .bunker/verify file");
     process.exit(2);
   }
 } else if (values.limit !== undefined) {
@@ -88,12 +91,12 @@ if (values.audit) {
     console.error("bunker: --issue can't be combined with a prompt, --task or --review");
     process.exit(2);
   }
-  if (values.merge && values.verify === undefined) {
-    console.error("bunker: --merge requires --verify");
+  if (values.merge && !hasVerify) {
+    console.error("bunker: --merge requires --verify or a .bunker/verify file");
     process.exit(2);
   }
-  if (values["verify-on-host"] && values.verify === undefined) {
-    console.error("bunker: --verify-on-host requires --verify");
+  if (values["verify-on-host"] && !hasVerify) {
+    console.error("bunker: --verify-on-host requires --verify or a .bunker/verify file");
     process.exit(2);
   }
 }
