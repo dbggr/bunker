@@ -60,12 +60,16 @@ async function setup(issues: [number, string, string][], mergeMode: "ff" | "none
     `#!/bin/sh
 if [ "$1 $2" = "issue list" ]; then
   echo "$*" >> "${root}/list.log"
+  if [ -f "${root}/list-fail-always" ]; then echo "HTTP 502" >&2; exit 1; fi
+  if [ -f "${root}/list-fail-once" ]; then rm "${root}/list-fail-once"; echo "HTTP 502" >&2; exit 1; fi
+  if [ -f "${root}/list-bad-once" ]; then rm "${root}/list-bad-once"; echo "<html>oops"; exit 0; fi
   if [ -f "${root}/list-empty-once" ]; then rm "${root}/list-empty-once"; echo '[]'; exit 0; fi
   if [ -f "${root}/list-partial-once" ]; then cat "${root}/list-partial-once"; rm "${root}/list-partial-once"; exit 0; fi
   cat "${root}/list.json"; exit 0
 fi
 if [ "$1 $2" = "issue view" ]; then
   if [ -f "${root}/view-fail-$3" ]; then echo "HTTP 502" >&2; exit 1; fi
+  if [ -f "${root}/view-bad-$3" ]; then echo "<html>oops"; exit 0; fi
   cat "${root}/issue-$3.json"; exit 0
 fi
 if [ "$1 $2" = "issue create" ]; then
@@ -187,6 +191,28 @@ describe("runQueue()", () => {
     await Bun.write(join(repo, "..", "view-fail-2"), "");
     const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"], [3, "merged"]]);
+  });
+
+  test("skips a candidate whose re-check returns bad JSON, keeping earlier results", async () => {
+    const { repo } = await setup(issues, "ff");
+    await Bun.write(join(repo, "..", "view-bad-2"), "");
+    const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10 });
+    expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"], [3, "merged"]]);
+  });
+
+  test("uses the other list when one list call fails or returns bad JSON", async () => {
+    for (const f of ["list-fail-once", "list-bad-once"]) {
+      const { repo } = await setup(issues);
+      await Bun.write(join(repo, "..", f), "");
+      const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), listRetryMs: 10 });
+      expect(rs.map((r) => r.issue)).toEqual([1]);
+    }
+  });
+
+  test("returns an empty queue instead of throwing when both list calls fail", async () => {
+    const { repo } = await setup(issues);
+    await Bun.write(join(repo, "..", "list-fail-always"), "");
+    expect(await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), listRetryMs: 10 })).toEqual([]);
   });
 
   test("retries an empty list once after a short delay", async () => {
