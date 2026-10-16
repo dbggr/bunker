@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>bunker</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 0; background: #111; color: #ddd; }
+  header { padding: 10px 16px; background: #1b1b1b; border-bottom: 1px solid #333; }
+  main { padding: 12px 16px; }
+  .issue { border: 1px solid #333; border-radius: 6px; margin-bottom: 10px; background: #181818; }
+  .head { display: flex; gap: 14px; align-items: baseline; padding: 8px 12px; cursor: pointer; flex-wrap: wrap; }
+  .head b { min-width: 3em; }
+  .stage { padding: 1px 8px; border-radius: 10px; background: #345; }
+  .stage.merged { background: #264; } .stage.failed { background: #622; }
+  .muted { color: #888; }
+  .detail { display: none; padding: 0 12px 10px; }
+  .issue.open .detail { display: block; }
+  .feed { font: 12px/1.4 ui-monospace, monospace; max-height: 340px; overflow-y: auto; background: #0c0c0c; padding: 6px; white-space: pre-wrap; word-break: break-word; }
+  .feed .tool { color: #8ab; } .feed .stagel { color: #db6; } .feed .res { color: #9c9; }
+  a { color: #7af; }
+</style>
+</head>
+<body>
+<header><b>bunker</b> <span class="muted" id="conn">connecting…</span></header>
+<main id="main"></main>
+<script>
+const STAGES = ["setup", "implement", "review", "verify", "PR", "waiting for merge", "merged", "failed"];
+const issues = new Map();
+const main = document.getElementById("main");
+const conn = document.getElementById("conn");
+const clock = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s >= 60 ? Math.floor(s / 60) + "m" + String(s % 60).padStart(2, "0") + "s" : s + "s"; };
+function key(e) { return e.issue !== undefined ? "#" + e.issue : e.task !== undefined ? "task " + e.task : "run"; }
+function get(k) {
+  let i = issues.get(k);
+  if (i) return i;
+  const el = document.createElement("div");
+  el.className = "issue";
+  el.innerHTML = '<div class="head"><b></b><span class="stage"></span><span class="round muted"></span><span class="time muted"></span><span class="cost muted"></span><span class="pr"></span></div>' +
+    '<div class="detail"><div class="muted logpath"></div><div class="feed"></div></div>';
+  el.querySelector(".head").onclick = () => el.classList.toggle("open");
+  el.querySelector("b").textContent = k;
+  main.appendChild(el);
+  i = { el, start: undefined, end: undefined, cost: 0, feed: el.querySelector(".feed"), done: false };
+  issues.set(k, i);
+  return i;
+}
+function line(i, cls, text) {
+  const d = document.createElement("div");
+  d.className = cls;
+  d.textContent = text;
+  const stick = i.feed.scrollTop + i.feed.clientHeight >= i.feed.scrollHeight - 20;
+  i.feed.appendChild(d);
+  if (stick) i.feed.scrollTop = i.feed.scrollHeight;
+}
+function onEvent(e) {
+  const i = get(key(e));
+  i.start ??= e.at;
+  i.end = e.at;
+  const q = (s) => i.el.querySelector(s);
+  if (e.round !== undefined) q(".round").textContent = "round " + e.round + (e.role ? " " + e.role : "");
+  if (e.type === "stage") {
+    const s = q(".stage");
+    s.textContent = e.name;
+    s.title = "stage " + (STAGES.indexOf(e.name) + 1) + " of " + STAGES.length + ": " + STAGES.join(" → ");
+    s.className = "stage " + (e.name === "merged" ? "merged" : e.name === "failed" ? "failed" : "");
+    i.done = e.name === "merged" || e.name === "failed";
+    line(i, "stagel", "— " + e.name + (e.text ? " (" + e.text + ")" : ""));
+  } else if (e.type === "meta") {
+    if (e.logPath) q(".logpath").textContent = "log: " + e.logPath;
+    if (e.url) { const a = document.createElement("a"); a.href = e.url; a.textContent = "PR"; a.target = "_blank"; a.rel = "noreferrer"; q(".pr").replaceChildren(a); }
+  } else if (e.type === "toolCall") line(i, "tool", "▸ " + e.name);
+  else if (e.type === "text") line(i, "txt", e.text || "");
+  else if (e.type === "result") { i.cost += e.costUsd || 0; line(i, "res", "result" + (e.costUsd ? " $" + e.costUsd.toFixed(2) : "")); }
+  q(".cost").textContent = "$" + i.cost.toFixed(2);
+}
+setInterval(() => { for (const i of issues.values()) if (i.start && !i.done) i.el.querySelector(".time").textContent = clock(Date.now() - i.start); }, 1000);
+function tick() { for (const i of issues.values()) if (i.start && i.done) i.el.querySelector(".time").textContent = clock(i.end - i.start); }
+function open() {
+  const ws = new WebSocket("ws://" + location.host + "/events");
+  ws.onopen = () => (conn.textContent = "live");
+  ws.onmessage = (m) => { onEvent(JSON.parse(m.data)); tick(); };
+  ws.onclose = () => (conn.textContent = "disconnected");
+}
+open();
+</script>
+</body>
+</html>

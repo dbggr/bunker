@@ -8,7 +8,7 @@ export type Stage = "setup" | "implement" | "review" | "verify" | "PR" | "waitin
 
 /** Progress from a run. `name` is the stage, or the tool call (e.g. "Edit src/cli.ts"). */
 export interface BunkerEvent {
-  type: "stage" | "text" | "toolCall" | "result";
+  type: "stage" | "text" | "toolCall" | "result" | "meta";
   issue?: number;
   /** Index of the task, for runAll(). */
   task?: number;
@@ -19,6 +19,9 @@ export interface BunkerEvent {
   text?: string;
   /** On "result": what that agent run cost. */
   costUsd?: number;
+  /** On "meta": the run-log path and the PR URL, once known. */
+  logPath?: string;
+  url?: string;
   /** Epoch milliseconds. */
   at: number;
 }
@@ -112,6 +115,7 @@ export function createProgress({ write, tty, columns = 100 }: ProgressOptions): 
       .filter(Boolean)
       .join(" ");
   const onEvent: OnEvent = (e) => {
+    if (e.type === "meta") return;
     startedAt ??= e.at;
     if (e.type === "stage") {
       clear();

@@ -3,6 +3,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { redact } from "./redact.ts";
+import { emit } from "./events.ts";
 import { emitStage, review, runSetup, type Agent, type OnEvent, type ReviewResult, type Sandbox } from "./index.ts";
 
 export interface IssueInfo {
@@ -197,6 +198,7 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   mkdirSync(join(repo, ".bunker", "runs"), { recursive: true });
   const log = (title: string, text = "") => appendFileSync(logPath, redact(`== ${title} ==\n${text.trimEnd()}\n\n`));
   log(`issue #${number}: ${issue.title}`, `branch ${branch}`);
+  emit(onEvent, { type: "meta", logPath });
   const fail = (status: IssueResult["status"], extra: Partial<IssueResult> = {}): IssueResult => {
     log(`final status: ${status}`, [extra.error, extra.prUrl].filter(Boolean).join("\n"));
     if (status === "merged") emitStage({ onEvent }, "merged");
@@ -295,6 +297,7 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   const pr = await $`gh pr create --head ${branch} --title ${issue.title} --body ${body}`.cwd(worktree).env(env).nothrow().quiet();
   if (pr.exitCode !== 0) return fail("failed", { review: result, error: `gh pr create failed:\n${pr.stderr}` });
   const prUrl = pr.stdout.toString().trim().split("\n").at(-1);
+  if (prUrl) emit(onEvent, { type: "meta", url: prUrl });
   const opened = { review: result, ...(prUrl ? { prUrl } : {}) };
   if (!merge || !prUrl) return fail("pr-opened", opened);
 

@@ -34,6 +34,11 @@ Single prompt and --task:
   --merge                    auto-merge the PR once checks pass (requires --verify)
   --ci-timeout <min>         (--merge) minutes to wait for the merge (default 30)
 
+--issue and --queue, live view:
+  --ui                       serve a read-only live view at http://127.0.0.1:4321
+  --port <n>                 (--ui) port to listen on (default 4321)
+  --ui-keep                  (--ui) keep serving after the run ends (Ctrl-C to quit)
+
 --audit:
   --audit                    read-only agent run that files issues
   --max-issues <n>           max issues to file (default 5)

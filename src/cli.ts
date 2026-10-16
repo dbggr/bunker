@@ -5,7 +5,8 @@ import { claudeCode, formatUsage, docker, noSandbox, review, run, runAll } from 
 import { runAudit } from "./audit.ts";
 import { runIssue, runQueue } from "./issue.ts";
 import { redact } from "./redact.ts";
-import { createProgress, hyperlink } from "./events.ts";
+import { createProgress, type BunkerEvent, hyperlink } from "./events.ts";
+import { startUi } from "./ui.ts";
 import { HELP } from "./help.ts";
 import { options } from "./options.ts";
 import pkg from "../package.json" with { type: "json" };
@@ -113,6 +114,20 @@ if (!values.audit && values.issue === undefined && !values.queue && !prompt === 
   process.exit(2);
 }
 
+if (!values.ui && (values.port !== undefined || values["ui-keep"])) {
+  console.error("bunker: --port and --ui-keep only apply to --ui");
+  process.exit(2);
+}
+if (values.ui && values.issue === undefined && !values.queue) {
+  console.error("bunker: --ui only applies to --issue or --queue");
+  process.exit(2);
+}
+const uiPort = values.port === undefined ? 4321 : Number(values.port);
+if (!Number.isInteger(uiPort) || uiPort < 0 || uiPort > 65535) {
+  console.error("bunker: --port must be an integer between 0 and 65535");
+  process.exit(2);
+}
+
 const maxIterations = values["max-iterations"] === undefined ? 1 : Number(values["max-iterations"]);
 if (!Number.isInteger(maxIterations) || maxIterations < 1) {
   console.error("bunker: --max-iterations must be a positive integer");
@@ -153,7 +168,17 @@ if (values["ci-timeout"] !== undefined) {
 
 const tty = !!process.stdout.isTTY;
 const progress = createProgress({ write: (s) => process.stdout.write(redact(s)), tty, columns: process.stdout.columns ?? 100 });
-const onEvent = progress.onEvent;
+let ui;
+if (values.ui) {
+  try {
+    ui = startUi({ port: uiPort });
+  } catch (e) {
+    console.error(`bunker: could not start --ui: ${e instanceof Error ? e.message : e}`);
+    process.exit(2);
+  }
+  console.log(`bunker: live view at ${ui.url}`);
+}
+const onEvent = ui ? (e: BunkerEvent) => (progress.onEvent(e), ui.onEvent(e)) : progress.onEvent;
 clearProgress = progress.clear;
 const agent = claudeCode({ model: values.model, json: true });
 const sandbox = values["no-sandbox"] ? noSandbox() : docker({ image: values.image });
@@ -188,7 +213,7 @@ if (values.audit) {
     if (r.review?.usage) console.log(`  cost ${formatUsage(r.review.usage)}`);
     for (const f of r.filed) console.log(`  filed #${f.number}: ${f.title}`);
   }
-  if (results.some((r) => r.status !== (values.merge ? "merged" : "pr-opened"))) process.exit(1);
+  if (results.some((r) => r.status !== (values.merge ? "merged" : "pr-opened"))) process.exitCode = 1;
 } else if (values.issue !== undefined) {
   const issue = Number(values.issue);
   if (!Number.isInteger(issue) || issue < 1) {
@@ -213,7 +238,7 @@ if (values.audit) {
   if (result.prUrl) console.log(result.prUrl);
   if (result.review?.usage) console.log(`bunker: cost ${formatUsage(result.review.usage)}`);
   if (result.logPath) console.log(`bunker: log ${tty ? hyperlink(result.logPath) : result.logPath}`);
-  if (result.status !== (values.merge ? "merged" : "pr-opened")) process.exit(1);
+  if (result.status !== (values.merge ? "merged" : "pr-opened")) process.exitCode = 1;
 } else if (values.review) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
   const result = await review({ onEvent, prompt, agent, reviewer, sandbox, maxRounds });
@@ -241,4 +266,12 @@ if (values.audit) {
     if (r.error) console.log(`  ${r.error.trimEnd().replaceAll("\n", "\n  ")}`);
   }
   if (results.some((r) => r.status !== "merged")) process.exit(1);
+}
+
+if (ui) {
+  if (values["ui-keep"]) {
+    console.log(`bunker: run finished; still serving ${ui.url} (Ctrl-C to quit)`);
+    await new Promise(() => {});
+  }
+  await ui.stop();
 }
