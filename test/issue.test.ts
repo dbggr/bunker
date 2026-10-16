@@ -193,6 +193,31 @@ describe("runIssue()", () => {
     expect((await $`git -C ${repo} status --porcelain`.text()).trim()).toBe("");
   });
 
+  test("includes issue comments, oldest first with author, in the agent prompt", async () => {
+    const { repo } = await setup(issue({
+      comments: [
+        { author: { login: "alice" }, body: "First: also do X.", createdAt: "2026-01-01T00:00:00Z" },
+        { author: { login: "bob" }, body: "Second: and Y.", createdAt: "2026-01-02T00:00:00Z" },
+      ],
+    }));
+    const prompts: string[] = [];
+    await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE, prompts), sandbox: noSandbox() });
+    expect(prompts[0]).toContain("Make it so.");
+    const a = prompts[0]!.indexOf("@alice");
+    const b = prompts[0]!.indexOf("@bob");
+    expect(a).toBeGreaterThan(-1);
+    expect(b).toBeGreaterThan(a);
+    expect(prompts[0]).toContain("First: also do X.");
+    expect(prompts[0]).toContain("Second: and Y.");
+  });
+
+  test("an issue without comments gets no comments section", async () => {
+    const { repo } = await setup(issue({ comments: [] }));
+    const prompts: string[] = [];
+    await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE, prompts), sandbox: noSandbox() });
+    expect(prompts[0]).not.toMatch(/comments/i);
+  });
+
   test("writes a per-run log under .bunker/runs, excluded from git status", async () => {
     const { repo } = await setup(issue());
     process.env.BUNKER_GH_TOKEN = "secret-token-value";

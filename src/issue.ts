@@ -11,6 +11,8 @@ export interface IssueInfo {
   body: string;
   state: string;
   labels: { name: string }[];
+  /** Oldest first, as `gh issue view --json comments` returns them. */
+  comments?: { author?: { login?: string } | null; body: string }[];
 }
 
 export interface IssueOptions {
@@ -127,6 +129,13 @@ async function waitForMerge(
   }
 }
 
+/** The issue's comments as prompt text (oldest first, with author), or "" if there are none. */
+function commentsSection(comments: IssueInfo["comments"]): string {
+  if (!comments?.length) return "";
+  const items = comments.map((c) => `@${c.author?.login ?? "unknown"}:\n${c.body}`);
+  return `Comments on the issue (oldest first; later comments may add or refine requirements):\n\n${items.join("\n\n---\n\n")}\n\n`;
+}
+
 /**
  * Issue → worktree on its own branch → review() → optional sandboxed verify →
  * push + PR. Throws only when the issue can't be used (gh failure, closed);
@@ -140,7 +149,7 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
   const gitCfg = token ? ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"] : [];
-  const view = await $`gh issue view ${number} --json number,title,body,state,labels`.cwd(cwd).env(env).nothrow().quiet();
+  const view = await $`gh issue view ${number} --json number,title,body,state,labels,comments`.cwd(cwd).env(env).nothrow().quiet();
   if (view.exitCode !== 0) throw new Error(`gh issue view ${number} failed:\n${view.stderr}`);
   const issue = JSON.parse(view.stdout.toString()) as IssueInfo;
   if (issue.state.toUpperCase() !== "OPEN") throw new Error(`issue #${number} is closed`);
@@ -188,6 +197,7 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
 
   const prompt =
     `Implement GitHub issue #${number}: ${issue.title}\n\n${issue.body}\n\n` +
+    commentsSection(issue.comments) +
     "Use Conventional Commits for your commit messages, write tests first, and make the repo's tests pass.\n\n" +
     ISSUE_CONVENTION;
   const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, setup, reviewerInstruction: ISSUE_CONVENTION });
