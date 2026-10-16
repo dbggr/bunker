@@ -362,7 +362,11 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, ...opts }: Queue
     if (done.length >= limit) break;
     // The list lags label changes by seconds, so confirm the live state before working it.
     const view = await $`gh issue view ${q.number} --json state,labels`.cwd(cwd).env(env).nothrow().quiet();
-    if (view.exitCode !== 0) throw new Error(`gh issue view ${q.number} failed:\n${view.stderr}`);
+    if (view.exitCode !== 0) {
+      // A transient API error on one candidate must not discard the results already collected.
+      console.warn(`bunker: skipping #${q.number}, gh issue view failed:\n${view.stderr}`);
+      continue;
+    }
     const live = JSON.parse(view.stdout.toString()) as { state: string; labels: { name: string }[] };
     if (live.state !== "OPEN" || !live.labels.some((l) => l.name === "bunker")) continue;
     const result = await runIssue({ ...opts, cwd, issue: q.number });

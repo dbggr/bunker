@@ -64,7 +64,10 @@ if [ "$1 $2" = "issue list" ]; then
   if [ -f "${root}/list-partial-once" ]; then cat "${root}/list-partial-once"; rm "${root}/list-partial-once"; exit 0; fi
   cat "${root}/list.json"; exit 0
 fi
-if [ "$1 $2" = "issue view" ]; then cat "${root}/issue-$3.json"; exit 0; fi
+if [ "$1 $2" = "issue view" ]; then
+  if [ -f "${root}/view-fail-$3" ]; then echo "HTTP 502" >&2; exit 1; fi
+  cat "${root}/issue-$3.json"; exit 0
+fi
 if [ "$1 $2" = "issue create" ]; then
   shift 2
   for a in "$@"; do printf '%s\\n' "$a"; done >> "${createLog}"
@@ -170,6 +173,20 @@ describe("runQueue()", () => {
     await Bun.write(join(root, "issue-2.json"), JSON.stringify({ number: 2, title: "Second", body: "x", state: "OPEN", labels: [] }));
     const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[3, "merged"]]);
+  });
+
+  test("skips a candidate whose re-check fails instead of aborting the queue", async () => {
+    const { repo } = await setup(issues, "ff");
+    await Bun.write(join(repo, "..", "view-fail-1"), "");
+    const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 2, ciPollMs: 10 });
+    expect(rs.map((r) => [r.issue, r.status])).toEqual([[2, "merged"], [3, "merged"]]);
+  });
+
+  test("keeps earlier results when a later re-check fails", async () => {
+    const { repo } = await setup(issues, "ff");
+    await Bun.write(join(repo, "..", "view-fail-2"), "");
+    const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10 });
+    expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"], [3, "merged"]]);
   });
 
   test("retries an empty list once after a short delay", async () => {
