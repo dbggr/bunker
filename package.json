@@ -13,7 +13,8 @@
   "scripts": {
     "test": "bun test",
     "build": "bun build --compile src/cli.ts --outfile dist/bunker",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "docs:cli": "bun scripts/cli-docs.ts"
   },
   "bin": {
     "bunker": "src/cli.ts"
