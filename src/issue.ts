@@ -327,7 +327,7 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
 export interface QueueOptions extends Omit<IssueOptions, "issue"> {
   /** Max issues per run. Defaults to 5. */
   limit?: number;
-  /** Delay before re-listing once when the first list is empty (gh lags label changes). Defaults to 3000. */
+  /** Delay before re-listing once, always, to catch issues the first list missed (gh lags label changes). Defaults to 3000. */
   listRetryMs?: number;
 }
 
@@ -352,11 +352,11 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, ...opts }: Queue
       (a, b) => a.createdAt.localeCompare(b.createdAt) || a.number - b.number,
     );
   };
-  let queue = await listIssues();
-  if (!queue.length) {
-    await Bun.sleep(listRetryMs);
-    queue = await listIssues();
-  }
+  // The list can lag with a partial result too, so always list twice and merge.
+  const first = await listIssues();
+  await Bun.sleep(listRetryMs);
+  const merged = new Map([...first, ...(await listIssues())].map((q) => [q.number, q]));
+  const queue = [...merged.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.number - b.number);
   const done: QueueEntry[] = [];
   for (const q of queue) {
     if (done.length >= limit) break;
