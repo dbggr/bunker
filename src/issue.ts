@@ -81,7 +81,13 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   const excluded = (await Bun.file(exclude).exists()) ? await Bun.file(exclude).text() : "";
   if (!excluded.split("\n").includes("/.worktrees/")) await appendFile(exclude, `${excluded && !excluded.endsWith("\n") ? "\n" : ""}/.worktrees/\n`);
 
-  const add = await $`git -C ${repo} worktree add -q -b ${branch} ${worktree} HEAD`.nothrow().quiet();
+  // Branch from origin's default branch, not the caller's possibly-stale HEAD.
+  const head = await $`git -C ${repo} ls-remote --symref origin HEAD`.nothrow().quiet();
+  const defaultBranch = /^ref: refs\/heads\/(\S+)\s+HEAD$/m.exec(head.stdout.toString())?.[1] ?? "main";
+  const fetch = await $`git -C ${repo} fetch -q origin ${defaultBranch}`.nothrow().quiet();
+  if (fetch.exitCode !== 0) return fail("failed", { error: `could not fetch origin/${defaultBranch}:\n${fetch.stderr}` });
+
+  const add = await $`git -C ${repo} worktree add -q -b ${branch} ${worktree} FETCH_HEAD`.nothrow().quiet();
   if (add.exitCode !== 0) return fail("failed", { error: `could not create worktree:\n${add.stderr}` });
 
   const prompt =
