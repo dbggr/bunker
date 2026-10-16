@@ -39,7 +39,7 @@ export interface IssueOptions {
 }
 
 export interface IssueResult {
-  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified";
+  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-failed" | "ci-timeout" | "ci-unreadable" | "merged" | "merge-failed" | "merge-unverified";
   branch: string;
   worktree: string;
   prUrl?: string;
@@ -132,6 +132,10 @@ async function requiredChecks(branch: string, cwd: string, env: Record<string, s
   }
 }
 
+function unreadable(res: { exitCode: number; stdout: Buffer; stderr: Buffer }, what = `exit ${res.exitCode}`): string {
+  return `could not read the PR's check status (${what}); BUNKER_GH_TOKEN needs repository permissions Checks: Read-only and Commit statuses: Read-only:\n${res.stderr}${res.stdout}`.trimEnd();
+}
+
 /** Polls the PR's status check rollup until every check finished, one failed, or the timeout passed. */
 async function waitForChecks(
   prUrl: string,
@@ -141,9 +145,12 @@ async function waitForChecks(
   pollMs: number,
   baseBranch: string,
   startMs: number,
-): Promise<{ outcome: "passed" | "failed" | "timeout"; detail?: string }> {
+): Promise<{ outcome: "passed" | "failed" | "timeout" | "unreadable"; detail?: string }> {
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
+  // One probe up front: an unreadable rollup (e.g. token lacks Checks / Commit statuses read) fails fast.
+  const probe = await $`gh pr view ${prUrl} --json statusCheckRollup`.cwd(cwd).env(env).nothrow().quiet();
+  if (probe.exitCode !== 0) return { outcome: "unreadable", detail: unreadable(probe) };
   const required = await requiredChecks(baseBranch, cwd, env);
   let reopened = false;
   // GitHub may not have registered checks right after PR creation, so an empty rollup
@@ -152,15 +159,16 @@ async function waitForChecks(
   let emptyPolls = 0;
   for (;;) {
     const view = await $`gh pr view ${prUrl} --json statusCheckRollup`.cwd(cwd).env(env).nothrow().quiet();
-    // A failed or unparseable response is "pending", never "no checks".
-    let rollup: Rollup[] | undefined;
-    if (view.exitCode === 0) {
-      try {
-        rollup = JSON.parse(view.stdout.toString()).statusCheckRollup ?? [];
-      } catch {}
+    // A failed or unparseable response is an error, never "no checks".
+    if (view.exitCode !== 0) return { outcome: "unreadable", detail: unreadable(view) };
+    let rollup: Rollup[];
+    try {
+      rollup = JSON.parse(view.stdout.toString()).statusCheckRollup ?? [];
+    } catch {
+      return { outcome: "unreadable", detail: unreadable(view, "unparseable response") };
     }
-    emptyPolls = rollup?.length === 0 ? emptyPolls + 1 : 0;
-    const { outcome, failed, missing } = rollup ? judgeChecks(rollup, required) : { outcome: "pending" as const, failed: [], missing: [] };
+    emptyPolls = rollup.length === 0 ? emptyPolls + 1 : 0;
+    const { outcome, failed, missing } = judgeChecks(rollup, required);
     // With required checks, an empty rollup means "not started", never "no checks".
     if (outcome === "passed" && (required.length > 0 || emptyPolls === 0 || emptyPolls >= emptyPollsNeeded)) return { outcome };
     if (outcome === "failed") return { outcome, detail: `CI checks failed: ${failed.join(", ")}` };
@@ -298,7 +306,7 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
 
   const ci = await waitForChecks(prUrl, worktree, env, ciTimeoutMin * 60_000, ciPollMs, defaultBranch, ciStartMin * 60_000);
   if (ci.outcome !== "passed") {
-    return fail(ci.outcome === "failed" ? "ci-failed" : "ci-timeout", { ...opened, error: ci.detail });
+    return fail(ci.outcome === "failed" ? "ci-failed" : ci.outcome === "unreadable" ? "ci-unreadable" : "ci-timeout", { ...opened, error: ci.detail });
   }
 
   // No --delete-branch: gh would also switch/delete the local branch, which fails in a worktree.
