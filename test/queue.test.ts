@@ -100,6 +100,9 @@ describe("parseIssueBlocks()", () => {
     expect(parseIssueBlocks(`${b("…")} ${b("...")} ${b("  ")} ${b("short title")} ${b("Short Title")}`)).toEqual([]);
     expect(parseIssueBlocks(`\`x\` then ${b("Real")}`)).toEqual([{ title: "Real", body: "body" }]);
     expect(parseIssueBlocks(`a stray \` tick\n${b("Real")}\nanother \` tick`)).toEqual([{ title: "Real", body: "body" }]);
+    // Only an equal-length backtick run closes a span.
+    expect(parseIssueBlocks(`a \`\`b\`c ${b("Real")} d\`\` e`)).toEqual([]);
+    expect(parseIssueBlocks(`\`a\`\` ${b("Real")}`)).toEqual([{ title: "Real", body: "body" }]);
   });
 });
 

@@ -67,7 +67,7 @@ export function parseIssueBlocks(text: string): { title: string; body: string }[
   // Blocks an agent merely quotes (fenced code or inline code spans) are not findings.
   const prose = text
     .replace(/^ *(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^ *\1[`~]*[ \t]*$|(?![\s\S]))/gm, "")
-    .replace(/(`+)[^`\n][^\n]*?\1/g, "");
+    .replace(/(?<!`)(`+)(?!`)[^\n]*?(?<!`)\1(?!`)/g, "");
   for (const m of prose.matchAll(/<issue\s+title="([^"]*)"\s*>([\s\S]*?)<\/issue>/g)) {
     const title = m[1]!.trim();
     const placeholder = !/[\p{L}\p{N}]/u.test(title) || title.toLowerCase() === "short title";
