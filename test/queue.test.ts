@@ -53,12 +53,16 @@ async function setup(issues: [number, string, string][], mergeMode: "ff" | "none
   await $`mkdir ${bin}`;
   await Bun.write(join(root, "list.json"), JSON.stringify(issues.map(([number, title, createdAt]) => ({ number, title, createdAt }))));
   for (const [number, title] of issues) {
-    await Bun.write(join(root, `issue-${number}.json`), JSON.stringify({ number, title, body: "Do it.", state: "OPEN", labels: [] }));
+    await Bun.write(join(root, `issue-${number}.json`), JSON.stringify({ number, title, body: "Do it.", state: "OPEN", labels: [{ name: "bunker" }] }));
   }
   await Bun.write(
     join(bin, "gh"),
     `#!/bin/sh
-if [ "$1 $2" = "issue list" ]; then echo "$*" >> "${root}/list.log"; cat "${root}/list.json"; exit 0; fi
+if [ "$1 $2" = "issue list" ]; then
+  echo "$*" >> "${root}/list.log"
+  if [ -f "${root}/list-empty-once" ]; then rm "${root}/list-empty-once"; echo '[]'; exit 0; fi
+  cat "${root}/list.json"; exit 0
+fi
 if [ "$1 $2" = "issue view" ]; then cat "${root}/issue-$3.json"; exit 0; fi
 if [ "$1 $2" = "issue create" ]; then
   shift 2
@@ -156,5 +160,23 @@ describe("runQueue()", () => {
     const { repo } = await setup(issues, "ff");
     const rs = await runQueue({ cwd: repo, agent: fakeAgent("nope"), sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "rejected"]]);
+  });
+
+  test("skips listed issues that are closed or no longer labelled when re-checked", async () => {
+    const { repo } = await setup(issues, "ff");
+    const root = join(repo, "..");
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "x", state: "CLOSED", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, "issue-2.json"), JSON.stringify({ number: 2, title: "Second", body: "x", state: "OPEN", labels: [] }));
+    const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10 });
+    expect(rs.map((r) => [r.issue, r.status])).toEqual([[3, "merged"]]);
+  });
+
+  test("retries an empty list once after a short delay", async () => {
+    const { repo } = await setup(issues);
+    await Bun.write(join(repo, "..", "list-empty-once"), "");
+    const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), listRetryMs: 10 });
+    expect(rs.map((r) => r.issue)).toEqual([1]);
+    const log = (await Bun.file(join(repo, "..", "list.log")).text()).trim().split("\n");
+    expect(log).toHaveLength(2);
   });
 });

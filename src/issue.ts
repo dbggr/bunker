@@ -299,6 +299,8 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
 export interface QueueOptions extends Omit<IssueOptions, "issue"> {
   /** Max issues per run. Defaults to 5. */
   limit?: number;
+  /** Delay before re-listing once when the first list is empty (gh lags label changes). Defaults to 3000. */
+  listRetryMs?: number;
 }
 
 export interface QueueEntry extends IssueResult {
@@ -311,17 +313,30 @@ export interface QueueEntry extends IssueResult {
  * stops after the first PR opens; with `merge` continues only after `merged`.
  * Stops at the first other outcome, or after `limit` issues.
  */
-export async function runQueue({ limit = 5, ...opts }: QueueOptions): Promise<QueueEntry[]> {
+export async function runQueue({ limit = 5, listRetryMs = 3000, ...opts }: QueueOptions): Promise<QueueEntry[]> {
   const cwd = opts.cwd ?? process.cwd();
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
-  const list = await $`gh issue list --label bunker --state open --limit 1000 --json number,title,createdAt`.cwd(cwd).env(env).nothrow().quiet();
-  if (list.exitCode !== 0) throw new Error(`gh issue list failed:\n${list.stderr}`);
-  const queue = (JSON.parse(list.stdout.toString()) as { number: number; title: string; createdAt: string }[])
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.number - b.number)
-    .slice(0, limit);
+  const listIssues = async () => {
+    const list = await $`gh issue list --label bunker --state open --limit 1000 --json number,title,createdAt`.cwd(cwd).env(env).nothrow().quiet();
+    if (list.exitCode !== 0) throw new Error(`gh issue list failed:\n${list.stderr}`);
+    return (JSON.parse(list.stdout.toString()) as { number: number; title: string; createdAt: string }[]).sort(
+      (a, b) => a.createdAt.localeCompare(b.createdAt) || a.number - b.number,
+    );
+  };
+  let queue = await listIssues();
+  if (!queue.length) {
+    await Bun.sleep(listRetryMs);
+    queue = await listIssues();
+  }
   const done: QueueEntry[] = [];
   for (const q of queue) {
+    if (done.length >= limit) break;
+    // The list lags label changes by seconds, so confirm the live state before working it.
+    const view = await $`gh issue view ${q.number} --json state,labels`.cwd(cwd).env(env).nothrow().quiet();
+    if (view.exitCode !== 0) throw new Error(`gh issue view ${q.number} failed:\n${view.stderr}`);
+    const live = JSON.parse(view.stdout.toString()) as { state: string; labels: { name: string }[] };
+    if (live.state !== "OPEN" || !live.labels.some((l) => l.name === "bunker")) continue;
     const result = await runIssue({ ...opts, cwd, issue: q.number });
     done.push({ ...result, issue: q.number, title: q.title });
     if (!opts.merge || result.status !== "merged") break;
