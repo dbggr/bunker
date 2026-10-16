@@ -21,5 +21,8 @@ export const options = {
   audit: { type: "boolean", default: false },
   "max-issues": { type: "string" },
   focus: { type: "string" },
+  ui: { type: "boolean", default: false },
+  port: { type: "string" },
+  "ui-keep": { type: "boolean", default: false },
   version: { type: "boolean", default: false },
 } as const satisfies ParseArgsOptionsConfig;

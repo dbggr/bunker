@@ -43,3 +43,12 @@ describe("bad input", () => {
     expect(r.err).toContain("run bunker --help for all options");
   });
 });
+
+describe("--ui flags", () => {
+  test("--ui-keep, --port need --ui; --ui needs a run mode", () => {
+    expect(cli("--issue", "1", "--port", "4000").code).toBe(2);
+    expect(cli("--issue", "1", "--ui-keep").code).toBe(2);
+    expect(cli("--ui", "do a thing").code).toBe(2);
+    expect(cli("--issue", "1", "--ui", "--port", "nope").code).toBe(2);
+  });
+});
