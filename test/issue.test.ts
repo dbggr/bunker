@@ -167,6 +167,28 @@ describe("runIssue()", () => {
     expect(await Bun.file(join(r.worktree, "feature.txt")).exists()).toBe(true);
   });
 
+  test("verify runs in the sandbox by default, not on the host", async () => {
+    const { repo } = await setup(issue());
+    const calls: string[][] = [];
+    const inner = noSandbox();
+    const sandbox = { exec: (cmd: string[], ctx: { worktree: string; gitCommonDir: string }) => (calls.push(cmd), inner.exec(cmd, ctx)) };
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox, verify: "echo VERIFYME; exit 4" });
+    expect(r.status).toBe("verify-failed");
+    expect(r.verifyOutput).toContain("VERIFYME");
+    expect(calls.some((c) => c.join(" ").includes("VERIFYME"))).toBe(true);
+  });
+
+  test("verifyOnHost runs verify on the host, not in the sandbox", async () => {
+    const { repo } = await setup(issue());
+    const calls: string[][] = [];
+    const inner = noSandbox();
+    const sandbox = { exec: (cmd: string[], ctx: { worktree: string; gitCommonDir: string }) => (calls.push(cmd), inner.exec(cmd, ctx)) };
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox, verify: "echo ONHOST; exit 4", verifyOnHost: true });
+    expect(r.status).toBe("verify-failed");
+    expect(r.verifyOutput).toContain("ONHOST");
+    expect(calls.some((c) => c.join(" ").includes("ONHOST"))).toBe(false);
+  });
+
   test("rejected → nothing pushed, worktree kept", async () => {
     const { repo, origin, prLog } = await setup(issue());
     const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent("nope"), sandbox: noSandbox(), maxRounds: 1 });

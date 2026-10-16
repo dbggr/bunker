@@ -20,8 +20,10 @@ export interface IssueOptions {
   /** The target repo's main checkout. Defaults to process.cwd(). */
   cwd?: string;
   maxRounds?: number;
-  /** Shell command run on the host in the worktree once the review approves. */
+  /** Shell command run in the worktree, inside `sandbox`, once the review approves. */
   verify?: string;
+  /** Run `verify` on the host (with the caller's credentials) instead of in the sandbox. */
+  verifyOnHost?: boolean;
   /** After the PR opens, squash-merge it and check the merge landed. Requires `verify`. */
   merge?: boolean;
 }
@@ -60,12 +62,12 @@ function reviewLines(result: ReviewResult): string {
 }
 
 /**
- * Issue → worktree on its own branch → review() → optional host-side verify →
+ * Issue → worktree on its own branch → review() → optional sandboxed verify →
  * push + PR. Throws only when the issue can't be used (gh failure, closed);
  * every later outcome is a status, and the worktree and branch are always kept.
  * The caller's checkout and branch are never touched.
  */
-export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, verify, merge }: IssueOptions): Promise<IssueResult> {
+export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, verify, verifyOnHost, merge }: IssueOptions): Promise<IssueResult> {
   if (merge && !verify) throw new Error("merge requires verify");
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -111,9 +113,20 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   if (result.status !== "approved") return fail(result.status, { review: result, ...(result.error ? { error: result.error } : {}) });
 
   if (verify) {
-    const out = await $`sh -c ${verify}`.cwd(worktree).env(env).nothrow().quiet();
-    if (out.exitCode !== 0) {
-      const output = (out.stdout.toString() + out.stderr.toString()).slice(-VERIFY_TAIL);
+    let code: number;
+    let text: string;
+    if (verifyOnHost) {
+      const out = await $`sh -c ${verify}`.cwd(worktree).env(env).nothrow().quiet();
+      code = out.exitCode;
+      text = out.stdout.toString() + out.stderr.toString();
+    } else {
+      // Agent-written code: same sandbox as the agent, no GitHub tokens. stderr folded in so we can report it.
+      const out = await sandbox.exec(["sh", "-c", `(${verify}) 2>&1`], { worktree, gitCommonDir });
+      code = out.code;
+      text = out.stdout;
+    }
+    if (code !== 0) {
+      const output = text.slice(-VERIFY_TAIL);
       return fail("verify-failed", { review: result, verifyOutput: output });
     }
   }
