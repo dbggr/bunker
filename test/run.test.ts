@@ -119,6 +119,17 @@ describe("claudeCode()", () => {
   test("passes a model through", () => {
     expect(claudeCode({ model: "claude-sonnet-5-5" }).command("x")).toContain("claude-sonnet-5-5");
   });
+
+  test("turns off Claude commit/PR attribution by default", () => {
+    const cmd = claudeCode().command("x");
+    const settings = cmd[cmd.indexOf("--settings") + 1];
+    expect(cmd).toContain("--settings");
+    expect(JSON.parse(settings!)).toEqual({ attribution: { commit: "", pr: "" } });
+  });
+
+  test("attribution: true leaves Claude's default attribution alone", () => {
+    expect(claudeCode({ attribution: true }).command("x")).not.toContain("--settings");
+  });
 });
 
 const dockerUp = (await $`docker info`.quiet().nothrow()).exitCode === 0;

@@ -49,7 +49,12 @@ const DEFAULT_SIGNAL = "<promise>COMPLETE</promise>";
 const COMMIT_INSTRUCTION =
   "\n\nWhen you are done, commit your changes with git. Uncommitted work is discarded.";
 
-export function claudeCode(opts: { model?: string } = {}): Agent {
+// The container has no ~/.claude/settings.json, so claude would add its
+// Co-Authored-By / "Generated with" lines. Pass the setting on every run so it
+// holds in any image, not just the base.
+const NO_ATTRIBUTION = JSON.stringify({ attribution: { commit: "", pr: "" } });
+
+export function claudeCode(opts: { model?: string; attribution?: boolean } = {}): Agent {
   return {
     command: (prompt) => [
       "claude",
@@ -57,6 +62,7 @@ export function claudeCode(opts: { model?: string } = {}): Agent {
       prompt + COMMIT_INSTRUCTION,
       "--dangerously-skip-permissions",
       ...(opts.model ? ["--model", opts.model] : []),
+      ...(opts.attribution ? [] : ["--settings", NO_ATTRIBUTION]),
     ],
   };
 }
