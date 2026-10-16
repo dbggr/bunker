@@ -365,7 +365,7 @@ export function emitStage(t: Pick<EventTarget, "onEvent" | "task" | "round" | "r
 }
 
 /** A failed agent run; carries the usage already spent. */
-class AgentFailure extends Error {
+export class AgentFailure extends Error {
   constructor(message: string, readonly usage?: Usage) {
     super(message);
   }

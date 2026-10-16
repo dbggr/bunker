@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
-import { claudeCode, formatUsage, docker, noSandbox, review, run, runAll } from "./index.ts";
+import { AgentFailure, claudeCode, formatUsage, docker, noSandbox, review, run, runAll } from "./index.ts";
 import { runAudit } from "./audit.ts";
 import { runIssue, runQueue } from "./issue.ts";
 import { redact } from "./redact.ts";
@@ -256,7 +256,14 @@ if (values.audit) {
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
   if (result.status !== "approved") process.exit(1);
 } else if (prompt) {
-  const result = await run({ onEvent, prompt, agent, sandbox, maxIterations });
+  let result;
+  try {
+    result = await run({ onEvent, prompt, agent, sandbox, maxIterations });
+  } catch (e) {
+    console.error(`\nbunker: ${e instanceof Error ? e.message : e}`);
+    if (e instanceof AgentFailure && e.usage) console.log(`bunker: cost ${formatUsage(e.usage)}`);
+    process.exit(1);
+  }
   console.log(`\nbunker: ${result.commits.length} commit(s) merged from ${result.branch}`);
   for (const c of result.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
