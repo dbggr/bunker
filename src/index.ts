@@ -303,6 +303,13 @@ async function addWorktree(cwd: string, base: string): Promise<Worktree> {
   return wt;
 }
 
+/** A failed agent run; carries the usage already spent. */
+class AgentFailure extends Error {
+  constructor(message: string, readonly usage?: Usage) {
+    super(message);
+  }
+}
+
 interface AgentOutcome {
   commits: Commit[];
   iterations: Iteration[];
@@ -328,9 +335,11 @@ async function runAgent(
   try {
     for (let i = 0; i < maxIterations; i++) {
       const { code, stdout } = await sandbox.exec(agent.command(prompt), { worktree: wt.path, gitCommonDir });
-      if (code !== 0) throw new Error(`agent exited with ${code}; work kept on ${wt.branch}`);
-      const total = await commitsBetween(cwd, base, wt.branch);
       const { text, usage } = interpret(agent, stdout);
+      if (code !== 0) {
+        throw new AgentFailure(`agent exited with ${code}; work kept on ${wt.branch}`, sumUsage([...iterations.map((i) => i.usage), usage]));
+      }
+      const total = await commitsBetween(cwd, base, wt.branch);
       iterations.push({ exitCode: code, commits: total.slice(commits.length), ...(usage ? { usage } : {}) });
       commits = total;
       const matched = signals.find((s) => text.includes(s));
@@ -414,7 +423,8 @@ export async function runAll({ tasks, cwd = process.cwd(), ...opts }: RunAllOpti
     const { branch } = worktrees[i]!;
     if (outcome.status === "rejected") {
       const error = redact(outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason));
-      results.push({ prompt, status: "failed", branch, commits: [], iterations: [], error });
+      const usage = outcome.reason instanceof AgentFailure ? outcome.reason.usage : undefined;
+      results.push({ prompt, status: "failed", branch, commits: [], iterations: [], ...(usage ? { usage } : {}), error });
       continue;
     }
     const conflict = await mergeBack(cwd, branch, outcome.value.commits);

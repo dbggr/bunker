@@ -180,6 +180,7 @@ if (values.audit) {
     console.log(`#${r.issue} [${r.status}] ${r.prUrl ?? "-"}`);
     if (r.error) console.log(`  ${r.error.trimEnd().replaceAll("\n", "\n  ")}`);
     if (r.logPath) console.log(`  log: ${r.logPath}`);
+    if (r.review?.usage) console.log(`  cost ${formatUsage(r.review.usage)}`);
     for (const f of r.filed) console.log(`  filed #${f.number}: ${f.title}`);
   }
   if (results.some((r) => r.status !== (values.merge ? "merged" : "pr-opened"))) process.exit(1);
