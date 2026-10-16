@@ -142,13 +142,13 @@ async function markBlocked(issue: number, blocker: { number: number; title: stri
   await $`gh issue comment ${issue} --body ${`Blocked by #${blocker.number}: ${blocker.title}`}`.cwd(cwd).env(env).nothrow().quiet();
 }
 
-/** Whether #n is closed as completed; undefined if gh can't say. */
+/** Whether #n is closed (any reason, incl. not planned: a rejected blocker no longer blocks); undefined if gh can't say. */
 async function isDone(n: number, cwd: string, env: Env): Promise<boolean | undefined> {
-  const v = await $`gh issue view ${n} --json state,stateReason`.cwd(cwd).env(env).nothrow().quiet();
+  const v = await $`gh issue view ${n} --json state`.cwd(cwd).env(env).nothrow().quiet();
   if (v.exitCode !== 0) return undefined;
   try {
-    const j = JSON.parse(v.stdout.toString()) as { state: string; stateReason?: string };
-    return j.state.toUpperCase() === "CLOSED" && j.stateReason?.toUpperCase() !== "NOT_PLANNED";
+    const j = JSON.parse(v.stdout.toString()) as { state: string };
+    return j.state.toUpperCase() === "CLOSED";
   } catch {
     return undefined;
   }

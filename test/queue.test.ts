@@ -329,6 +329,15 @@ describe("blocked issues", () => {
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"]]);
   });
 
+  test("a blocker closed as not planned no longer blocks", async () => {
+    const { repo } = await setup(issues, "ff");
+    const root = join(repo, "..");
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "t", body: "Depends on #50", state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "t", body: "", state: "CLOSED", stateReason: "NOT_PLANNED", labels: [] }));
+    const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10, listRetryMs: 10 });
+    expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"]]);
+  });
+
   test("auto-resume: a bunker-blocked issue whose blockers closed goes back to bunker and is worked", async () => {
     const { repo } = await setup(issues, "ff");
     const root = join(repo, "..");

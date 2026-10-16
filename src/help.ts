@@ -33,9 +33,6 @@ Single prompt and --task:
                              \`Blocked by #N\` / \`Depends on #N\`. An agent that prints <blocked-by title="…">…</blocked-by>
                              gets its blocker filed as \`discovered\` and the issue relabelled \`bunker-blocked\`
                              (no PR, doesn't count toward --limit); it returns to \`bunker\` once the blockers close
-                             skips issues with an open \`Blocked by #N\` / \`Depends on #N\`; an agent that prints
-                             <blocked-by> files the blocker as \`discovered\` and the issue becomes \`bunker-blocked\`,
-                             back to \`bunker\` once its blockers close
   --limit <n>                (--queue) max issues per run (default 5; blocked issues don't count)
   --setup "<cmd>"            run in the worktree before the agent (default: .bunker/setup)
   --verify "<cmd>"           run after approval; a failure stops before pushing (default: .bunker/verify)
