@@ -76,7 +76,7 @@ interface Env {
 }
 
 // A repo with a bare local origin and a fake `gh` first on PATH.
-async function setup(issue: object, mergeMode: "ff" | "drop" | "fail" | "none" | "ff-exit1" = "none"): Promise<Env> {
+async function setup(issue: object, mergeMode: "ff" | "drop" | "fail" | "none" | "closed" | "never" | "noauto" | "noauto-protected" = "none"): Promise<Env> {
   const root = await tmp("bunker-issue-");
   const origin = join(root, "origin.git");
   const repo = join(root, "repo");
@@ -101,32 +101,44 @@ if [ "$1 $2" = "pr create" ]; then
   echo "https://github.com/o/r/pull/99"
   exit 0
 fi
+LAND='git --git-dir="${origin}" update-ref refs/heads/main refs/heads/feature/7-add-feature${mergeMode === "drop" ? "~1" : ""}'
 if [ "$1 $2" = "pr merge" ]; then
   echo "$GH_TOKEN|$*" >> "${root}/merge.log"
-  ${
-    mergeMode === "fail"
-      ? "exit 1"
-      : `git --git-dir="${origin}" update-ref refs/heads/main "refs/heads/feature/7-add-feature${mergeMode === "drop" ? "~1" : ""}"; echo "fatal: 'main' is already used by worktree" >&2; exit ${mergeMode === "ff-exit1" ? 1 : 0}`
-  }
+  case "$*" in
+    *--auto*)
+      ${
+        mergeMode === "fail"
+          ? 'echo "boom: no permission" >&2; exit 1'
+          : mergeMode.startsWith("noauto")
+            ? 'echo "GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)" >&2; exit 1'
+            : `touch "${root}/armed"; exit 0`
+      };;
+    *)
+      ${
+        mergeMode === "noauto-protected"
+          ? 'echo "X Pull request is not mergeable: the base branch policy prohibits the merge" >&2; exit 1'
+          : `eval "$LAND"; touch "${root}/merged"; exit 0`
+      };;
+  esac
 fi
 if [ "$1 $2" = "pr view" ]; then
   echo "$*" >> "${root}/view.log"
-  case "$*" in *statusCheckRollup*)
-    echo "$*" >> "${root}/checks-view.log"
-    if [ -f "${root}/fail-once" ]; then rm "${root}/fail-once"; echo "boom" >&2; exit 1; fi
-    if [ -f "${root}/forbidden" ]; then echo "GraphQL: Resource not accessible by personal access token (HTTP 403)" >&2; exit 1; fi
-    if [ -f "${root}/checks.json" ]; then cat "${root}/checks.json"; else echo '{"statusCheckRollup":[]}'; fi
-    exit 0;;
-  esac
-  echo '{"state":"${mergeMode === "ff-exit1" ? "MERGED" : "OPEN"}"}'
+  if [ -f "${root}/merged" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"abc"}}'; exit 0; fi
+  if [ -f "${root}/armed" ]; then
+    if [ ! -f "${root}/seen" ]; then touch "${root}/seen"; echo '{"state":"OPEN","mergeCommit":null}'; exit 0; fi
+    ${
+      mergeMode === "closed"
+        ? `echo '{"state":"CLOSED","mergeCommit":null}'; exit 0`
+        : mergeMode === "never"
+          ? `echo '{"state":"OPEN","mergeCommit":null}'; exit 0`
+          : `eval "$LAND"; touch "${root}/merged"; echo '{"state":"MERGED","mergeCommit":{"oid":"abc"}}'; exit 0`
+    }
+  fi
+  echo '{"state":"OPEN","mergeCommit":null}'
   exit 0
 fi
 if [ "$1 $2" = "pr close" ] || [ "$1 $2" = "pr reopen" ]; then echo "$1 $2" >> "${root}/reopen.log"; exit 0; fi
 if [ "$1" = "api" ]; then
-  case "$*" in *required_status_checks*)
-    if [ -f "${root}/protection.json" ]; then cat "${root}/protection.json"; exit 0; fi
-    echo "gh: Not Found (HTTP 404)" >&2; exit 1;;
-  esac
   echo "$*" >> "${root}/api.log"
   exit 0
 fi
@@ -351,12 +363,15 @@ describe("runIssue() --merge", () => {
     runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10, ...extra });
   const branches = async (repo: string) => (await $`git -C ${repo} branch ${"--format=%(refname:short)"}`.text()).trim().split("\n");
 
-  test("merged + landed → worktree and local branch removed", async () => {
+  test("auto-merge armed, PR becomes MERGED → landing check, cleanup, merged", async () => {
     const { repo, origin, mergeLog } = await setup(issue(), "ff");
     const r = await run(repo);
     expect(r.status).toBe("merged");
     expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
-    expect((await Bun.file(mergeLog).text()).trim()).toBe("|pr merge https://github.com/o/r/pull/99 --squash");
+    expect((await Bun.file(mergeLog).text()).trim()).toBe("|pr merge https://github.com/o/r/pull/99 --auto --squash");
+    const views = (await Bun.file(join(dirname(mergeLog), "view.log")).text()).trim().split("\n");
+    expect(views.every((v) => v === "pr view https://github.com/o/r/pull/99 --json state,mergeCommit")).toBe(true);
+    expect(views.length).toBeGreaterThanOrEqual(2);
     expect((await Bun.file(join(dirname(mergeLog), "api.log")).text()).trim()).toBe(
       "api -X DELETE repos/{owner}/{repo}/git/refs/heads/feature/7-add-feature",
     );
@@ -374,184 +389,50 @@ describe("runIssue() --merge", () => {
     expect(await branches(repo)).toContain(r.branch);
   });
 
-  test("merge command fails → merge-failed, PR left open, worktree kept", async () => {
+  test("arming fails → merge-failed with the full error, PR left open, worktree kept", async () => {
     const { repo } = await setup(issue(), "fail");
     const r = await run(repo);
     expect(r.status).toBe("merge-failed");
+    expect(r.error).toContain("boom: no permission");
     expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
     expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
   });
 
-  test("merge exits non-zero but PR is MERGED → landing check → merged", async () => {
-    const { repo } = await setup(issue(), "ff-exit1");
+  test("PR closed without merging → merge-failed, worktree kept", async () => {
+    const { repo } = await setup(issue(), "closed");
+    const r = await run(repo);
+    expect(r.status).toBe("merge-failed");
+    expect(r.error).toContain("CLOSED");
+    expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
+  });
+
+  test("never merges → ci-timeout, PR left open, auto-merge stays armed, worktree kept", async () => {
+    const { repo, mergeLog } = await setup(issue(), "never");
+    const r = await run(repo, { ciTimeoutMin: 0.002 });
+    expect(r.status).toBe("ci-timeout");
+    expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
+    expect((await Bun.file(mergeLog).text()).trim().split("\n")).toHaveLength(1);
+    expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
+    expect(await Bun.file(join(dirname(mergeLog), "api.log")).exists()).toBe(false);
+  });
+
+  test("auto-merge not allowed → plain squash merge fallback → merged", async () => {
+    const { repo, mergeLog } = await setup(issue(), "noauto");
     const r = await run(repo);
     expect(r.status).toBe("merged");
+    expect((await Bun.file(mergeLog).text()).trim().split("\n")).toEqual([
+      "|pr merge https://github.com/o/r/pull/99 --auto --squash",
+      "|pr merge https://github.com/o/r/pull/99 --squash",
+    ]);
     expect(await branches(repo)).toEqual(["main"]);
   });
 
-  test("merge-failed error carries the full gh output and PR state", async () => {
-    const { repo } = await setup(issue(), "fail");
+  test("auto-merge not allowed and plain merge refused by protection → merge-failed, PR left open", async () => {
+    const { repo } = await setup(issue(), "noauto-protected");
     const r = await run(repo);
-    expect(r.error).toContain("gh pr merge failed");
-    expect(r.error).toContain("PR state: OPEN");
-  });
-
-  describe("CI checks", () => {
-    const withChecks = async (rollup: object[]) => {
-      const env = await setup(issue(), "ff");
-      await Bun.write(join(dirname(env.repo), "checks.json"), JSON.stringify({ statusCheckRollup: rollup }));
-      return env;
-    };
-    const pass = { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" };
-
-    test("passing checks → merged", async () => {
-      const { repo } = await withChecks([pass, { __typename: "StatusContext", context: "x", state: "SUCCESS" }]);
-      expect((await run(repo, { ciPollMs: 10 })).status).toBe("merged");
-    });
-
-    test("pending then passing → waits, then merged", async () => {
-      const { repo } = await withChecks([{ ...pass, status: "IN_PROGRESS", conclusion: "" }]);
-      const root = dirname(repo);
-      setTimeout(() => Bun.write(join(root, "checks.json"), JSON.stringify({ statusCheckRollup: [pass] })), 150);
-      expect((await run(repo, { ciPollMs: 20 })).status).toBe("merged");
-    });
-
-    test("failing check → ci-failed, PR left open, worktree kept, never merges", async () => {
-      const { repo, mergeLog } = await withChecks([pass, { ...pass, name: "lint", conclusion: "FAILURE" }]);
-      const r = await run(repo, { ciPollMs: 10 });
-      expect(r.status).toBe("ci-failed");
-      expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
-      expect(r.error).toContain("lint");
-      expect(await Bun.file(mergeLog).exists()).toBe(false);
-      expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
-      expect(await branches(repo)).toContain(r.branch);
-    });
-
-    test("failed status context → ci-failed", async () => {
-      const { repo } = await withChecks([{ __typename: "StatusContext", context: "ci/x", state: "ERROR" }]);
-      expect((await run(repo, { ciPollMs: 10 })).status).toBe("ci-failed");
-    });
-
-    test("still pending at the timeout → ci-timeout, worktree kept", async () => {
-      const { repo, mergeLog } = await withChecks([{ ...pass, status: "QUEUED", conclusion: "" }]);
-      const r = await run(repo, { ciPollMs: 10, ciTimeoutMin: 0.002 });
-      expect(r.status).toBe("ci-timeout");
-      expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
-      expect(await Bun.file(mergeLog).exists()).toBe(false);
-      expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
-    });
-
-    test("no checks configured → merges straight away", async () => {
-      const { repo } = await withChecks([]);
-      expect((await run(repo, { ciPollMs: 10 })).status).toBe("merged");
-    });
-
-    test("checks that register late are waited for, not skipped as 'no checks'", async () => {
-      const { repo } = await withChecks([]);
-      const root = dirname(repo);
-      setTimeout(() => Bun.write(join(root, "checks.json"), JSON.stringify({ statusCheckRollup: [{ ...pass, conclusion: "FAILURE" }] })), 60);
-      const r = await run(repo, { ciPollMs: 50 });
-      expect(r.status).toBe("ci-failed");
-      expect(await Bun.file(join(root, "merge.log")).exists()).toBe(false);
-    });
-
-    test("a failed gh pr view is an error, never 'no checks'", async () => {
-      const { repo } = await withChecks([pass]);
-      const root = dirname(repo);
-      await Bun.write(join(root, "fail-once"), "");
-      const r = await run(repo, { ciPollMs: 20 });
-      expect(r.status).toBe("ci-unreadable");
-      expect(await Bun.file(join(root, "merge.log")).exists()).toBe(false);
-    });
-
-    test("403 on the check query → ci-unreadable naming the token permissions, no merge", async () => {
-      const { repo } = await withChecks([pass]);
-      const root = dirname(repo);
-      await Bun.write(join(root, "forbidden"), "");
-      const r = await run(repo, { ciPollMs: 10 });
-      expect(r.status).toBe("ci-unreadable");
-      expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
-      expect(r.error).toContain("Resource not accessible");
-      expect(r.error).toContain("Checks: Read");
-      expect(r.error).toContain("Commit statuses: Read");
-      expect(await Bun.file(join(root, "merge.log")).exists()).toBe(false);
-      expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
-      expect(await Bun.file(r.logPath!).text()).toContain("ci-unreadable");
-      expect((await Bun.file(join(root, "checks-view.log")).text()).trim().split("\n").length).toBe(1);
-    });
-
-    test("check query starts failing mid-wait → ci-unreadable", async () => {
-      const { repo } = await withChecks([{ ...pass, status: "IN_PROGRESS", conclusion: "" }]);
-      const root = dirname(repo);
-      setTimeout(() => Bun.write(join(root, "forbidden"), ""), 80);
-      const r = await run(repo, { ciPollMs: 20 });
-      expect(r.status).toBe("ci-unreadable");
-      expect(r.error).toContain("Resource not accessible");
-    });
-
-    describe("required checks", () => {
-      const required = async (contexts: string[], rollup: object[] = []) => {
-        const env = await withChecks(rollup);
-        await Bun.write(join(dirname(env.repo), "protection.json"), JSON.stringify({ strict: false, contexts, checks: contexts.map((context) => ({ context, app_id: 1 })) }));
-        return env;
-      };
-      const reopens = async (repo: string) => {
-        const f = Bun.file(join(dirname(repo), "reopen.log"));
-        return (await f.exists()) ? (await f.text()).trim().split("\n") : [];
-      };
-
-      test("empty rollup is not 'no checks' when a check is required; late check is waited for", async () => {
-        const { repo } = await required(["test"]);
-        setTimeout(() => Bun.write(join(dirname(repo), "checks.json"), JSON.stringify({ statusCheckRollup: [pass] })), 200);
-        const r = await run(repo, { ciPollMs: 10, ciStartMin: 1 });
-        expect(r.status).toBe("merged");
-        expect(await reopens(repo)).toEqual([]);
-      });
-
-      test("waits until every required check completed", async () => {
-        const { repo } = await required(["test", "lint"], [pass]);
-        setTimeout(() => Bun.write(join(dirname(repo), "checks.json"), JSON.stringify({ statusCheckRollup: [pass, { ...pass, name: "lint" }] })), 150);
-        const r = await run(repo, { ciPollMs: 10, ciStartMin: 1 });
-        expect(r.status).toBe("merged");
-      });
-
-      test("never appears → one close/reopen, then ci-timeout", async () => {
-        const { repo, mergeLog } = await required(["test"]);
-        const r = await run(repo, { ciPollMs: 10, ciStartMin: 0.001, ciTimeoutMin: 0.01 });
-        expect(r.status).toBe("ci-timeout");
-        expect(await reopens(repo)).toEqual(["pr close", "pr reopen"]);
-        expect(await Bun.file(mergeLog).exists()).toBe(false);
-      });
-
-      test("appears after the reopen → merged", async () => {
-        const { repo } = await required(["test"]);
-        const root = dirname(repo);
-        const t = setInterval(async () => {
-          if (await Bun.file(join(root, "reopen.log")).exists()) {
-            clearInterval(t);
-            await Bun.write(join(root, "checks.json"), JSON.stringify({ statusCheckRollup: [pass] }));
-          }
-        }, 5);
-        const r = await run(repo, { ciPollMs: 10, ciStartMin: 0.001, ciTimeoutMin: 0.1 });
-        clearInterval(t);
-        expect(r.status).toBe("merged");
-        expect(await reopens(repo)).toEqual(["pr close", "pr reopen"]);
-      });
-
-      test("no protection (404) → rollup behaviour, no reopen", async () => {
-        const { repo } = await withChecks([]);
-        const r = await run(repo, { ciPollMs: 10, ciStartMin: 0.001 });
-        expect(r.status).toBe("merged");
-        expect(await Bun.file(join(dirname(repo), "reopen.log")).exists()).toBe(false);
-      });
-    });
-
-    test("without --merge checks are not polled", async () => {
-      const { repo } = await withChecks([{ ...pass, conclusion: "FAILURE" }]);
-      const r = await run(repo, { merge: false });
-      expect(r.status).toBe("pr-opened");
-      expect(await Bun.file(join(dirname(repo), "checks-view.log")).exists()).toBe(false);
-    });
+    expect(r.status).toBe("merge-failed");
+    expect(r.error).toContain("base branch policy");
+    expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
   });
 
   test("no merge flag → never calls pr merge", async () => {

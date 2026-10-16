@@ -68,9 +68,12 @@ if [ "$1 $2" = "issue create" ]; then
   exit 0
 fi
 if [ "$1 $2" = "pr create" ]; then echo "https://github.com/o/r/pull/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"; exit 0; fi
-if [ "$1 $2" = "pr view" ]; then echo '{"statusCheckRollup":[]}'; exit 0; fi
+if [ "$1 $2" = "pr view" ]; then
+  if [ -f "${root}/merged" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"abc"}}'; else echo '{"state":"OPEN","mergeCommit":null}'; fi
+  exit 0
+fi
 if [ "$1 $2" = "pr merge" ]; then
-  ${mergeMode === "ff" ? `git --git-dir="${origin}" update-ref refs/heads/main "refs/heads/$(git rev-parse --abbrev-ref HEAD)"; exit 0` : "exit 1"}
+  ${mergeMode === "ff" ? `git --git-dir="${origin}" update-ref refs/heads/main "refs/heads/$(git rev-parse --abbrev-ref HEAD)"; touch "${root}/merged"; exit 0` : "exit 1"}
 fi
 exit 1
 `,
