@@ -297,7 +297,7 @@ export async function runQueue({ limit = 5, ...opts }: QueueOptions): Promise<Qu
   const cwd = opts.cwd ?? process.cwd();
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
-  const list = await $`gh issue list --label bunker --state open --json number,title,createdAt`.cwd(cwd).env(env).nothrow().quiet();
+  const list = await $`gh issue list --label bunker --state open --limit 1000 --json number,title,createdAt`.cwd(cwd).env(env).nothrow().quiet();
   if (list.exitCode !== 0) throw new Error(`gh issue list failed:\n${list.stderr}`);
   const queue = (JSON.parse(list.stdout.toString()) as { number: number; title: string; createdAt: string }[])
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.number - b.number)

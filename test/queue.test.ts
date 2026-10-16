@@ -128,6 +128,14 @@ describe("runQueue()", () => {
     [2, "Second", "2026-02-01T00:00:00Z"],
   ];
 
+  test("lists with a high --limit so issues beyond gh's default 30 are seen", async () => {
+    const { repo } = await setup(issues);
+    await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox() });
+    const log = await Bun.file(join(repo, "..", "list.log")).text();
+    const m = log.match(/--limit (\d+)/);
+    expect(Number(m?.[1])).toBeGreaterThanOrEqual(1000);
+  });
+
   test("without merge: oldest first, stops after the first PR", async () => {
     const { repo } = await setup(issues);
     const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox() });
