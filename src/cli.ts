@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
-import { claudeCode, docker, noSandbox, run, runAll } from "./index.ts";
+import { claudeCode, docker, noSandbox, review, run, runAll } from "./index.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -11,6 +11,9 @@ const { values, positionals } = parseArgs({
     model: { type: "string" },
     task: { type: "string", multiple: true },
     "max-iterations": { type: "string" },
+    review: { type: "boolean", default: false },
+    "max-rounds": { type: "string" },
+    "reviewer-model": { type: "string" },
   },
 });
 
@@ -19,6 +22,7 @@ const tasks = values.task ?? [];
 if (!prompt === !tasks.length) {
   console.error(
     'usage: bunker "<prompt>" [--model <id>] [--image <name>] [--no-sandbox] [--max-iterations <n>]\n' +
+      '       bunker --review "<prompt>" [--max-rounds <n>] [--reviewer-model <id>]   (implement → review → fix)\n' +
       '       bunker --task "<prompt>" --task "<prompt>" ...   (parallel, one worktree each)',
   );
   process.exit(2);
@@ -27,6 +31,16 @@ if (!prompt === !tasks.length) {
 const maxIterations = values["max-iterations"] === undefined ? 1 : Number(values["max-iterations"]);
 if (!Number.isInteger(maxIterations) || maxIterations < 1) {
   console.error("bunker: --max-iterations must be a positive integer");
+  process.exit(2);
+}
+
+const maxRounds = values["max-rounds"] === undefined ? 2 : Number(values["max-rounds"]);
+if (!Number.isInteger(maxRounds) || maxRounds < 1) {
+  console.error("bunker: --max-rounds must be a positive integer");
+  process.exit(2);
+}
+if (values.review && !prompt) {
+  console.error("bunker: --review takes a single prompt, not --task");
   process.exit(2);
 }
 
@@ -40,7 +54,18 @@ if (!values["no-sandbox"] && !hasAuth()) {
 const agent = claudeCode({ model: values.model });
 const sandbox = values["no-sandbox"] ? noSandbox() : docker({ image: values.image });
 
-if (prompt) {
+if (values.review) {
+  const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"] }) : agent;
+  const result = await review({ prompt, agent, reviewer, sandbox, maxRounds });
+  console.log();
+  for (const [i, r] of result.rounds.entries()) {
+    console.log(`bunker: round ${i + 1}: ${r.commits.length} commit(s), ${r.approved ? "approved" : "changes requested"}`);
+  }
+  console.log(`bunker: [${result.status}] ${result.branch} (${result.commits.length} commit(s))`);
+  for (const c of result.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
+  if (result.error) console.log(`  ${result.error.split("\n")[0]}`);
+  if (result.status !== "approved") process.exit(1);
+} else if (prompt) {
   const result = await run({ prompt, agent, sandbox, maxIterations });
   console.log(`\nbunker: ${result.commits.length} commit(s) merged from ${result.branch}`);
   for (const c of result.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
