@@ -2,6 +2,8 @@ import { $ } from "bun";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { redact } from "./redact.ts";
+import { emit, findStreamResult, parseClaudeStreamLine, type OnEvent, type Stage, type StreamEvent } from "./events.ts";
+export type { BunkerEvent, OnEvent } from "./events.ts";
 import baseDockerfile from "../images/base/Dockerfile" with { type: "text" };
 
 export type AgentMode = "write" | "review";
@@ -12,6 +14,8 @@ export interface Agent {
   command(prompt: string, mode?: AgentMode): string[];
   /** Turns the command's raw stdout into the agent's text plus what the run cost. Omit if stdout is already the text. */
   parse?(stdout: string): { text: string; usage?: Usage };
+  /** Turns one line of the command's stdout into progress events. Omit if stdout isn't a stream. */
+  parseLine?(line: string): StreamEvent[];
 }
 
 /** What a run cost. */
@@ -44,7 +48,7 @@ export function formatUsage(u: Usage): string {
 
 /** Where the agent's command runs. Gets the worktree and the repo's shared .git dir. */
 export interface Sandbox {
-  exec(cmd: string[], ctx: { worktree: string; gitCommonDir: string; prefix?: string }): Promise<{ code: number; stdout: string }>;
+  exec(cmd: string[], ctx: { worktree: string; gitCommonDir: string; prefix?: string; onLine?: (line: string) => void }): Promise<{ code: number; stdout: string }>;
 }
 
 export interface Commit {
@@ -62,6 +66,8 @@ export interface RunOptions {
   maxIterations?: number;
   /** Stop after an iteration whose stdout contains any of these. Defaults to "<promise>COMPLETE</promise>". */
   completionSignal?: string | string[];
+  /** Progress events: stages, agent text and tool calls, results. */
+  onEvent?: OnEvent;
 }
 
 export interface Iteration {
@@ -92,8 +98,10 @@ const COMMIT_INSTRUCTION =
 // holds in any image, not just the base.
 const NO_ATTRIBUTION = JSON.stringify({ attribution: { commit: "", pr: "" } });
 
-/** Reads `claude -p --output-format json` output; anything else is passed through as plain text. */
+/** Reads `claude -p --output-format stream-json` output (its final `result` event); anything else is passed through as plain text. */
 function parseClaudeJson(stdout: string): { text: string; usage?: Usage } {
+  const final = findStreamResult(stdout);
+  if (final) return { text: final.text, ...(final.usage ? { usage: final.usage } : {}) };
   try {
     const j = JSON.parse(stdout);
     if (typeof j?.result !== "string") return { text: stdout };
@@ -110,13 +118,13 @@ function parseClaudeJson(stdout: string): { text: string; usage?: Usage } {
 
 export function claudeCode(opts: { model?: string; attribution?: boolean; json?: boolean } = {}): Agent {
   return {
-    ...(opts.json ? { parse: parseClaudeJson } : {}),
+    ...(opts.json ? { parse: parseClaudeJson, parseLine: parseClaudeStreamLine } : {}),
     command: (prompt, mode = "write") => [
       "claude",
       "-p",
       mode === "write" ? prompt + COMMIT_INSTRUCTION : prompt,
       "--dangerously-skip-permissions",
-      ...(opts.json ? ["--output-format", "json"] : []),
+      ...(opts.json ? ["--output-format", "stream-json", "--verbose"] : []),
       ...(opts.model ? ["--model", opts.model] : []),
       ...(opts.attribution ? [] : ["--settings", NO_ATTRIBUTION]),
     ],
@@ -128,7 +136,12 @@ function prefixLines(text: string, prefix: string): string {
 }
 
 /** Waits for the process, echoing its (redacted) stdout live, each line led by `prefix`, while capturing it unprefixed. */
-async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">, prefix = ""): Promise<{ code: number; stdout: string }> {
+async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">, prefix = "", onLine?: (line: string) => void): Promise<{ code: number; stdout: string }> {
+  // With onLine, lines are handed over (redacted) instead of echoed.
+  const out = (text: string) => {
+    if (!onLine) process.stdout.write(prefixLines(redact(text), prefix));
+    else for (const line of text.split("\n")) if (line) onLine(redact(line));
+  };
   const decoder = new TextDecoder();
   let stdout = "";
   // Echo whole lines only, so a secret split across chunks is still caught.
@@ -139,14 +152,14 @@ async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">, pref
     pending += text;
     const nl = pending.lastIndexOf("\n");
     if (nl >= 0) {
-      process.stdout.write(prefixLines(redact(pending.slice(0, nl + 1)), prefix));
+      out(pending.slice(0, nl + 1));
       pending = pending.slice(nl + 1);
     }
   }
   const tail = decoder.decode();
   stdout += tail;
   pending += tail;
-  if (pending) process.stdout.write(prefixLines(redact(pending), prefix));
+  if (pending) out(pending);
   return { code: await proc.exited, stdout: redact(stdout) };
 }
 
@@ -156,10 +169,10 @@ export const GH_TOKEN_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "BUNKER_GH_TOKEN"] as 
 /** Runs the agent straight on the host, in the worktree. No isolation (GitHub tokens are stripped from its env). */
 export function noSandbox(): Sandbox {
   return {
-    exec: (cmd, { worktree, prefix }) =>
+    exec: (cmd, { worktree, prefix, onLine }) =>
       // Explicit env: Bun.spawn otherwise passes the startup environment, dropping
       // anything set at runtime (e.g. the token loaded from .bunker/.env).
-      teeStdout(Bun.spawn(cmd, { cwd: worktree, env: agentEnv(), stdio: ["ignore", "pipe", "inherit"] }), prefix),
+      teeStdout(Bun.spawn(cmd, { cwd: worktree, env: agentEnv(), stdio: ["ignore", "pipe", "inherit"] }), prefix, onLine),
   };
 }
 
@@ -247,7 +260,7 @@ function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions):
   // runAll() calls exec once per task at the same time; share one image build per repo.
   const images = new Map<string, Promise<string>>();
   return {
-    async exec(cmd, { worktree, gitCommonDir, prefix }) {
+    async exec(cmd, { worktree, gitCommonDir, prefix, onLine }) {
       const [entrypoint, ...args] = cmd;
       if (!entrypoint) throw new Error("empty agent command");
       if (!images.has(gitCommonDir)) images.set(gitCommonDir, resolveImage(bin, opts, worktree, gitCommonDir));
@@ -274,7 +287,7 @@ function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions):
         image,
         ...args,
       ];
-      return teeStdout(Bun.spawn(argv, { env: process.env, stdio: ["ignore", "pipe", "inherit"] }), prefix);
+      return teeStdout(Bun.spawn(argv, { env: process.env, stdio: ["ignore", "pipe", "inherit"] }), prefix, onLine);
     },
   };
 }
@@ -323,6 +336,34 @@ async function addWorktree(cwd: string, base: string): Promise<Worktree> {
   return wt;
 }
 
+/** Where an agent run's events are labelled from, and where raw stdout lines go. */
+export interface EventTarget {
+  onEvent?: OnEvent | undefined;
+  /** Every raw stdout line of a streaming agent (already redacted). */
+  onRaw?: ((line: string) => void) | undefined;
+  task?: number;
+  round?: number;
+  role?: "implementer" | "reviewer";
+}
+
+/** The exec `onLine` hook for `agent`: parsed events to onEvent, raw lines to onRaw. Undefined if nobody listens or the agent doesn't stream. */
+function lineHook(agent: Agent, t: EventTarget): ((line: string) => void) | undefined {
+  if (!agent.parseLine || (!t.onEvent && !t.onRaw)) return undefined;
+  const label = { ...(t.task !== undefined ? { task: t.task } : {}), ...(t.round !== undefined ? { round: t.round } : {}), ...(t.role ? { role: t.role } : {}) };
+  return (line) => {
+    t.onRaw?.(line);
+    for (const e of agent.parseLine!(line)) {
+      if (e.type === "text") emit(t.onEvent, { type: "text", ...label, text: e.text });
+      else if (e.type === "toolCall") emit(t.onEvent, { type: "toolCall", ...label, name: e.summary });
+      else emit(t.onEvent, { type: "result", ...label, ...(e.usage ? { costUsd: e.usage.costUsd } : {}) });
+    }
+  };
+}
+
+export function emitStage(t: Pick<EventTarget, "onEvent" | "task" | "round" | "role">, name: Stage, text?: string) {
+  emit(t.onEvent, { type: "stage", name, ...(t.task !== undefined ? { task: t.task } : {}), ...(t.round !== undefined ? { round: t.round } : {}), ...(t.role ? { role: t.role } : {}), ...(text ? { text } : {}) });
+}
+
 /** A failed agent run; carries the usage already spent. */
 class AgentFailure extends Error {
   constructor(message: string, readonly usage?: Usage) {
@@ -347,15 +388,19 @@ async function runAgent(
   base: string,
   gitCommonDir: string,
   wt: Worktree,
-  { prompt, agent, sandbox, maxIterations = 1, completionSignal = DEFAULT_SIGNAL }: Omit<RunOptions, "cwd">,
+  { prompt, agent, sandbox, maxIterations = 1, completionSignal = DEFAULT_SIGNAL, onEvent }: Omit<RunOptions, "cwd">,
   prefix?: string,
+  task?: number,
 ): Promise<AgentOutcome> {
   const signals = [completionSignal].flat();
   const iterations: Iteration[] = [];
   let commits: Commit[] = [];
   try {
     for (let i = 0; i < maxIterations; i++) {
-      const { code, stdout } = await sandbox.exec(agent.command(prompt), { worktree: wt.path, gitCommonDir, ...(prefix ? { prefix } : {}) });
+      const target = { onEvent, task, round: i + 1, role: "implementer" as const };
+      emitStage(target, "implement");
+      const onLine = lineHook(agent, target);
+      const { code, stdout } = await sandbox.exec(agent.command(prompt), { worktree: wt.path, gitCommonDir, ...(prefix ? { prefix } : {}), ...(onLine ? { onLine } : {}) });
       const { text, usage } = interpret(agent, stdout);
       if (code !== 0) {
         throw new AgentFailure(`agent exited with ${code}; work kept on ${wt.branch}`, sumUsage([...iterations.map((i) => i.usage), usage]));
@@ -410,6 +455,7 @@ export interface RunAllOptions {
   /** Per task, as in run(). */
   maxIterations?: number;
   completionSignal?: string | string[];
+  onEvent?: OnEvent;
 }
 
 export interface TaskResult {
@@ -436,7 +482,7 @@ export async function runAll({ tasks, cwd = process.cwd(), ...opts }: RunAllOpti
   for (const _ of tasks) worktrees.push(await addWorktree(cwd, base));
 
   const outcomes = await Promise.allSettled(
-    tasks.map((task, i) => runAgent(cwd, base, gitCommonDir, worktrees[i]!, { ...opts, prompt: task.prompt }, `[${i}] `)),
+    tasks.map((task, i) => runAgent(cwd, base, gitCommonDir, worktrees[i]!, { ...opts, prompt: task.prompt }, `[${i}] `, i)),
   );
 
   const results: TaskResult[] = [];
@@ -475,6 +521,10 @@ export interface ReviewOptions {
   reviewerInstruction?: string;
   /** Shell command run in the worktree, inside `sandbox`, before the first agent run. Defaults to `.bunker/setup` if present. */
   setup?: string;
+  /** Progress events: stages, agent text and tool calls, results. */
+  onEvent?: OnEvent;
+  /** Every raw stdout line of a streaming agent, redacted. */
+  onRaw?: (line: string) => void;
 }
 
 export interface ReviewRound {
@@ -529,6 +579,8 @@ export async function review({
   approveSignal = DEFAULT_APPROVE,
   reviewerInstruction,
   setup,
+  onEvent,
+  onRaw,
 }: ReviewOptions): Promise<ReviewResult> {
   const { base, gitCommonDir } = await repoInfo(cwd);
   const wt = await addWorktree(cwd, base);
@@ -539,12 +591,16 @@ export async function review({
   let status: ReviewResult["status"] = "rejected";
   let error: string | undefined;
   try {
+    emitStage({ onEvent }, "setup");
     const prep = await runSetup(sandbox, ctx, setup);
     if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${prep.stdout.slice(-2000)}`);
     for (let i = 0; i < maxRounds; i++) {
       const feedback = rounds.at(-1)?.feedback;
       const task = feedback === undefined ? prompt : `${prompt}\n\nA reviewer requested changes:\n${feedback}`;
-      const impl = await sandbox.exec(agent.command(task, "write"), ctx);
+      const implTarget = { onEvent, onRaw, round: i + 1, role: "implementer" as const };
+      emitStage(implTarget, "implement");
+      const implHook = lineHook(agent, implTarget);
+      const impl = await sandbox.exec(agent.command(task, "write"), implHook ? { ...ctx, onLine: implHook } : ctx);
       const implOut = interpret(agent, impl.stdout);
       usages.push(implOut.usage);
       if (impl.code !== 0) throw new Error(`agent exited with ${impl.code}; work kept on ${wt.branch}`);
@@ -554,7 +610,10 @@ export async function review({
 
       const head = (await $`git -C ${wt.path} rev-parse HEAD`.text()).trim();
       const diff = await $`git -C ${wt.path} diff ${base}..HEAD`.text();
-      const rev = await sandbox.exec(reviewer.command(reviewerPrompt(prompt, diff, approveSignal, reviewerInstruction), "review"), ctx);
+      const revTarget = { onEvent, onRaw, round: i + 1, role: "reviewer" as const };
+      emitStage(revTarget, "review");
+      const revHook = lineHook(reviewer, revTarget);
+      const rev = await sandbox.exec(reviewer.command(reviewerPrompt(prompt, diff, approveSignal, reviewerInstruction), "review"), revHook ? { ...ctx, onLine: revHook } : ctx);
       // Only the implementer's commits survive, whatever the reviewer did.
       await $`git -C ${wt.path} reset -q --hard ${head}`.quiet();
       await $`git -C ${wt.path} clean -qfd`.quiet();

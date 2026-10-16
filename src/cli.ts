@@ -5,14 +5,18 @@ import { claudeCode, formatUsage, docker, noSandbox, review, run, runAll } from 
 import { runAudit } from "./audit.ts";
 import { runIssue, runQueue } from "./issue.ts";
 import { redact } from "./redact.ts";
+import { createProgress, hyperlink } from "./events.ts";
 import { HELP } from "./help.ts";
 import { options } from "./options.ts";
 import pkg from "../package.json" with { type: "json" };
 
+// Anything printed first wipes the in-place progress line, if one is showing.
+let clearProgress = () => {};
+
 // Everything the CLI prints goes through redact().
 for (const method of ["log", "error", "warn"] as const) {
   const orig = console[method].bind(console);
-  console[method] = (...args: unknown[]) => orig(...args.map((a) => (typeof a === "string" ? redact(a) : a)));
+  console[method] = (...args: unknown[]) => (clearProgress(), orig(...args.map((a) => (typeof a === "string" ? redact(a) : a))));
 }
 
 let parsed;
@@ -147,6 +151,10 @@ if (values["ci-timeout"] !== undefined) {
   }
 }
 
+const tty = !!process.stdout.isTTY;
+const progress = createProgress({ write: (s) => process.stdout.write(redact(s)), tty, columns: process.stdout.columns ?? 100 });
+const onEvent = progress.onEvent;
+clearProgress = progress.clear;
 const agent = claudeCode({ model: values.model, json: true });
 const sandbox = values["no-sandbox"] ? noSandbox() : docker({ image: values.image });
 
@@ -166,7 +174,7 @@ if (values.audit) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
   let results;
   try {
-    results = await runQueue({ agent, reviewer, sandbox, maxRounds, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
+    results = await runQueue({ onEvent, agent, reviewer, sandbox, maxRounds, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     process.exit(2);
@@ -176,7 +184,7 @@ if (values.audit) {
   for (const r of results) {
     console.log(`#${r.issue} [${r.status}] ${r.prUrl ?? "-"}`);
     if (r.error) console.log(`  ${r.error.trimEnd().replaceAll("\n", "\n  ")}`);
-    if (r.logPath) console.log(`  log: ${r.logPath}`);
+    if (r.logPath) console.log(`  log: ${tty ? hyperlink(r.logPath) : r.logPath}`);
     if (r.review?.usage) console.log(`  cost ${formatUsage(r.review.usage)}`);
     for (const f of r.filed) console.log(`  filed #${f.number}: ${f.title}`);
   }
@@ -190,7 +198,7 @@ if (values.audit) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
   let result;
   try {
-    result = await runIssue({ issue, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
+    result = await runIssue({ onEvent, issue, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     process.exit(2);
@@ -204,11 +212,11 @@ if (values.audit) {
   if (result.verifyOutput) console.log(`  verify output:\n${result.verifyOutput}`);
   if (result.prUrl) console.log(result.prUrl);
   if (result.review?.usage) console.log(`bunker: cost ${formatUsage(result.review.usage)}`);
-  if (result.logPath) console.log(`bunker: log ${result.logPath}`);
+  if (result.logPath) console.log(`bunker: log ${tty ? hyperlink(result.logPath) : result.logPath}`);
   if (result.status !== (values.merge ? "merged" : "pr-opened")) process.exit(1);
 } else if (values.review) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
-  const result = await review({ prompt, agent, reviewer, sandbox, maxRounds });
+  const result = await review({ onEvent, prompt, agent, reviewer, sandbox, maxRounds });
   console.log();
   for (const [i, r] of result.rounds.entries()) {
     console.log(`bunker: round ${i + 1}: ${r.commits.length} commit(s), ${r.approved ? "approved" : "changes requested"}`);
@@ -219,12 +227,12 @@ if (values.audit) {
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
   if (result.status !== "approved") process.exit(1);
 } else if (prompt) {
-  const result = await run({ prompt, agent, sandbox, maxIterations });
+  const result = await run({ onEvent, prompt, agent, sandbox, maxIterations });
   console.log(`\nbunker: ${result.commits.length} commit(s) merged from ${result.branch}`);
   for (const c of result.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
 } else {
-  const results = await runAll({ tasks: tasks.map((p) => ({ prompt: p })), agent, sandbox, maxIterations });
+  const results = await runAll({ onEvent, tasks: tasks.map((p) => ({ prompt: p })), agent, sandbox, maxIterations });
   console.log();
   for (const r of results) {
     console.log(`bunker: [${r.status}] ${r.branch} (${r.commits.length} commit(s)) ${r.prompt}`);
