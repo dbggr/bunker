@@ -120,7 +120,15 @@ if [ "$1 $2" = "pr view" ]; then
   echo '{"state":"${mergeMode === "ff-exit1" ? "MERGED" : "OPEN"}"}'
   exit 0
 fi
-if [ "$1" = "api" ]; then echo "$*" >> "${root}/api.log"; exit 0; fi
+if [ "$1 $2" = "pr close" ] || [ "$1 $2" = "pr reopen" ]; then echo "$1 $2" >> "${root}/reopen.log"; exit 0; fi
+if [ "$1" = "api" ]; then
+  case "$*" in *required_status_checks*)
+    if [ -f "${root}/protection.json" ]; then cat "${root}/protection.json"; exit 0; fi
+    echo "gh: Not Found (HTTP 404)" >&2; exit 1;;
+  esac
+  echo "$*" >> "${root}/api.log"
+  exit 0
+fi
 exit 1
 `,
   );
@@ -454,6 +462,63 @@ describe("runIssue() --merge", () => {
       const r = await run(repo, { ciPollMs: 20 });
       expect(r.status).toBe("ci-failed");
       expect(await Bun.file(join(root, "merge.log")).exists()).toBe(false);
+    });
+
+    describe("required checks", () => {
+      const required = async (contexts: string[], rollup: object[] = []) => {
+        const env = await withChecks(rollup);
+        await Bun.write(join(dirname(env.repo), "protection.json"), JSON.stringify({ strict: false, contexts, checks: contexts.map((context) => ({ context, app_id: 1 })) }));
+        return env;
+      };
+      const reopens = async (repo: string) => {
+        const f = Bun.file(join(dirname(repo), "reopen.log"));
+        return (await f.exists()) ? (await f.text()).trim().split("\n") : [];
+      };
+
+      test("empty rollup is not 'no checks' when a check is required; late check is waited for", async () => {
+        const { repo } = await required(["test"]);
+        setTimeout(() => Bun.write(join(dirname(repo), "checks.json"), JSON.stringify({ statusCheckRollup: [pass] })), 200);
+        const r = await run(repo, { ciPollMs: 10, ciStartMin: 1 });
+        expect(r.status).toBe("merged");
+        expect(await reopens(repo)).toEqual([]);
+      });
+
+      test("waits until every required check completed", async () => {
+        const { repo } = await required(["test", "lint"], [pass]);
+        setTimeout(() => Bun.write(join(dirname(repo), "checks.json"), JSON.stringify({ statusCheckRollup: [pass, { ...pass, name: "lint" }] })), 150);
+        const r = await run(repo, { ciPollMs: 10, ciStartMin: 1 });
+        expect(r.status).toBe("merged");
+      });
+
+      test("never appears → one close/reopen, then ci-timeout", async () => {
+        const { repo, mergeLog } = await required(["test"]);
+        const r = await run(repo, { ciPollMs: 10, ciStartMin: 0.001, ciTimeoutMin: 0.01 });
+        expect(r.status).toBe("ci-timeout");
+        expect(await reopens(repo)).toEqual(["pr close", "pr reopen"]);
+        expect(await Bun.file(mergeLog).exists()).toBe(false);
+      });
+
+      test("appears after the reopen → merged", async () => {
+        const { repo } = await required(["test"]);
+        const root = dirname(repo);
+        const t = setInterval(async () => {
+          if (await Bun.file(join(root, "reopen.log")).exists()) {
+            clearInterval(t);
+            await Bun.write(join(root, "checks.json"), JSON.stringify({ statusCheckRollup: [pass] }));
+          }
+        }, 5);
+        const r = await run(repo, { ciPollMs: 10, ciStartMin: 0.001, ciTimeoutMin: 0.1 });
+        clearInterval(t);
+        expect(r.status).toBe("merged");
+        expect(await reopens(repo)).toEqual(["pr close", "pr reopen"]);
+      });
+
+      test("no protection (404) → rollup behaviour, no reopen", async () => {
+        const { repo } = await withChecks([]);
+        const r = await run(repo, { ciPollMs: 10, ciStartMin: 0.001 });
+        expect(r.status).toBe("merged");
+        expect(await Bun.file(join(dirname(repo), "reopen.log")).exists()).toBe(false);
+      });
     });
 
     test("without --merge checks are not polled", async () => {

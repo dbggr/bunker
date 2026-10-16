@@ -34,6 +34,8 @@ export interface IssueOptions {
   ciTimeoutMin?: number;
   /** Milliseconds between check polls. Defaults to 10000. */
   ciPollMs?: number;
+  /** Minutes to wait for a required check to appear before closing and reopening the PR to re-fire CI. Defaults to 3. */
+  ciStartMin?: number;
 }
 
 export interface IssueResult {
@@ -101,9 +103,11 @@ interface Rollup {
 }
 
 /** "pending" if any check is unfinished, "failed" if any finished badly, "passed" otherwise (including no checks). */
-function judgeChecks(rollup: Rollup[]): { outcome: "passed" | "failed" | "pending"; failed: string[] } {
+function judgeChecks(rollup: Rollup[], required: string[] = []): { outcome: "passed" | "failed" | "pending"; failed: string[]; missing: string[] } {
   const failed: string[] = [];
-  let pending = false;
+  const seen = new Set(rollup.map((c) => c.name ?? c.context));
+  const missing = required.filter((r) => !seen.has(r));
+  let pending = missing.length > 0;
   for (const c of rollup) {
     const label = c.name ?? c.context ?? "unnamed check";
     if (c.state !== undefined) {
@@ -112,7 +116,20 @@ function judgeChecks(rollup: Rollup[]): { outcome: "passed" | "failed" | "pendin
     } else if (c.status !== "COMPLETED") pending = true;
     else if (!["SUCCESS", "NEUTRAL", "SKIPPED"].includes(c.conclusion ?? "")) failed.push(`${label} (${c.conclusion || "unknown"})`);
   }
-  return { outcome: failed.length ? "failed" : pending ? "pending" : "passed", failed };
+  return { outcome: failed.length ? "failed" : pending ? "pending" : "passed", failed, missing };
+}
+
+/** Required status check names on the base branch, or [] when none or unreadable (404, no access). */
+async function requiredChecks(branch: string, cwd: string, env: Record<string, string>): Promise<string[]> {
+  const res = await $`gh api repos/{owner}/{repo}/branches/${branch}/protection/required_status_checks`.cwd(cwd).env(env).nothrow().quiet();
+  if (res.exitCode !== 0) return [];
+  try {
+    const j = JSON.parse(res.stdout.toString());
+    const names: unknown[] = [...(j.contexts ?? []), ...(j.checks ?? []).map((c: { context?: string }) => c.context)];
+    return [...new Set(names.filter((n): n is string => typeof n === "string" && n !== ""))];
+  } catch {
+    return [];
+  }
 }
 
 /** Polls the PR's status check rollup until every check finished, one failed, or the timeout passed. */
@@ -122,8 +139,13 @@ async function waitForChecks(
   env: Record<string, string>,
   timeoutMs: number,
   pollMs: number,
+  baseBranch: string,
+  startMs: number,
 ): Promise<{ outcome: "passed" | "failed" | "timeout"; detail?: string }> {
-  const deadline = Date.now() + timeoutMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  const required = await requiredChecks(baseBranch, cwd, env);
+  let reopened = false;
   // GitHub may not have registered checks right after PR creation, so an empty rollup
   // only counts as "no checks configured" once seen on several consecutive polls.
   const emptyPollsNeeded = 3;
@@ -138,9 +160,16 @@ async function waitForChecks(
       } catch {}
     }
     emptyPolls = rollup?.length === 0 ? emptyPolls + 1 : 0;
-    const { outcome, failed } = rollup ? judgeChecks(rollup) : { outcome: "pending" as const, failed: [] };
-    if (outcome === "passed" && (emptyPolls === 0 || emptyPolls >= emptyPollsNeeded)) return { outcome };
+    const { outcome, failed, missing } = rollup ? judgeChecks(rollup, required) : { outcome: "pending" as const, failed: [], missing: [] };
+    // With required checks, an empty rollup means "not started", never "no checks".
+    if (outcome === "passed" && (required.length > 0 || emptyPolls === 0 || emptyPolls >= emptyPollsNeeded)) return { outcome };
     if (outcome === "failed") return { outcome, detail: `CI checks failed: ${failed.join(", ")}` };
+    // A required check that never appeared usually means pull_request never fired: reopen once.
+    if (missing.length && !reopened && Date.now() - startedAt >= startMs) {
+      reopened = true;
+      await $`gh pr close ${prUrl}`.cwd(cwd).env(env).nothrow().quiet();
+      await $`gh pr reopen ${prUrl}`.cwd(cwd).env(env).nothrow().quiet();
+    }
     if (Date.now() >= deadline) return { outcome: "timeout", detail: `CI checks still pending after ${timeoutMs / 60_000} min` };
     await Bun.sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
   }
@@ -152,7 +181,7 @@ async function waitForChecks(
  * every later outcome is a status, and the worktree and branch are always kept.
  * The caller's checkout and branch are never touched.
  */
-export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, setup, verify, verifyOnHost, merge, ciTimeoutMin = 20, ciPollMs = 10_000 }: IssueOptions): Promise<IssueResult> {
+export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, setup, verify, verifyOnHost, merge, ciTimeoutMin = 20, ciPollMs = 10_000, ciStartMin = 3 }: IssueOptions): Promise<IssueResult> {
   if (merge && !verify) throw new Error("merge requires verify");
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -267,7 +296,7 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   const opened = { review: result, ...(prUrl ? { prUrl } : {}) };
   if (!merge || !prUrl) return fail("pr-opened", opened);
 
-  const ci = await waitForChecks(prUrl, worktree, env, ciTimeoutMin * 60_000, ciPollMs);
+  const ci = await waitForChecks(prUrl, worktree, env, ciTimeoutMin * 60_000, ciPollMs, defaultBranch, ciStartMin * 60_000);
   if (ci.outcome !== "passed") {
     return fail(ci.outcome === "failed" ? "ci-failed" : "ci-timeout", { ...opened, error: ci.detail });
   }
