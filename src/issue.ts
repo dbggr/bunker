@@ -30,16 +30,14 @@ export interface IssueOptions {
   verifyOnHost?: boolean;
   /** After the PR opens, squash-merge it and check the merge landed. Requires `verify`. */
   merge?: boolean;
-  /** With `merge`: minutes to wait for the PR's checks before giving up. Defaults to 20. */
+  /** With `merge`: minutes to wait for GitHub to auto-merge the PR before giving up. Defaults to 30. */
   ciTimeoutMin?: number;
-  /** Milliseconds between check polls. Defaults to 10000. */
+  /** Milliseconds between PR state polls. Defaults to 10000. */
   ciPollMs?: number;
-  /** Minutes to wait for a required check to appear before closing and reopening the PR to re-fire CI. Defaults to 3. */
-  ciStartMin?: number;
 }
 
 export interface IssueResult {
-  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-failed" | "ci-timeout" | "ci-unreadable" | "merged" | "merge-failed" | "merge-unverified";
+  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified";
   branch: string;
   worktree: string;
   prUrl?: string;
@@ -94,91 +92,33 @@ function reviewLines(result: ReviewResult): string {
     .join("\n");
 }
 
-interface Rollup {
-  name?: string;
-  context?: string;
-  status?: string;
-  conclusion?: string;
-  state?: string;
-}
-
-/** "pending" if any check is unfinished, "failed" if any finished badly, "passed" otherwise (including no checks). */
-function judgeChecks(rollup: Rollup[], required: string[] = []): { outcome: "passed" | "failed" | "pending"; failed: string[]; missing: string[] } {
-  const failed: string[] = [];
-  const seen = new Set(rollup.map((c) => c.name ?? c.context));
-  const missing = required.filter((r) => !seen.has(r));
-  let pending = missing.length > 0;
-  for (const c of rollup) {
-    const label = c.name ?? c.context ?? "unnamed check";
-    if (c.state !== undefined) {
-      if (c.state === "PENDING" || c.state === "EXPECTED") pending = true;
-      else if (c.state !== "SUCCESS") failed.push(`${label} (${c.state})`);
-    } else if (c.status !== "COMPLETED") pending = true;
-    else if (!["SUCCESS", "NEUTRAL", "SKIPPED"].includes(c.conclusion ?? "")) failed.push(`${label} (${c.conclusion || "unknown"})`);
-  }
-  return { outcome: failed.length ? "failed" : pending ? "pending" : "passed", failed, missing };
-}
-
-/** Required status check names on the base branch, or [] when none or unreadable (404, no access). */
-async function requiredChecks(branch: string, cwd: string, env: Record<string, string>): Promise<string[]> {
-  const res = await $`gh api repos/{owner}/{repo}/branches/${branch}/protection/required_status_checks`.cwd(cwd).env(env).nothrow().quiet();
-  if (res.exitCode !== 0) return [];
-  try {
-    const j = JSON.parse(res.stdout.toString());
-    const names: unknown[] = [...(j.contexts ?? []), ...(j.checks ?? []).map((c: { context?: string }) => c.context)];
-    return [...new Set(names.filter((n): n is string => typeof n === "string" && n !== ""))];
-  } catch {
-    return [];
-  }
-}
-
-function unreadable(res: { exitCode: number; stdout: Buffer; stderr: Buffer }, what = `exit ${res.exitCode}`): string {
-  return `could not read the PR's check status (${what}); BUNKER_GH_TOKEN needs repository permissions Checks: Read-only and Commit statuses: Read-only:\n${res.stderr}${res.stdout}`.trimEnd();
-}
-
-/** Polls the PR's status check rollup until every check finished, one failed, or the timeout passed. */
-async function waitForChecks(
+/** Polls the PR (Pull requests: Read only) until GitHub merged or closed it, or the timeout passed. */
+async function waitForMerge(
   prUrl: string,
   cwd: string,
   env: Record<string, string>,
   timeoutMs: number,
   pollMs: number,
-  baseBranch: string,
-  startMs: number,
-): Promise<{ outcome: "passed" | "failed" | "timeout" | "unreadable"; detail?: string }> {
-  const startedAt = Date.now();
-  const deadline = startedAt + timeoutMs;
-  // One probe up front: an unreadable rollup (e.g. token lacks Checks / Commit statuses read) fails fast.
-  const probe = await $`gh pr view ${prUrl} --json statusCheckRollup`.cwd(cwd).env(env).nothrow().quiet();
-  if (probe.exitCode !== 0) return { outcome: "unreadable", detail: unreadable(probe) };
-  const required = await requiredChecks(baseBranch, cwd, env);
-  let reopened = false;
-  // GitHub may not have registered checks right after PR creation, so an empty rollup
-  // only counts as "no checks configured" once seen on several consecutive polls.
-  const emptyPollsNeeded = 3;
-  let emptyPolls = 0;
+): Promise<{ outcome: "merged" | "closed" | "timeout"; detail?: string }> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = "";
   for (;;) {
-    const view = await $`gh pr view ${prUrl} --json statusCheckRollup`.cwd(cwd).env(env).nothrow().quiet();
-    // A failed or unparseable response is an error, never "no checks".
-    if (view.exitCode !== 0) return { outcome: "unreadable", detail: unreadable(view) };
-    let rollup: Rollup[];
-    try {
-      rollup = JSON.parse(view.stdout.toString()).statusCheckRollup ?? [];
-    } catch {
-      return { outcome: "unreadable", detail: unreadable(view, "unparseable response") };
+    const view = await $`gh pr view ${prUrl} --json state,mergeCommit`.cwd(cwd).env(env).nothrow().quiet();
+    if (view.exitCode === 0) {
+      try {
+        const state = JSON.parse(view.stdout.toString()).state;
+        if (state === "MERGED") return { outcome: "merged" };
+        if (state === "CLOSED") return { outcome: "closed", detail: "the PR was closed without merging (state: CLOSED)" };
+        lastError = "";
+      } catch {
+        lastError = "unparseable gh pr view response";
+      }
+    } else {
+      lastError = `gh pr view failed (exit ${view.exitCode}): ${view.stderr}`.trimEnd();
     }
-    emptyPolls = rollup.length === 0 ? emptyPolls + 1 : 0;
-    const { outcome, failed, missing } = judgeChecks(rollup, required);
-    // With required checks, an empty rollup means "not started", never "no checks".
-    if (outcome === "passed" && (required.length > 0 || emptyPolls === 0 || emptyPolls >= emptyPollsNeeded)) return { outcome };
-    if (outcome === "failed") return { outcome, detail: `CI checks failed: ${failed.join(", ")}` };
-    // A required check that never appeared usually means pull_request never fired: reopen once.
-    if (missing.length && !reopened && Date.now() - startedAt >= startMs) {
-      reopened = true;
-      await $`gh pr close ${prUrl}`.cwd(cwd).env(env).nothrow().quiet();
-      await $`gh pr reopen ${prUrl}`.cwd(cwd).env(env).nothrow().quiet();
+    if (Date.now() >= deadline) {
+      return { outcome: "timeout", detail: `PR not merged after ${timeoutMs / 60_000} min; auto-merge stays armed on the PR${lastError ? `\n${lastError}` : ""}` };
     }
-    if (Date.now() >= deadline) return { outcome: "timeout", detail: `CI checks still pending after ${timeoutMs / 60_000} min` };
     await Bun.sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
   }
 }
@@ -189,7 +129,7 @@ async function waitForChecks(
  * every later outcome is a status, and the worktree and branch are always kept.
  * The caller's checkout and branch are never touched.
  */
-export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, setup, verify, verifyOnHost, merge, ciTimeoutMin = 20, ciPollMs = 10_000, ciStartMin = 3 }: IssueOptions): Promise<IssueResult> {
+export async function runIssue({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, setup, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000 }: IssueOptions): Promise<IssueResult> {
   if (merge && !verify) throw new Error("merge requires verify");
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -304,24 +244,20 @@ export async function runIssue({ issue: number, cwd = process.cwd(), agent, revi
   const opened = { review: result, ...(prUrl ? { prUrl } : {}) };
   if (!merge || !prUrl) return fail("pr-opened", opened);
 
-  const ci = await waitForChecks(prUrl, worktree, env, ciTimeoutMin * 60_000, ciPollMs, defaultBranch, ciStartMin * 60_000);
-  if (ci.outcome !== "passed") {
-    return fail(ci.outcome === "failed" ? "ci-failed" : ci.outcome === "unreadable" ? "ci-unreadable" : "ci-timeout", { ...opened, error: ci.detail });
-  }
-
+  // GitHub merges once the required checks pass (and refuses if they fail), so bunker never reads CI.
   // No --delete-branch: gh would also switch/delete the local branch, which fails in a worktree.
-  const merged = await $`gh pr merge ${prUrl} --squash`.cwd(worktree).env(env).nothrow().quiet();
-  if (merged.exitCode !== 0) {
-    // gh can merge on GitHub and still exit non-zero; trust the PR's actual state.
-    const view = await $`gh pr view ${prUrl} --json state`.cwd(worktree).env(env).nothrow().quiet();
-    let state = "unknown";
-    try {
-      state = JSON.parse(view.stdout.toString()).state ?? state;
-    } catch {}
-    if (state !== "MERGED") {
-      return fail("merge-failed", { ...opened, error: `gh pr merge failed (exit ${merged.exitCode}, PR state: ${state}):\n${merged.stderr}${merged.stdout}` });
+  const armed = await $`gh pr merge ${prUrl} --auto --squash`.cwd(worktree).env(env).nothrow().quiet();
+  if (armed.exitCode !== 0) {
+    const out = `${armed.stderr}${armed.stdout}`;
+    if (!/auto[- ]?merge/i.test(out)) return fail("merge-failed", { ...opened, error: `gh pr merge --auto failed (exit ${armed.exitCode}):\n${out}` });
+    // The repo doesn't allow auto-merge: merge now, if branch protection lets us.
+    const plain = await $`gh pr merge ${prUrl} --squash`.cwd(worktree).env(env).nothrow().quiet();
+    if (plain.exitCode !== 0) {
+      return fail("merge-failed", { ...opened, error: `auto-merge unavailable and gh pr merge failed (exit ${plain.exitCode}):\n${plain.stderr}${plain.stdout}` });
     }
   }
+  const waited = await waitForMerge(prUrl, worktree, env, ciTimeoutMin * 60_000, ciPollMs);
+  if (waited.outcome !== "merged") return fail(waited.outcome === "closed" ? "merge-failed" : "ci-timeout", { ...opened, error: waited.detail });
   await $`gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/${branch}`.cwd(worktree).env(env).nothrow().quiet();
 
   // Squash-merges have silently dropped late commits: check every file the branch touched.
