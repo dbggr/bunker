@@ -47,6 +47,13 @@ Single prompt and --task:
   --merge                    auto-merge the PR once checks pass (requires --verify or .bunker/verify)
   --ci-timeout <min>         (--merge) minutes to wait for the merge (default 30)
 
+Hung agents (any mode):
+  --idle-timeout <min>       kill an agent or reviewer that prints nothing for this long; the step fails as
+                             \`idle-timeout\`, the branch is kept (default 10)
+  --completion-timeout <s>   after the agent's completion signal or final result, wait this long for it to exit,
+                             then kill it and count the step as completed, with a warning (default 60)
+  --step-timeout <min>       like --idle-timeout for --setup and --verify, which can be quiet for long (default 30)
+
 --issue, --queue, --watch, live view:
   Every run publishes to a bunker hub (bunker ui) if one is reachable on 127.0.0.1:4321,
   tagged with the repo (owner/repo from origin); with no hub it just carries on.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
-import { AgentFailure, claudeCode, formatDuration, formatUsage, docker, noSandbox, review, run, runAll } from "./index.ts";
+import { AgentFailure, claudeCode, formatDuration, formatUsage, docker, noSandbox, review, run, runAll, type Timeouts } from "./index.ts";
 import { runAudit } from "./audit.ts";
 import { runIssue, runQueue } from "./issue.ts";
 import { parseDuration, runWatch } from "./watch.ts";
@@ -242,6 +242,23 @@ if (values["ci-timeout"] !== undefined) {
   }
 }
 
+// Positive numbers only; minutes (seconds for --completion-timeout) become the library's milliseconds.
+const timeouts: Timeouts = {};
+for (const [flag, key, unit, unitName] of [
+  ["idle-timeout", "idleTimeoutMs", 60_000, "minutes"],
+  ["completion-timeout", "completionTimeoutMs", 1000, "seconds"],
+  ["step-timeout", "stepTimeoutMs", 60_000, "minutes"],
+] as const) {
+  const raw = values[flag];
+  if (raw === undefined) continue;
+  const n = Number(raw);
+  if (!(n > 0) || !Number.isFinite(n)) {
+    console.error(`bunker: --${flag} must be a positive number of ${unitName}`);
+    process.exit(2);
+  }
+  timeouts[key] = n * unit;
+}
+
 if (values.verbose) output.verbose = true;
 // The in-place progress line must not outlive the run.
 process.on("exit", () => clearProgress());
@@ -284,7 +301,7 @@ const sandbox = values["no-sandbox"] ? noSandbox() : docker({ image: values.imag
 if (values.audit) {
   let result;
   try {
-    result = await runAudit({ agent, sandbox, maxIssues, focus: values.focus, setup: values.setup });
+    result = await runAudit({ ...timeouts, agent, sandbox, maxIssues, focus: values.focus, setup: values.setup });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -307,7 +324,7 @@ if (values.audit) {
     });
   }
   try {
-    await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, parallel, signal: ctl.signal, pull: !values["no-pull"], ...watchOpts });
+    await runWatch({ ...timeouts, onEvent, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, parallel, signal: ctl.signal, pull: !values["no-pull"], ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -317,7 +334,7 @@ if (values.audit) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
   let results;
   try {
-    results = await runQueue({ onEvent, agent, reviewer, sandbox, maxRounds, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin, parallel });
+    results = await runQueue({ ...timeouts, onEvent, agent, reviewer, sandbox, maxRounds, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin, parallel });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -343,7 +360,7 @@ if (values.audit) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
   let result;
   try {
-    result = await runIssue({ onEvent, issue, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
+    result = await runIssue({ ...timeouts, onEvent, issue, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -361,7 +378,7 @@ if (values.audit) {
   if (result.status !== (values.merge ? "merged" : "pr-opened")) process.exitCode = 1;
 } else if (values.review) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
-  const result = await review({ onEvent, prompt, agent, reviewer, sandbox, maxRounds });
+  const result = await review({ ...timeouts, onEvent, prompt, agent, reviewer, sandbox, maxRounds });
   console.log();
   for (const [i, r] of result.rounds.entries()) {
     console.log(`bunker: round ${i + 1}: ${r.commits.length} commit(s), ${r.approved ? "approved" : "changes requested"}`);
@@ -374,7 +391,7 @@ if (values.audit) {
 } else if (prompt) {
   let result;
   try {
-    result = await run({ onEvent, prompt, agent, sandbox, maxIterations });
+    result = await run({ ...timeouts, onEvent, prompt, agent, sandbox, maxIterations });
   } catch (e) {
     console.error(`\nbunker: ${e instanceof Error ? e.message : e}`);
     if (e instanceof AgentFailure && e.usage) console.log(`bunker: cost ${formatUsage(e.usage)}`);
@@ -385,7 +402,7 @@ if (values.audit) {
   for (const c of result.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
 } else {
-  const results = await runAll({ onEvent, tasks: tasks.map((p) => ({ prompt: p })), agent, sandbox, maxIterations });
+  const results = await runAll({ ...timeouts, onEvent, tasks: tasks.map((p) => ({ prompt: p })), agent, sandbox, maxIterations });
   console.log();
   for (const r of results) {
     console.log(`bunker: [${r.status}] ${r.branch} (${r.commits.length} commit(s)) ${r.prompt}`);

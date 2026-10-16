@@ -6,7 +6,7 @@ import { redact } from "./redact.ts";
 import { emit } from "./events.ts";
 import { tailLines, testCounts } from "./output.ts";
 import { hyperlink } from "./events.ts";
-import { AgentFailure, emitStage, review, runSetup, type Agent, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
+import { AgentFailure, emitStage, idleMessage, review, runSetup, stepLimits, DEFAULT_STEP_TIMEOUT_MS, type Agent, type Timeouts, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
 
 export interface IssueInfo {
   number: number;
@@ -20,7 +20,7 @@ export interface IssueInfo {
   comments?: { author?: { login?: string } | null; authorAssociation?: string; body: string }[];
 }
 
-export interface IssueOptions {
+export interface IssueOptions extends Timeouts {
   issue: number;
   agent: Agent;
   /** Reviews each round. Defaults to `agent`. */
@@ -53,7 +53,7 @@ export interface IssueOptions {
 }
 
 export interface IssueResult {
-  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked";
+  status: "pr-opened" | "rejected" | "failed" | "idle-timeout" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked";
   /** With status `blocked`: the `discovered` issue filed for what this one waits on. */
   blockedBy?: { number: number; title: string };
   branch: string;
@@ -304,7 +304,7 @@ export async function runIssue(opts: IssueOptions): Promise<IssueResult> {
   }
 }
 
-async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, setup, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1 }: IssueOptions, spent: { usage?: Usage }): Promise<IssueResult> {
+async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, setup, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, ...timeouts }: IssueOptions, spent: { usage?: Usage }): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -387,7 +387,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     "Use Conventional Commits for your commit messages, write tests first, and make the repo's tests pass.\n\n" +
     ISSUE_CONVENTION;
   log("raw agent events (stream-json lines follow, interleaved with the sections below)");
-  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, setup, reviewerInstruction: ISSUE_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
+  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, setup, ...timeouts, reviewerInstruction: ISSUE_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
   spent.usage = result.usage;
 
   for (const [i, r] of result.rounds.entries()) {
@@ -431,9 +431,14 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     if (!verify) return undefined;
     emitStage({ onEvent }, "verify");
     // The issue worktree is a fresh checkout too (the agent ran in review()'s own), so it needs setup as well.
-    const prep = await runSetup(sandbox, { worktree, gitCommonDir }, setup);
+    const prep = await runSetup(sandbox, { worktree, gitCommonDir }, setup, timeouts);
     if (prep) {
       log(`setup (exit ${prep.code})`, prep.stdout);
+      if (prep.idleTimedOut) {
+        const error = idleMessage("setup", timeouts.stepTimeoutMs ?? DEFAULT_STEP_TIMEOUT_MS);
+        failNote("setup timed out", prep.stdout);
+        return fail("idle-timeout", { review: result, ...extra, error });
+      }
       if (prep.code !== 0) {
         failNote(`setup failed (exit ${prep.code})`, prep.stdout);
         return fail("failed", { review: result, ...extra, error: `setup failed (exit ${prep.code}):\n${tailLines(prep.stdout).slice(-VERIFY_TAIL)}` });
@@ -441,6 +446,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     }
     let code: number;
     let text: string;
+    let timedOut = false;
     const verifyStart = Date.now();
     if (verifyOnHost) {
       const out = await $`sh -c ${verify}`.cwd(worktree).env(env).nothrow().quiet();
@@ -448,11 +454,16 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
       text = out.stdout.toString() + out.stderr.toString();
     } else {
       // Agent-written code: same sandbox as the agent, no GitHub tokens. stderr folded in so we can report it.
-      const out = await sandbox.exec(["sh", "-c", `(${verify}) 2>&1`], { worktree, gitCommonDir });
+      const out = await sandbox.exec(["sh", "-c", `(${verify}) 2>&1`], { worktree, gitCommonDir, ...stepLimits(timeouts) });
       code = out.code;
       text = out.stdout;
+      timedOut = !!out.idleTimedOut;
     }
     log(`verify (exit ${code})`, text);
+    if (timedOut) {
+      failNote("verify timed out", text);
+      return fail("idle-timeout", { review: result, ...extra, error: idleMessage("verify", timeouts.stepTimeoutMs ?? DEFAULT_STEP_TIMEOUT_MS), verifyOutput: tailLines(text).slice(-VERIFY_TAIL) });
+    }
     if (code !== 0) {
       failNote(`verify failed (exit ${code})`, text);
       return fail("verify-failed", { review: result, ...extra, verifyOutput: tailLines(text).slice(-VERIFY_TAIL) });

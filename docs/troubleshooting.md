@@ -20,6 +20,12 @@ Each entry is symptom, cause, fix. The run log (`.bunker/runs/<N>-<timestamp>.lo
 - **Cause**: GitHub evaluates auto-merge asynchronously after the last check passes.
 - **Fix**: wait. It does fire. If you're in a hurry, merge the PR by hand; bunker notices it is merged.
 
+## `idle-timeout`
+
+- **Symptom**: status `idle-timeout`; under `--watch` the issue gets `bunker-failed`.
+- **Cause**: an agent, reviewer, setup or verify printed nothing for `--idle-timeout` minutes (setup and verify: `--step-timeout`, default 30). bunker killed it, and for a sandboxed step stopped its container.
+- **Fix**: look at the run log; the branch is kept. If the step is legitimately quiet, raise `--idle-timeout` or `--step-timeout`. An agent that prints its completion signal (or final result) but doesn't exit is not an error: after `--completion-timeout` seconds (default 60) it is killed and the step counts as completed, with a warning.
+
 ## `ci-timeout`
 
 - **Symptom**: status `ci-timeout`; the PR is still open.

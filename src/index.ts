@@ -53,7 +53,73 @@ export function formatUsage(u: Usage): string {
 
 /** Where the agent's command runs. Gets the worktree and the repo's shared .git dir. */
 export interface Sandbox {
-  exec(cmd: string[], ctx: { worktree: string; gitCommonDir: string; prefix?: string; onLine?: (line: string) => void }): Promise<{ code: number; stdout: string }>;
+  exec(cmd: string[], ctx: ExecContext): Promise<ExecResult>;
+}
+
+/** Limits on a command's life, enforced by the sandbox. */
+export interface ExecLimits {
+  /** Kill the command if it prints nothing for this long. */
+  idleMs?: number;
+  /** Once `isDone` has matched a line, kill the command if it hasn't exited after this long and report it as completed. */
+  graceMs?: number;
+  /** Whether a stdout line says the command's work is finished (its completion signal or final result). */
+  isDone?: (line: string) => boolean;
+}
+
+export interface ExecContext extends ExecLimits {
+  worktree: string;
+  gitCommonDir: string;
+  prefix?: string;
+  onLine?: (line: string) => void;
+}
+
+export interface ExecResult {
+  code: number;
+  stdout: string;
+  /** The command was killed for printing nothing for `idleMs`. */
+  idleTimedOut?: boolean;
+  /** The command was killed after finishing its work but not exiting within `graceMs`; `code` is then 0. */
+  graceKilled?: boolean;
+}
+
+/** Defaults for the timeouts below. */
+export const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60_000;
+export const DEFAULT_COMPLETION_TIMEOUT_MS = 60_000;
+export const DEFAULT_STEP_TIMEOUT_MS = 30 * 60_000;
+
+export interface Timeouts {
+  /** Kill an agent or reviewer that prints nothing for this long. Defaults to 10 minutes. */
+  idleTimeoutMs?: number;
+  /** Grace for an agent to exit after its completion signal or final result before it is killed and counted as done. Defaults to 60 seconds. */
+  completionTimeoutMs?: number;
+  /** Like idleTimeoutMs, for setup and verify, which can be legitimately quiet. Defaults to 30 minutes. */
+  stepTimeoutMs?: number;
+}
+
+/** Limits for an agent run: idle and grace, with `isDone` matching its final result event or, for plain-text agents, one of `signals`. */
+export function agentLimits(agent: Agent, signals: string[], t: Timeouts): ExecLimits {
+  return {
+    idleMs: t.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS,
+    graceMs: t.completionTimeoutMs ?? DEFAULT_COMPLETION_TIMEOUT_MS,
+    // A stream's text can mention the signal long before the end (a prompt echo, a plan), so only its result event counts.
+    isDone: agent.parseLine
+      ? (line) => agent.parseLine!(line).some((e) => e.type === "result")
+      : (line) => signals.some((s) => line.includes(s)),
+  };
+}
+
+/** Limits for setup or verify: only the (longer) step timeout. */
+export function stepLimits(t: Timeouts): ExecLimits {
+  return { idleMs: t.stepTimeoutMs ?? DEFAULT_STEP_TIMEOUT_MS };
+}
+
+function describeMs(ms: number): string {
+  return ms >= 60_000 ? `${+(ms / 60_000).toFixed(1)} min` : `${+(ms / 1000).toFixed(1)}s`;
+}
+
+/** The message for a step killed by the idle limit. */
+export function idleMessage(what: string, ms: number): string {
+  return `${what} printed nothing for ${describeMs(ms)}; killed`;
 }
 
 export interface Commit {
@@ -61,7 +127,7 @@ export interface Commit {
   subject: string;
 }
 
-export interface RunOptions {
+export interface RunOptions extends Timeouts {
   prompt: string;
   agent: Agent;
   sandbox: Sandbox;
@@ -140,8 +206,11 @@ function prefixLines(text: string, prefix: string): string {
   return prefix ? text.replace(/^(?=.)/gm, prefix) : text;
 }
 
-/** Waits for the process, echoing its (redacted) stdout live (verbose only), each line led by `prefix`, while capturing it unprefixed. */
-async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">, prefix = "", onLine?: (line: string) => void): Promise<{ code: number; stdout: string }> {
+/**
+ * Waits for the process, echoing its (redacted) stdout live (verbose only), each line led by `prefix`, while capturing it unprefixed.
+ * `kill` must end the process (and whatever holds its stdout open); it is called when `limits` run out.
+ */
+async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">, kill: () => void, prefix = "", onLine?: (line: string) => void, limits: ExecLimits = {}): Promise<ExecResult> {
   // With onLine, lines are handed over (redacted) instead of echoed.
   const out = (text: string) => {
     if (!onLine) {
@@ -153,21 +222,76 @@ async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">, pref
   let stdout = "";
   // Echo whole lines only, so a secret split across chunks is still caught.
   let pending = "";
-  for await (const chunk of proc.stdout) {
-    const text = decoder.decode(chunk, { stream: true });
-    stdout += text;
-    pending += text;
-    const nl = pending.lastIndexOf("\n");
-    if (nl >= 0) {
-      out(pending.slice(0, nl + 1));
-      pending = pending.slice(nl + 1);
+  let done = false;
+  let killedFor: "idle" | "grace" | undefined;
+  let release!: () => void;
+  const killed = new Promise<void>((r) => (release = r));
+  const stop = (why: "idle" | "grace") => {
+    killedFor = why;
+    kill();
+    release();
+  };
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
+  const armIdle = () => {
+    if (limits.idleMs === undefined) return;
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => stop("idle"), limits.idleMs);
+  };
+  const seen = (lines: string) => {
+    if (done || !limits.isDone || limits.graceMs === undefined) return;
+    for (const line of lines.split("\n")) {
+      if (line && limits.isDone(line)) {
+        done = true;
+        graceTimer = setTimeout(() => stop("grace"), limits.graceMs);
+        return;
+      }
     }
+  };
+  armIdle();
+  const reader = proc.stdout.getReader();
+  try {
+    while (true) {
+      const next = await Promise.race([reader.read(), killed.then(() => undefined)]);
+      if (!next || next.done) break;
+      armIdle();
+      const text = decoder.decode(next.value, { stream: true });
+      stdout += text;
+      pending += text;
+      const nl = pending.lastIndexOf("\n");
+      if (nl >= 0) {
+        const whole = pending.slice(0, nl + 1);
+        out(whole);
+        seen(whole);
+        pending = pending.slice(nl + 1);
+      }
+    }
+    const tail = decoder.decode();
+    stdout += tail;
+    pending += tail;
+    if (pending) {
+      out(pending);
+      seen(pending);
+    }
+    await proc.exited;
+  } finally {
+    clearTimeout(idleTimer);
+    clearTimeout(graceTimer);
+    reader.releaseLock();
   }
-  const tail = decoder.decode();
-  stdout += tail;
-  pending += tail;
-  if (pending) out(pending);
-  return { code: await proc.exited, stdout: redact(stdout) };
+  const text = redact(stdout);
+  if (killedFor === "idle") return { code: 137, stdout: text, idleTimedOut: true };
+  if (killedFor === "grace") return { code: 0, stdout: text, graceKilled: true };
+  return { code: await proc.exited, stdout: text };
+}
+
+/** Kills the process and anything it started (it was spawned as a group leader). */
+function killGroup(proc: Bun.Subprocess<any, any, any>) {
+  try {
+    process.kill(-proc.pid, "SIGKILL");
+  } catch {
+    proc.kill("SIGKILL");
+  }
 }
 
 /** GitHub credentials bunker itself uses; an agent must never see them. */
@@ -176,10 +300,13 @@ export const GH_TOKEN_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "BUNKER_GH_TOKEN"] as 
 /** Runs the agent straight on the host, in the worktree. No isolation (GitHub tokens are stripped from its env). */
 export function noSandbox(): Sandbox {
   return {
-    exec: (cmd, { worktree, prefix, onLine }) =>
+    exec: (cmd, { worktree, prefix, onLine, ...limits }) => {
       // Explicit env: Bun.spawn otherwise passes the startup environment, dropping
       // anything set at runtime (e.g. the token loaded from .bunker/.env).
-      teeStdout(Bun.spawn(cmd, { cwd: worktree, env: agentEnv(), stdio: ["ignore", "pipe", "inherit"] }), prefix, onLine),
+      // detached: its own process group, so a kill reaches the agent's children too.
+      const proc = Bun.spawn(cmd, { cwd: worktree, env: agentEnv(), stdio: ["ignore", "pipe", "inherit"], detached: true });
+      return teeStdout(proc, () => killGroup(proc), prefix, onLine, limits);
+    },
   };
 }
 
@@ -267,7 +394,8 @@ function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions):
   // runAll() calls exec once per task at the same time; share one image build per repo.
   const images = new Map<string, Promise<string>>();
   return {
-    async exec(cmd, { worktree, gitCommonDir, prefix, onLine }) {
+    async exec(cmd, { worktree, gitCommonDir, prefix, onLine, ...limits }) {
+      const container = `bunker-${crypto.randomUUID().slice(0, 12)}`;
       const [entrypoint, ...args] = cmd;
       if (!entrypoint) throw new Error("empty agent command");
       if (!images.has(gitCommonDir)) images.set(gitCommonDir, resolveImage(bin, opts, worktree, gitCommonDir));
@@ -283,6 +411,7 @@ function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions):
       }).flatMap(([k, v]) => (v ? ["-e", `${k}=${v}`] : []));
       const argv = [
         bin, "run", "--rm",
+        "--name", container,
         ...userArgs,
         "-e", "HOME=/tmp",
         ...env.flatMap((name) => ["-e", name]), // name only: value comes from our env, never argv
@@ -294,7 +423,13 @@ function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions):
         image,
         ...args,
       ];
-      return teeStdout(Bun.spawn(argv, { env: process.env, stdio: ["ignore", "pipe", "inherit"] }), prefix, onLine);
+      const proc = Bun.spawn(argv, { env: process.env, stdio: ["ignore", "pipe", "inherit"] });
+      // Killing the CLI client would leave the container running; stop the container itself.
+      const kill = () => {
+        Bun.spawn([bin, "kill", container], { stdio: ["ignore", "ignore", "ignore"] });
+        proc.kill("SIGKILL");
+      };
+      return teeStdout(proc, kill, prefix, onLine, limits);
     },
   };
 }
@@ -329,10 +464,11 @@ export async function runSetup(
   sandbox: Sandbox,
   ctx: { worktree: string; gitCommonDir: string },
   setup?: string,
-): Promise<{ cmd: string; code: number; stdout: string } | undefined> {
+  timeouts: Timeouts = {},
+): Promise<({ cmd: string } & ExecResult) | undefined> {
   const cmd = setup ?? ((await Bun.file(join(ctx.worktree, ".bunker", "setup")).exists()) ? "sh .bunker/setup" : undefined);
   if (!cmd) return undefined;
-  const out = await sandbox.exec(["sh", "-c", `(${cmd}) 2>&1`], ctx);
+  const out = await sandbox.exec(["sh", "-c", `(${cmd}) 2>&1`], { ...ctx, ...stepLimits(timeouts) });
   return { cmd, ...out };
 }
 
@@ -378,6 +514,36 @@ export class AgentFailure extends Error {
   }
 }
 
+/** A step killed for printing nothing for too long. */
+export class IdleTimeoutError extends AgentFailure {}
+
+/**
+ * Runs one agent command with the idle and completion limits. Throws IdleTimeoutError if it went silent;
+ * a run killed after its completion signal counts as having exited cleanly (noted as a warning).
+ */
+export async function execAgent(
+  sandbox: Sandbox,
+  agent: Agent,
+  cmd: string[],
+  ctx: ExecContext,
+  signals: string[],
+  timeouts: Timeouts,
+  target: Pick<EventTarget, "onEvent">,
+  what: string,
+  kept: string,
+  priorUsage?: Usage,
+): Promise<ExecResult> {
+  const limits = agentLimits(agent, signals, timeouts);
+  const res = await sandbox.exec(cmd, { ...ctx, ...limits });
+  if (res.idleTimedOut) {
+    throw new IdleTimeoutError(`${idleMessage(what, limits.idleMs!)}; ${kept}`, sumUsage([priorUsage, interpret(agent, res.stdout).usage]));
+  }
+  if (res.graceKilled) {
+    emit(target.onEvent, { type: "note", text: `warning: ${what} did not exit ${describeMs(limits.graceMs!)} after finishing; killed it and counted the step as completed` });
+  }
+  return res;
+}
+
 interface AgentOutcome {
   commits: Commit[];
   iterations: Iteration[];
@@ -395,7 +561,7 @@ async function runAgent(
   base: string,
   gitCommonDir: string,
   wt: Worktree,
-  { prompt, agent, sandbox, maxIterations = 1, completionSignal = DEFAULT_SIGNAL, onEvent }: Omit<RunOptions, "cwd">,
+  { prompt, agent, sandbox, maxIterations = 1, completionSignal = DEFAULT_SIGNAL, onEvent, ...timeouts }: Omit<RunOptions, "cwd">,
   prefix?: string,
   task?: number,
 ): Promise<AgentOutcome> {
@@ -407,7 +573,11 @@ async function runAgent(
       const target = { onEvent, task, round: i + 1, role: "implementer" as const };
       emitStage(target, "implement");
       const onLine = lineHook(agent, target);
-      const { code, stdout } = await sandbox.exec(agent.command(prompt), { worktree: wt.path, gitCommonDir, ...(prefix ? { prefix } : {}), ...(onLine ? { onLine } : {}) });
+      const { code, stdout } = await execAgent(
+        sandbox, agent, agent.command(prompt),
+        { worktree: wt.path, gitCommonDir, ...(prefix ? { prefix } : {}), ...(onLine ? { onLine } : {}) },
+        signals, timeouts, target, "agent", `work kept on ${wt.branch}`, sumUsage(iterations.map((i) => i.usage)),
+      );
       const { text, usage } = interpret(agent, stdout);
       if (code !== 0) {
         throw new AgentFailure(`agent exited with ${code}; work kept on ${wt.branch}`, sumUsage([...iterations.map((i) => i.usage), usage]));
@@ -454,7 +624,7 @@ export async function run({ cwd = process.cwd(), ...opts }: RunOptions): Promise
   return { branch: wt.branch, ...outcome };
 }
 
-export interface RunAllOptions {
+export interface RunAllOptions extends Timeouts {
   tasks: { prompt: string }[];
   agent: Agent;
   sandbox: Sandbox;
@@ -467,7 +637,7 @@ export interface RunAllOptions {
 
 export interface TaskResult {
   prompt: string;
-  status: "merged" | "conflict" | "failed";
+  status: "merged" | "conflict" | "failed" | "idle-timeout";
   branch: string;
   commits: Commit[];
   iterations: Iteration[];
@@ -499,7 +669,7 @@ export async function runAll({ tasks, cwd = process.cwd(), ...opts }: RunAllOpti
     if (outcome.status === "rejected") {
       const error = redact(outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason));
       const usage = outcome.reason instanceof AgentFailure ? outcome.reason.usage : undefined;
-      results.push({ prompt, status: "failed", branch, commits: [], iterations: [], ...(usage ? { usage } : {}), error });
+      results.push({ prompt, status: outcome.reason instanceof IdleTimeoutError ? "idle-timeout" : "failed", branch, commits: [], iterations: [], ...(usage ? { usage } : {}), error });
       continue;
     }
     const conflict = await mergeBack(cwd, branch, outcome.value.commits);
@@ -512,7 +682,7 @@ export async function runAll({ tasks, cwd = process.cwd(), ...opts }: RunAllOpti
   return results;
 }
 
-export interface ReviewOptions {
+export interface ReviewOptions extends Timeouts {
   prompt: string;
   /** Implements the task (and addresses feedback). */
   agent: Agent;
@@ -547,7 +717,7 @@ export interface ReviewRound {
 }
 
 export interface ReviewResult {
-  status: "approved" | "rejected" | "failed" | "conflict";
+  status: "approved" | "rejected" | "failed" | "conflict" | "idle-timeout";
   branch: string;
   commits: Commit[];
   rounds: ReviewRound[];
@@ -588,6 +758,7 @@ export async function review({
   setup,
   onEvent,
   onRaw,
+  ...timeouts
 }: ReviewOptions): Promise<ReviewResult> {
   const { base, gitCommonDir } = await repoInfo(cwd);
   const wt = await addWorktree(cwd, base);
@@ -599,7 +770,8 @@ export async function review({
   let error: string | undefined;
   try {
     emitStage({ onEvent }, "setup");
-    const prep = await runSetup(sandbox, ctx, setup);
+    const prep = await runSetup(sandbox, ctx, setup, timeouts);
+    if (prep?.idleTimedOut) throw new IdleTimeoutError(idleMessage("setup", timeouts.stepTimeoutMs ?? DEFAULT_STEP_TIMEOUT_MS));
     if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${tailLines(prep.stdout)}`);
     for (let i = 0; i < maxRounds; i++) {
       const feedback = rounds.at(-1)?.feedback;
@@ -607,7 +779,7 @@ export async function review({
       const implTarget = { onEvent, onRaw, round: i + 1, role: "implementer" as const };
       emitStage(implTarget, "implement");
       const implHook = lineHook(agent, implTarget);
-      const impl = await sandbox.exec(agent.command(task, "write"), implHook ? { ...ctx, onLine: implHook } : ctx);
+      const impl = await execAgent(sandbox, agent, agent.command(task, "write"), implHook ? { ...ctx, onLine: implHook } : ctx, [], timeouts, implTarget, "agent", `work kept on ${wt.branch}`, sumUsage(usages));
       const implOut = interpret(agent, impl.stdout);
       usages.push(implOut.usage);
       if (impl.code !== 0) throw new Error(`agent exited with ${impl.code}; work kept on ${wt.branch}`);
@@ -620,10 +792,14 @@ export async function review({
       const revTarget = { onEvent, onRaw, round: i + 1, role: "reviewer" as const };
       emitStage(revTarget, "review");
       const revHook = lineHook(reviewer, revTarget);
-      const rev = await sandbox.exec(reviewer.command(reviewerPrompt(prompt, diff, approveSignal, reviewerInstruction), "review"), revHook ? { ...ctx, onLine: revHook } : ctx);
-      // Only the implementer's commits survive, whatever the reviewer did.
-      await $`git -C ${wt.path} reset -q --hard ${head}`.quiet();
-      await $`git -C ${wt.path} clean -qfd`.quiet();
+      let rev: ExecResult;
+      try {
+        rev = await execAgent(sandbox, reviewer, reviewer.command(reviewerPrompt(prompt, diff, approveSignal, reviewerInstruction), "review"), revHook ? { ...ctx, onLine: revHook } : ctx, [approveSignal], timeouts, revTarget, "reviewer", `work kept on ${wt.branch}`, sumUsage(usages));
+      } finally {
+        // Only the implementer's commits survive, whatever the reviewer did.
+        await $`git -C ${wt.path} reset -q --hard ${head}`.quiet();
+        await $`git -C ${wt.path} clean -qfd`.quiet();
+      }
       const revOut = interpret(reviewer, rev.stdout);
       usages.push(revOut.usage);
       if (rev.code !== 0) throw new Error(`reviewer exited with ${rev.code}; work kept on ${wt.branch}`);
@@ -637,7 +813,7 @@ export async function review({
       }
     }
   } catch (e) {
-    status = "failed";
+    status = e instanceof IdleTimeoutError ? "idle-timeout" : "failed";
     error = redact(e instanceof Error ? e.message : String(e));
   } finally {
     await $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet();

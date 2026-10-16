@@ -1,10 +1,10 @@
 import { $ } from "bun";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runSetup, type Agent, type Sandbox, type Usage } from "./index.ts";
+import { execAgent, idleMessage, runSetup, DEFAULT_STEP_TIMEOUT_MS, type Agent, type Sandbox, type Timeouts, type Usage } from "./index.ts";
 import { parseIssueBlocks } from "./issue.ts";
 
-export interface AuditOptions {
+export interface AuditOptions extends Timeouts {
   agent: Agent;
   sandbox: Sandbox;
   /** The target repo's main checkout. Defaults to process.cwd(). */
@@ -44,7 +44,7 @@ export function auditPrompt(maxIssues: number, focus?: string): string {
  * `<issue>` blocks it prints are filed as `discovered` (never `bunker`), minus
  * titles that match an open issue. The worktree is always removed.
  */
-export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, focus, setup }: AuditOptions): Promise<AuditResult> {
+export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, focus, setup, ...timeouts }: AuditOptions): Promise<AuditResult> {
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
   const gitCfg = token ? ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"] : [];
@@ -74,9 +74,10 @@ export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues 
   let usage: Usage | undefined;
   try {
     const ctx = { worktree, gitCommonDir };
-    const prep = await runSetup(sandbox, ctx, setup);
+    const prep = await runSetup(sandbox, ctx, setup, timeouts);
+    if (prep?.idleTimedOut) throw new Error(idleMessage("setup", timeouts.stepTimeoutMs ?? DEFAULT_STEP_TIMEOUT_MS));
     if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${prep.stdout.slice(-2000)}`);
-    const res = await sandbox.exec(agent.command(auditPrompt(maxIssues, focus), "review"), ctx);
+    const res = await execAgent(sandbox, agent, agent.command(auditPrompt(maxIssues, focus), "review"), ctx, [], timeouts, {}, "audit agent", "nothing was filed");
     if (res.code !== 0) throw new Error(`agent exited with ${res.code}`);
     const parsed = agent.parse?.(res.stdout);
     output = parsed?.text ?? res.stdout;
