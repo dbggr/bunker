@@ -74,20 +74,32 @@ const ISSUE_CONVENTION =
   "If this issue cannot be done until something else is done, do not work around it: instead print " +
   '<blocked-by title="short title">why it blocks, plus acceptance criteria</blocked-by> and stop.';
 
-/** Text without fenced code or inline code spans: blocks an agent merely quotes are not findings. */
+/**
+ * `text` with fenced code and inline code spans blanked out (same length, so offsets line up with the original):
+ * blocks an agent merely quotes are not findings. Match on this, then read titles and bodies from the original.
+ */
 function prose(text: string): string {
+  const blank = (s: string) => s.replace(/[^\n]/g, "\0");
   return text
-    .replace(/^ *(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^ *\1[`~]*[ \t]*$|(?![\s\S]))/gm, "")
-    .replace(/(?<!`)(`+)(?!`)[^\n]*?(?<!`)\1(?!`)/g, "");
+    .replace(/^ *(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^ *\1[`~]*[ \t]*$|(?![\s\S]))/gm, blank)
+    .replace(/(?<!`)(`+)(?!`)[^\n]*?(?<!`)\1(?!`)/g, blank);
+}
+
+/** Capture groups of every match of `re` (which needs the `d` flag) in the prose of `text`, re-read from the original text. */
+function* proseMatches(text: string, re: RegExp): Generator<string[]> {
+  for (const m of prose(text).matchAll(re)) {
+    const [, ...groups] = (m as RegExpMatchArray & { indices: [number, number][] }).indices;
+    yield groups.map(([from, to]) => text.slice(from, to));
+  }
 }
 
 const isPlaceholder = (title: string) => !/[\p{L}\p{N}]/u.test(title) || title.toLowerCase() === "short title";
 
 /** The first real `<blocked-by title="...">body</blocked-by>` block in `text`, if any. */
 export function parseBlockedBy(text: string): { title: string; body: string } | undefined {
-  for (const m of prose(text).matchAll(/<blocked-by\s+title="([^"]*)"\s*>([\s\S]*?)<\/blocked-by>/g)) {
-    const title = m[1]!.trim();
-    if (!isPlaceholder(title)) return { title, body: m[2]!.trim() };
+  for (const m of proseMatches(text, /<blocked-by\s+title="([^"]*)"\s*>([\s\S]*?)<\/blocked-by>/dg)) {
+    const title = m[0]!.trim();
+    if (!isPlaceholder(title)) return { title, body: m[1]!.trim() };
   }
   return undefined;
 }
@@ -115,9 +127,9 @@ export function blockerRefs(issue: Pick<IssueInfo, "body" | "comments">): number
 /** Every `<issue title="...">body</issue>` block in `text`, deduped by title (first wins). */
 export function parseIssueBlocks(text: string): { title: string; body: string }[] {
   const seen = new Map<string, string>();
-  for (const m of prose(text).matchAll(/<issue\s+title="([^"]*)"\s*>([\s\S]*?)<\/issue>/g)) {
-    const title = m[1]!.trim();
-    if (!isPlaceholder(title) && !seen.has(title)) seen.set(title, m[2]!.trim());
+  for (const m of proseMatches(text, /<issue\s+title="([^"]*)"\s*>([\s\S]*?)<\/issue>/dg)) {
+    const title = m[0]!.trim();
+    if (!isPlaceholder(title) && !seen.has(title)) seen.set(title, m[1]!.trim());
   }
   return [...seen].map(([title, body]) => ({ title, body }));
 }
