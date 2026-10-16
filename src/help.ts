@@ -6,6 +6,7 @@ Usage:
   bunker --review "<prompt>"                  implement -> review -> fix rounds
   bunker --issue <n>                          GitHub issue -> reviewed PR
   bunker --queue                              work the \`bunker\` label queue
+  bunker --watch                              keep working the queue unattended (implies --queue --merge)
   bunker --audit                              file improvement ideas as \`discovered\` issues
 
 Common options (all modes):
@@ -40,6 +41,13 @@ Single prompt and --task:
   --port <n>                 (--ui) port to listen on (default 4321)
   --ui-keep                  (--ui) keep serving after the run ends (Ctrl-C to quit)
 
+--watch:
+  --watch                    loop: work the queue, sleep, repeat until Ctrl-C; needs --verify or .bunker/verify
+  --interval <min>           minutes between passes (default 10)
+  --for <duration>           stop starting new issues after this long, e.g. 5h, 90m, 2h30m (default: until Ctrl-C)
+  --max-cost <usd>           spend cap per rolling 24 h, kept in .bunker/watch-spend.json (default 20)
+  Failed issues get \`bunker-failed\` instead of \`bunker\` and are never retried automatically.
+
 --audit:
   --audit                    read-only agent run that files issues
   --max-issues <n>           max issues to file (default 5)
@@ -58,5 +66,6 @@ Examples:
   bunker --review "add a greet() helper" --max-rounds 3
   bunker --issue 12 --verify "bun test"
   bunker --queue --verify "bun test && bun run typecheck" --merge
+  bunker --watch --for 5h --max-cost 10
   bunker --audit --focus "error handling"
 `;
