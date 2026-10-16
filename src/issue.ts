@@ -90,6 +90,18 @@ export function parseBlockedBy(text: string): { title: string; body: string } | 
   return undefined;
 }
 
+const isObj = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === "object";
+
+/** True when a parsed `gh issue view` response has every field runQueue reads in a usable shape. */
+function isLiveShape(live: Record<string, unknown>): boolean {
+  const { labels, body, comments } = live;
+  return (
+    Array.isArray(labels) && labels.every(isObj) &&
+    (body == null || typeof body === "string") &&
+    (comments == null || (Array.isArray(comments) && comments.every((c) => isObj(c) && typeof c.body === "string")))
+  );
+}
+
 /** Issue numbers named by `Blocked by #N` / `Depends on #N` (case-insensitive) in the body and trusted comments. */
 export function blockerRefs(issue: Pick<IssueInfo, "body" | "comments">): number[] {
   const texts = [issue.body ?? "", ...(issue.comments ?? []).filter((c) => TRUSTED_ASSOCIATIONS.has(c.authorAssociation ?? "")).map((c) => c.body)];
@@ -494,7 +506,9 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       return [];
     }
     try {
-      return JSON.parse(list.stdout.toString()) as { number: number; title: string; createdAt: string }[];
+      const parsed: unknown = JSON.parse(list.stdout.toString());
+      if (!Array.isArray(parsed)) throw new Error("not an array");
+      return parsed.filter((i): i is { number: number; title: string; createdAt: string } => i !== null && typeof i === "object" && typeof i.number === "number" && typeof i.title === "string" && typeof i.createdAt === "string");
     } catch {
       console.warn("bunker: gh issue list returned unparseable output");
       return [];
@@ -520,6 +534,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
     let live: Pick<IssueInfo, "state" | "labels" | "body" | "comments">;
     try {
       live = JSON.parse(view.stdout.toString());
+      if (live === null || typeof live !== "object" || !isLiveShape(live)) throw new Error("unexpected shape");
     } catch {
       console.warn(`bunker: skipping #${q.number}, gh issue view returned unparseable output`);
       continue;
