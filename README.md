@@ -68,6 +68,35 @@ Agent stdout is still streamed live; `Sandbox.exec` also returns it as `{ code, 
 
 CLI: `--max-iterations <n>` applies to a single prompt and to every `--task`.
 
+## Review pipeline
+
+```ts
+import { review, claudeCode, docker } from "./src/index.ts";
+const result = await review({
+  prompt: "add a greet() helper",
+  agent: claudeCode(),
+  // reviewer: claudeCode({ model: "..." }),   // defaults to agent
+  sandbox: docker(),
+  maxRounds: 2,
+  // approveSignal: "<review>APPROVE</review>",
+});
+result.status; // "approved" | "rejected" | "failed" | "conflict"
+result.rounds; // [{ commits, approved, feedback }, ...]
+```
+
+`review()` runs implement → review → fix rounds in one worktree and branch:
+
+1. The implementer runs. Round 1 gets the prompt; later rounds get the prompt plus `A reviewer requested changes:\n<feedback>`.
+2. The reviewer runs in the same worktree with a prompt bunker builds: the task, the full `git diff <base>..HEAD`, and instructions not to modify files or commit and to print the approve signal if the change is acceptable, otherwise list the required changes.
+3. Anything the reviewer changed or committed is discarded (worktree reset to the pre-review HEAD, untracked files cleaned), so only the implementer's commits survive.
+4. If the reviewer's stdout contains the approve signal the branch is merged back as in `run()`. Otherwise after `maxRounds` it is not merged and the branch is kept.
+
+Agents get a mode: `Agent.command(prompt, "write" | "review")`. `claudeCode()` only appends its commit instruction in write mode (the default).
+
+Nothing is thrown for the four statuses. A non-zero exit from either agent is `failed`. The branch is kept for `rejected`, `failed` and `conflict` and deleted after a clean merge; the worktree is always removed. `feedback` is the reviewer's stdout.
+
+CLI: `--review "<prompt>" [--max-rounds <n>] [--reviewer-model <id>]` (single prompt only) prints one line per round and the final status, and exits 1 unless approved.
+
 ## Agent images: base + per-repo
 
 The container only runs the agent, so it needs no Bun or Node of its own, just git and claude. Anything else the agent needs to *verify* its work (run tests, lint) is the target repo's toolchain, so each repo adds that itself.

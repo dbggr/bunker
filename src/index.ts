@@ -2,9 +2,12 @@ import { $ } from "bun";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
+export type AgentMode = "write" | "review";
+
 /** Turns a prompt into the command line that runs the agent. */
 export interface Agent {
-  command(prompt: string): string[];
+  /** "review" is a read-only pass over someone else's work; "write" (default) is expected to commit. */
+  command(prompt: string, mode?: AgentMode): string[];
 }
 
 /** Where the agent's command runs. Gets the worktree and the repo's shared .git dir. */
@@ -56,10 +59,10 @@ const NO_ATTRIBUTION = JSON.stringify({ attribution: { commit: "", pr: "" } });
 
 export function claudeCode(opts: { model?: string; attribution?: boolean } = {}): Agent {
   return {
-    command: (prompt) => [
+    command: (prompt, mode = "write") => [
       "claude",
       "-p",
-      prompt + COMMIT_INSTRUCTION,
+      mode === "write" ? prompt + COMMIT_INSTRUCTION : prompt,
       "--dangerously-skip-permissions",
       ...(opts.model ? ["--model", opts.model] : []),
       ...(opts.attribution ? [] : ["--settings", NO_ATTRIBUTION]),
@@ -315,4 +318,107 @@ export async function runAll({ tasks, cwd = process.cwd(), ...opts }: RunAllOpti
     );
   }
   return results;
+}
+
+export interface ReviewOptions {
+  prompt: string;
+  /** Implements the task (and addresses feedback). */
+  agent: Agent;
+  /** Reviews each round. Defaults to `agent`. */
+  reviewer?: Agent;
+  sandbox: Sandbox;
+  cwd?: string;
+  /** Max implement → review rounds. Defaults to 2. */
+  maxRounds?: number;
+  /** Reviewer stdout containing this approves the change. Defaults to "<review>APPROVE</review>". */
+  approveSignal?: string;
+}
+
+export interface ReviewRound {
+  /** Commits the implementer added this round. */
+  commits: Commit[];
+  approved: boolean;
+  /** The reviewer's stdout. */
+  feedback: string;
+}
+
+export interface ReviewResult {
+  status: "approved" | "rejected" | "failed" | "conflict";
+  branch: string;
+  commits: Commit[];
+  rounds: ReviewRound[];
+  error?: string;
+}
+
+const DEFAULT_APPROVE = "<review>APPROVE</review>";
+
+function reviewerPrompt(task: string, diff: string, approveSignal: string): string {
+  return (
+    `You are reviewing a change made for this task:\n\n${task}\n\n` +
+    `Here is the full diff of the change:\n\n${diff}\n\n` +
+    "Do not modify any files and do not commit anything. " +
+    `If the change is acceptable, print ${approveSignal}. ` +
+    "Otherwise list the changes that are required."
+  );
+}
+
+/**
+ * Implement → review rounds in one worktree. The reviewer sees the task and the
+ * full diff; whatever it changes or commits is discarded, so only the
+ * implementer's commits survive. Approved → merged like run(). Otherwise
+ * (rejected after maxRounds, failed, conflict) the result says so and the branch
+ * is kept. Nothing is thrown for those outcomes.
+ */
+export async function review({
+  cwd = process.cwd(),
+  prompt,
+  agent,
+  reviewer = agent,
+  sandbox,
+  maxRounds = 2,
+  approveSignal = DEFAULT_APPROVE,
+}: ReviewOptions): Promise<ReviewResult> {
+  const { base, gitCommonDir } = await repoInfo(cwd);
+  const wt = await addWorktree(cwd, base);
+  const ctx = { worktree: wt.path, gitCommonDir };
+  const rounds: ReviewRound[] = [];
+  let commits: Commit[] = [];
+  let status: ReviewResult["status"] = "rejected";
+  let error: string | undefined;
+  try {
+    for (let i = 0; i < maxRounds; i++) {
+      const feedback = rounds.at(-1)?.feedback;
+      const task = feedback === undefined ? prompt : `${prompt}\n\nA reviewer requested changes:\n${feedback}`;
+      const impl = await sandbox.exec(agent.command(task, "write"), ctx);
+      if (impl.code !== 0) throw new Error(`agent exited with ${impl.code}; work kept on ${wt.branch}`);
+      const total = await commitsBetween(cwd, base, wt.branch);
+      const added = total.slice(commits.length);
+      commits = total;
+
+      const head = (await $`git -C ${wt.path} rev-parse HEAD`.text()).trim();
+      const diff = await $`git -C ${wt.path} diff ${base}..HEAD`.text();
+      const rev = await sandbox.exec(reviewer.command(reviewerPrompt(prompt, diff, approveSignal), "review"), ctx);
+      // Only the implementer's commits survive, whatever the reviewer did.
+      await $`git -C ${wt.path} reset -q --hard ${head}`.quiet();
+      await $`git -C ${wt.path} clean -qfd`.quiet();
+      if (rev.code !== 0) throw new Error(`reviewer exited with ${rev.code}; work kept on ${wt.branch}`);
+
+      const approved = rev.stdout.includes(approveSignal);
+      rounds.push({ commits: added, approved, feedback: rev.stdout });
+      if (approved) {
+        status = "approved";
+        break;
+      }
+    }
+  } catch (e) {
+    status = "failed";
+    error = e instanceof Error ? e.message : String(e);
+  } finally {
+    await $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet();
+  }
+  if (status === "approved") {
+    error = await mergeBack(cwd, wt.branch, commits);
+    if (error) status = "conflict";
+  }
+  return { status, branch: wt.branch, commits, rounds, ...(error ? { error } : {}) };
 }
