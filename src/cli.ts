@@ -198,6 +198,7 @@ if (values.audit) {
   for (const t of result.skipped) console.log(`bunker: skipped (already open): ${t}`);
   if (!result.filed.length) console.log("bunker: no issues filed");
   for (const f of result.filed) console.log(`filed #${f.number}: ${f.title}`);
+  if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
 } else if (values.queue) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
   let results;

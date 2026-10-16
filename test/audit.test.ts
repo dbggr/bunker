@@ -96,6 +96,25 @@ describe("runAudit()", () => {
     expect((await $`git -C ${repo} worktree list`.text()).trim().split("\n")).toHaveLength(1);
   });
 
+  test("returns the usage the agent's parse reports", async () => {
+    const { repo } = await setup();
+    process.env.AUDIT_PWD = join(repo, "..", "pwd");
+    const agent: Agent = {
+      ...fakeAgent(block("A")),
+      parse: (stdout) => ({ text: stdout, usage: { costUsd: 0.42, durationMs: 1500 } }),
+    };
+    const r = await runAudit({ cwd: repo, agent, sandbox: noSandbox() });
+    expect(r.usage).toEqual({ costUsd: 0.42, durationMs: 1500 });
+    expect(r.filed).toHaveLength(1);
+  });
+
+  test("usage is absent when the agent reports none", async () => {
+    const { repo } = await setup();
+    process.env.AUDIT_PWD = join(repo, "..", "pwd");
+    const r = await runAudit({ cwd: repo, agent: fakeAgent(block("A")), sandbox: noSandbox() });
+    expect(r.usage).toBeUndefined();
+  });
+
   test("default cap is 5", async () => {
     const { repo } = await setup();
     process.env.AUDIT_PWD = join(repo, "..", "pwd");
