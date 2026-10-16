@@ -18,6 +18,7 @@ bunker --queue --merge              # everything labelled `bunker`
 - Implement, review, fix rounds, then verify in the sandbox
 - PR with GitHub auto-merge and a landing check
 - Work queue by label, and unattended `--watch` with a spend cap
+- Opt-in `--parallel <n>` for `--queue --merge` and `--watch`: n issues at once, merges still serial and each branch updated to the latest main and re-verified first. The trade-off is more concurrent spend and rework when issues touch the same files; 2 is a good choice
 - Agents file out-of-scope findings as `discovered` issues for human triage
 - Scoped GitHub token and output redaction; agents never see GitHub credentials
 - Live multi-repo view with `bunker ui`

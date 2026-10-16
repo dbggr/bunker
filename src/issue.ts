@@ -43,6 +43,13 @@ export interface IssueOptions {
   ciPollMs?: number;
   /** Progress events (stages, agent text and tool calls, results), each labelled with the issue. */
   onEvent?: OnEvent;
+  /**
+   * With `merge`: runs the publish-and-merge step (update to the latest default branch, re-verify, push, PR, auto-merge, wait)
+   * when it is this issue's turn, so parallel issues merge one at a time. Without it the branch is pushed as it is.
+   */
+  mergeTurn?: (run: () => Promise<IssueResult>) => Promise<IssueResult>;
+  /** 1 for the first attempt; later ones get a `-<n>` suffix on the branch and worktree. */
+  attempt?: number;
 }
 
 export interface IssueResult {
@@ -55,6 +62,8 @@ export interface IssueResult {
   review?: ReviewResult;
   /** Spend when the run threw instead of producing a `review` (otherwise see `review.usage`). */
   usage?: Usage;
+  /** The failure came after the branch was brought up to date with the default branch (a conflict, or verify failing on the result). */
+  stale?: boolean;
   /** Tail of the verify command's output, when it failed. */
   verifyOutput?: string;
   error?: string;
@@ -295,7 +304,7 @@ export async function runIssue(opts: IssueOptions): Promise<IssueResult> {
   }
 }
 
-async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, setup, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent }: IssueOptions, spent: { usage?: Usage }): Promise<IssueResult> {
+async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, setup, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1 }: IssueOptions, spent: { usage?: Usage }): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -310,7 +319,9 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   issue.authorAssociation = assoc.exitCode === 0 ? assoc.stdout.toString().trim() : "";
   if (issue.state.toUpperCase() !== "OPEN") throw new Error(`issue #${number} is closed`);
 
-  const { branch, slug } = issueBranch(issue);
+  const base = issueBranch(issue);
+  const slug = attempt > 1 ? `${base.slug}-${attempt}` : base.slug;
+  const branch = attempt > 1 ? `${base.branch}-${attempt}` : base.branch;
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const worktree = join(repo, ".worktrees", `${number}-${slug}`);
   const filed: IssueResult["filed"] = [];
@@ -355,7 +366,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   const fetch = await $`git ${gitCfg} -C ${repo} fetch -q ${remote} ${defaultBranch}`.env(env).nothrow().quiet();
   if (fetch.exitCode !== 0) return fail("failed", { error: `could not fetch origin/${defaultBranch}:\n${fetch.stderr}` });
 
-  const baseSha = (await $`git -C ${repo} rev-parse FETCH_HEAD`.text()).trim();
+  let baseSha = (await $`git -C ${repo} rev-parse FETCH_HEAD`.text()).trim();
   // Default verify: the base branch's .bunker/verify, read now so the agent can't weaken it in its worktree.
   let verifySource = "--verify";
   if (!verify) {
@@ -415,7 +426,9 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   }
   if (result.status !== "approved") return fail(result.status, { review: result, ...(result.error ? { error: result.error } : {}) });
 
-  if (verify) {
+  /** Setup + verify in the worktree; a failed result, or undefined when verify passed (or there is none). */
+  const runVerify = async (extra: Partial<IssueResult> = {}): Promise<IssueResult | undefined> => {
+    if (!verify) return undefined;
     emitStage({ onEvent }, "verify");
     // The issue worktree is a fresh checkout too (the agent ran in review()'s own), so it needs setup as well.
     const prep = await runSetup(sandbox, { worktree, gitCommonDir }, setup);
@@ -423,7 +436,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
       log(`setup (exit ${prep.code})`, prep.stdout);
       if (prep.code !== 0) {
         failNote(`setup failed (exit ${prep.code})`, prep.stdout);
-        return fail("failed", { review: result, error: `setup failed (exit ${prep.code}):\n${tailLines(prep.stdout).slice(-VERIFY_TAIL)}` });
+        return fail("failed", { review: result, ...extra, error: `setup failed (exit ${prep.code}):\n${tailLines(prep.stdout).slice(-VERIFY_TAIL)}` });
       }
     }
     let code: number;
@@ -442,57 +455,88 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     log(`verify (exit ${code})`, text);
     if (code !== 0) {
       failNote(`verify failed (exit ${code})`, text);
-      return fail("verify-failed", { review: result, verifyOutput: tailLines(text).slice(-VERIFY_TAIL) });
+      return fail("verify-failed", { review: result, ...extra, verifyOutput: tailLines(text).slice(-VERIFY_TAIL) });
     }
     const counts = testCounts(text);
     emit(onEvent, { type: "note", text: `verify passed (${[counts, `${((Date.now() - verifyStart) / 1000).toFixed(1)}s`].filter(Boolean).join(", ")})` });
-  }
+    return undefined;
+  };
+  const failedVerify = await runVerify();
+  if (failedVerify) return failedVerify;
 
-  emitStage({ onEvent }, "PR");
-  const push = await $`git ${gitCfg} -C ${worktree} push -q ${token ? [] : ['-u']} ${remote} ${branch}`.env(env).nothrow().quiet();
-  if (push.exitCode !== 0) return fail("failed", { review: result, error: `git push failed:\n${push.stderr}` });
-
-  const body = [`Closes #${number}`, reviewLines(result), ...(verify ? [`Verify: \`${verify}\` passed (${verifySource})`] : [])].join("\n\n");
-  const pr = await $`gh pr create --head ${branch} --title ${issue.title} --body ${body}`.cwd(worktree).env(env).nothrow().quiet();
-  if (pr.exitCode !== 0) return fail("failed", { review: result, error: `gh pr create failed:\n${pr.stderr}` });
-  const prUrl = pr.stdout.toString().trim().split("\n").at(-1);
-  if (prUrl) emit(onEvent, { type: "meta", url: prUrl });
-  const opened = { review: result, ...(prUrl ? { prUrl } : {}) };
-  if (!merge || !prUrl) return fail("pr-opened", opened);
-
-  // GitHub merges once the required checks pass (and refuses if they fail), so bunker never reads CI.
-  // No --delete-branch: gh would also switch/delete the local branch, which fails in a worktree.
-  const armed = await $`gh pr merge ${prUrl} --auto --squash`.cwd(worktree).env(env).nothrow().quiet();
-  if (armed.exitCode !== 0) {
-    const out = `${armed.stderr}${armed.stdout}`;
-    if (!/auto[- ]?merge/i.test(out)) return fail("merge-failed", { ...opened, error: `gh pr merge --auto failed (exit ${armed.exitCode}):\n${out}` });
-    // The repo doesn't allow auto-merge: merge now, if branch protection lets us.
-    const plain = await $`gh pr merge ${prUrl} --squash`.cwd(worktree).env(env).nothrow().quiet();
-    if (plain.exitCode !== 0) {
-      return fail("merge-failed", { ...opened, error: `auto-merge unavailable and gh pr merge failed (exit ${plain.exitCode}):\n${plain.stderr}${plain.stdout}` });
+  /** Merges the latest default branch into the branch; re-verifies if that changed anything. Undefined when all is well. */
+  const updateToLatest = async (): Promise<IssueResult | undefined> => {
+    emit(onEvent, { type: "note", text: `updating to origin/${defaultBranch}` });
+    const refetch = await $`git ${gitCfg} -C ${repo} fetch -q ${remote} ${defaultBranch}`.env(env).nothrow().quiet();
+    if (refetch.exitCode !== 0) return fail("failed", { review: result, error: `could not fetch origin/${defaultBranch}:\n${refetch.stderr}` });
+    const latest = (await $`git -C ${repo} rev-parse FETCH_HEAD`.text()).trim();
+    const before = (await $`git -C ${worktree} rev-parse HEAD`.text()).trim();
+    const identity = (await $`git -C ${worktree} config user.email`.nothrow().quiet().text()).trim() ? [] : ["-c", "user.name=bunker", "-c", "user.email=bunker@localhost"];
+    const merged = await $`git ${identity} -C ${worktree} merge --no-edit ${latest}`.env(env).nothrow().quiet();
+    if (merged.exitCode !== 0) {
+      const out = `${merged.stdout}${merged.stderr}`;
+      await $`git -C ${worktree} merge --abort`.nothrow().quiet();
+      log("update to latest: conflict", out);
+      return fail("conflict", { review: result, stale: true, error: `could not merge origin/${defaultBranch} into ${branch}:\n${tailLines(out)}` });
     }
-  }
-  emitStage({ onEvent }, "waiting for merge");
-  const waited = await waitForMerge(prUrl, worktree, env, ciTimeoutMin * 60_000, ciPollMs);
-  if (waited.outcome !== "merged") return fail(waited.outcome === "closed" ? "merge-failed" : "ci-timeout", { ...opened, error: waited.detail });
-  await $`gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/${branch}`.cwd(worktree).env(env).nothrow().quiet();
+    baseSha = latest;
+    if ((await $`git -C ${worktree} rev-parse HEAD`.text()).trim() === before) return undefined;
+    log("update to latest", `merged origin/${defaultBranch} (${latest})`);
+    return runVerify({ stale: true });
+  };
 
-  // Squash-merges have silently dropped late commits: check every file the branch touched.
-  const refspec = `+refs/heads/${defaultBranch}:refs/remotes/origin/${defaultBranch}`;
-  const refetch = await $`git ${gitCfg} -C ${repo} fetch -q ${remote} ${refspec}`.env(env).nothrow().quiet();
-  if (refetch.exitCode !== 0) return fail("merge-unverified", { ...opened, error: `merged, but could not fetch to verify:\n${refetch.stderr}` });
-  const target = `origin/${defaultBranch}`;
-  const files = (await $`git -C ${repo} diff --name-only ${baseSha} ${branch}`.text()).split("\n").filter(Boolean);
-  const differing = files.length
-    ? (await $`git -C ${repo} diff --name-only ${branch} ${target} -- ${files}`.text()).split("\n").filter(Boolean)
-    : [];
-  if (differing.length) {
-    return fail("merge-unverified", { ...opened, error: `merged, but ${target} differs from ${branch} in:\n${differing.join("\n")}` });
-  }
+  const publish = async (): Promise<IssueResult> => {
+    if (merge && mergeTurn) {
+      const failed = await updateToLatest();
+      if (failed) return failed;
+    }
+    emitStage({ onEvent }, "PR");
+    const push = await $`git ${gitCfg} -C ${worktree} push -q ${token ? [] : ['-u']} ${remote} ${branch}`.env(env).nothrow().quiet();
+    if (push.exitCode !== 0) return fail("failed", { review: result, error: `git push failed:\n${push.stderr}` });
 
-  await $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet();
-  await $`git -C ${repo} branch -D ${branch}`.nothrow().quiet();
-  return fail("merged", opened);
+    const body = [`Closes #${number}`, reviewLines(result), ...(verify ? [`Verify: \`${verify}\` passed (${verifySource})`] : [])].join("\n\n");
+    const pr = await $`gh pr create --head ${branch} --title ${issue.title} --body ${body}`.cwd(worktree).env(env).nothrow().quiet();
+    if (pr.exitCode !== 0) return fail("failed", { review: result, error: `gh pr create failed:\n${pr.stderr}` });
+    const prUrl = pr.stdout.toString().trim().split("\n").at(-1);
+    if (prUrl) emit(onEvent, { type: "meta", url: prUrl });
+    const opened = { review: result, ...(prUrl ? { prUrl } : {}) };
+    if (!merge || !prUrl) return fail("pr-opened", opened);
+
+    // GitHub merges once the required checks pass (and refuses if they fail), so bunker never reads CI.
+    // No --delete-branch: gh would also switch/delete the local branch, which fails in a worktree.
+    const armed = await $`gh pr merge ${prUrl} --auto --squash`.cwd(worktree).env(env).nothrow().quiet();
+    if (armed.exitCode !== 0) {
+      const out = `${armed.stderr}${armed.stdout}`;
+      if (!/auto[- ]?merge/i.test(out)) return fail("merge-failed", { ...opened, error: `gh pr merge --auto failed (exit ${armed.exitCode}):\n${out}` });
+      // The repo doesn't allow auto-merge: merge now, if branch protection lets us.
+      const plain = await $`gh pr merge ${prUrl} --squash`.cwd(worktree).env(env).nothrow().quiet();
+      if (plain.exitCode !== 0) {
+        return fail("merge-failed", { ...opened, error: `auto-merge unavailable and gh pr merge failed (exit ${plain.exitCode}):\n${plain.stderr}${plain.stdout}` });
+      }
+    }
+    emitStage({ onEvent }, "waiting for merge");
+    const waited = await waitForMerge(prUrl, worktree, env, ciTimeoutMin * 60_000, ciPollMs);
+    if (waited.outcome !== "merged") return fail(waited.outcome === "closed" ? "merge-failed" : "ci-timeout", { ...opened, error: waited.detail });
+    await $`gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/${branch}`.cwd(worktree).env(env).nothrow().quiet();
+
+    // Squash-merges have silently dropped late commits: check every file the branch touched.
+    const refspec = `+refs/heads/${defaultBranch}:refs/remotes/origin/${defaultBranch}`;
+    const refetch = await $`git ${gitCfg} -C ${repo} fetch -q ${remote} ${refspec}`.env(env).nothrow().quiet();
+    if (refetch.exitCode !== 0) return fail("merge-unverified", { ...opened, error: `merged, but could not fetch to verify:\n${refetch.stderr}` });
+    const target = `origin/${defaultBranch}`;
+    const files = (await $`git -C ${repo} diff --name-only ${baseSha} ${branch}`.text()).split("\n").filter(Boolean);
+    const differing = files.length
+      ? (await $`git -C ${repo} diff --name-only ${branch} ${target} -- ${files}`.text()).split("\n").filter(Boolean)
+      : [];
+    if (differing.length) {
+      return fail("merge-unverified", { ...opened, error: `merged, but ${target} differs from ${branch} in:\n${differing.join("\n")}` });
+    }
+
+    await $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet();
+    await $`git -C ${repo} branch -D ${branch}`.nothrow().quiet();
+    return fail("merged", opened);
+  };
+  return merge && mergeTurn ? mergeTurn(publish) : publish();
 }
 
 export interface QueueOptions extends Omit<IssueOptions, "issue"> {
@@ -506,21 +550,29 @@ export interface QueueOptions extends Omit<IssueOptions, "issue"> {
   shouldStop?: () => boolean;
   /** Issues for which this returns true are not started. */
   skip?: (issue: number) => boolean;
-  /** Called after each issue run, before the next one starts. */
+  /** Called after each issue run (not before the next one starts when `parallel` > 1). */
   onResult?: (entry: QueueEntry) => void | Promise<void>;
+  /**
+   * Issues worked at once, each in its own worktree and sandbox. Defaults to 1. Above 1, PRs are merged one at a time in queue
+   * order, each after the branch is brought up to date with the default branch and re-verified; a conflict or a verify failure
+   * at that point gets one fresh attempt from the new default branch. Needs `merge`.
+   */
+  parallel?: number;
 }
 
 export interface QueueEntry extends IssueResult {
   issue: number;
   title: string;
+  /** Spend of an earlier attempt that was thrown away and retried (the entry itself covers the last attempt). */
+  priorCostUsd?: number;
 }
 
 /**
- * Works open issues labelled `bunker`, oldest first, one at a time. Without `merge`
+ * Works open issues labelled `bunker`, oldest first, `parallel` at a time (default one). Without `merge`
  * stops after the first PR opens; with `merge` continues only after `merged`.
- * Stops at the first other outcome, or after `limit` issues.
+ * Stops starting issues at the first other outcome, or after `limit` issues.
  */
-export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shouldStop, skip, onResult, ...opts }: QueueOptions): Promise<QueueEntry[]> {
+export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shouldStop, skip, onResult, parallel = 1, ...opts }: QueueOptions): Promise<QueueEntry[]> {
   const cwd = opts.cwd ?? process.cwd();
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
@@ -546,10 +598,55 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
   await Bun.sleep(listRetryMs);
   const merged = new Map([...first, ...(await listIssues())].map((q) => [q.number, q]));
   const queue = [...merged.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.number - b.number);
-  const done: QueueEntry[] = [];
+  const done: (QueueEntry | undefined)[] = [];
+  /** In-flight issues by number: also the lock that keeps two slots off the same issue. */
+  const active = new Map<number, Promise<void>>();
+  let counted = 0; // started and not (known to be) blocked
+  let stop = false;
+  let fatal: { error: unknown } | undefined;
+  // Merge turns: an issue publishes only after every earlier-started issue has finished.
+  let previous: Promise<void> = Promise.resolve();
+  const cost = (r: IssueResult) => (r.review?.usage ?? r.usage)?.costUsd ?? 0;
+
+  const work = async (q: { number: number; title: string }, index: number, before: Promise<void>, release: () => void) => {
+    const mergeTurn = parallel > 1 ? (run: () => Promise<IssueResult>) => before.then(run) : undefined;
+    const attempt = async (n: number): Promise<IssueResult> => {
+      try {
+        return await runIssue({ ...opts, cwd, issue: q.number, ...(mergeTurn ? { mergeTurn, attempt: n } : {}) });
+      } catch (e) {
+        if (!keepGoing) throw e;
+        const usage = e instanceof AgentFailure ? e.usage : undefined;
+        return { status: "failed", branch: "", worktree: "", filed: [], ...(usage ? { usage } : {}), error: e instanceof Error ? e.message : String(e) };
+      }
+    };
+    try {
+      let result = await attempt(1);
+      let priorCostUsd = 0;
+      if (result.stale) {
+        console.log(`bunker: #${q.number} ${result.status} after updating to the latest main; trying once more from the new base`);
+        priorCostUsd = cost(result);
+        result = await attempt(2);
+      }
+      const entry: QueueEntry = { ...result, issue: q.number, title: q.title, ...(priorCostUsd ? { priorCostUsd } : {}) };
+      done[index] = entry;
+      if (result.status === "blocked") counted--;
+      await onResult?.(entry);
+      if (result.status === "merged") await resumeBlocked(cwd, env);
+      else if (result.status === "blocked") return;
+      if (!keepGoing && (!opts.merge || result.status !== "merged")) stop = true;
+    } catch (e) {
+      fatal ??= { error: e };
+      stop = true;
+    } finally {
+      release();
+    }
+  };
+
+  let index = 0;
   for (const q of queue) {
-    if (done.filter((d) => d.status !== "blocked").length >= limit || shouldStop?.()) break;
-    if (skip?.(q.number)) continue;
+    while (active.size >= parallel || (counted >= limit && active.size > 0)) await Promise.race(active.values());
+    if (stop || counted >= limit || shouldStop?.()) break;
+    if (skip?.(q.number) || active.has(q.number)) continue;
     // The list lags label changes by seconds, so confirm the live state before working it.
     const view = await $`gh issue view ${q.number} --json state,labels,body,comments`.cwd(cwd).env(env).nothrow().quiet();
     if (view.exitCode !== 0) {
@@ -577,20 +674,14 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       console.log(`bunker: #${q.number} waiting on #${waiting}`);
       continue;
     }
-    let result: IssueResult;
-    try {
-      result = await runIssue({ ...opts, cwd, issue: q.number });
-    } catch (e) {
-      if (!keepGoing) throw e;
-      const usage = e instanceof AgentFailure ? e.usage : undefined;
-      result = { status: "failed", branch: "", worktree: "", filed: [], ...(usage ? { usage } : {}), error: e instanceof Error ? e.message : String(e) };
-    }
-    const entry = { ...result, issue: q.number, title: q.title };
-    done.push(entry);
-    await onResult?.(entry);
-    if (result.status === "merged") await resumeBlocked(cwd, env);
-    else if (result.status === "blocked") continue;
-    if (!keepGoing && (!opts.merge || result.status !== "merged")) break;
+    counted++;
+    const before = previous;
+    let release!: () => void;
+    previous = new Promise<void>((r) => (release = r));
+    const task = work(q, index++, before, release).finally(() => active.delete(q.number));
+    active.set(q.number, task);
   }
-  return done;
+  await Promise.all(active.values());
+  if (fatal) throw fatal.error;
+  return done.filter((d): d is QueueEntry => d !== undefined);
 }

@@ -42,6 +42,10 @@ Single prompt and --task:
                              gets its blocker filed as `discovered` and the issue relabelled `bunker-blocked`
                              (no PR, doesn't count toward --limit); it returns to `bunker` once the blockers close
   --limit <n>                (--queue) max issues per run (default 5; blocked issues don't count)
+  --parallel <n>             (--queue --merge, --watch) work up to n issues at once, one worktree + container each (default 1).
+                             Merges stay serial, in queue order: each PR's branch is first updated to the latest default
+                             branch and re-verified; a conflict or failure then gets one fresh attempt from the new main.
+                             Trade-off: more concurrent spend, and rework when issues touch the same files; 2 is a good choice
   --setup "<cmd>"            run in the worktree before the agent (default: .bunker/setup)
   --verify "<cmd>"           run after approval; a failure stops before pushing (default: .bunker/verify)
   --verify-on-host           run --verify on the host instead of in the sandbox
