@@ -3,6 +3,13 @@ import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
 import { claudeCode, docker, noSandbox, review, run, runAll } from "./index.ts";
 import { runIssue, runQueue } from "./issue.ts";
+import { redact } from "./redact.ts";
+
+// Everything the CLI prints goes through redact().
+for (const method of ["log", "error", "warn"] as const) {
+  const orig = console[method].bind(console);
+  console[method] = (...args: unknown[]) => orig(...args.map((a) => (typeof a === "string" ? redact(a) : a)));
+}
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,

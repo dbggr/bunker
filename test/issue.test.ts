@@ -425,3 +425,18 @@ describe("noSandbox() token isolation", () => {
     }
   });
 });
+
+describe("redaction", () => {
+  test("a verify failure that prints a token comes back redacted", async () => {
+    const { repo } = await setup(issue());
+    process.env.GH_TOKEN = "super-secret-token-value";
+    const r = await runIssue({
+      cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(),
+      verify: "echo $GH_TOKEN; echo ghp_abcdefghijklmnopqrstuvwxyz0123; exit 4", verifyOnHost: true,
+    });
+    expect(r.status).toBe("verify-failed");
+    expect(r.verifyOutput).toContain("[REDACTED]");
+    expect(r.verifyOutput).not.toContain("super-secret-token-value");
+    expect(r.verifyOutput).not.toContain("ghp_");
+  });
+});
