@@ -144,6 +144,21 @@ describe("runIssue()", () => {
     expect((await $`git -C ${repo} status --porcelain`.text()).trim()).toBe("");
   });
 
+  for (const token of [false, true]) {
+    test(`pr create gets --head <branch> (BUNKER_GH_TOKEN ${token ? "set" : "unset"})`, async () => {
+      const { repo, prLog } = await setup(issue());
+      if (token) process.env.BUNKER_GH_TOKEN = "scoped-token";
+      try {
+        const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() });
+        expect(r.status).toBe("pr-opened");
+      } finally {
+        delete process.env.BUNKER_GH_TOKEN;
+      }
+      const args = (await Bun.file(prLog).text()).split("\n");
+      expect(args[args.indexOf("--head") + 1]).toBe("feature/7-add-feature");
+    });
+  }
+
   test("no verify → PR without a Verify line", async () => {
     const { repo, prLog } = await setup(issue());
     const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() });
