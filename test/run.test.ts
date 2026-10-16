@@ -81,6 +81,20 @@ describe("run() with noSandbox", () => {
     expect(await Bun.file(join(repo, "x.txt")).exists()).toBe(false);
   });
 
+  test("env set at runtime (e.g. from .bunker/.env) reaches the agent", async () => {
+    const repo = await makeRepo();
+    process.env.BUNKER_TEST_RUNTIME_VAR = "from-runtime";
+    const agent = fakeAgent('printf %s "$BUNKER_TEST_RUNTIME_VAR" > v.txt && git add v.txt && git commit -qm v');
+
+    try {
+      await run({ cwd: repo, prompt: "x", agent, sandbox: noSandbox() });
+    } finally {
+      delete process.env.BUNKER_TEST_RUNTIME_VAR;
+    }
+
+    expect(await Bun.file(join(repo, "v.txt")).text()).toBe("from-runtime");
+  });
+
   test("the agent runs inside the worktree, not the caller's checkout", async () => {
     const repo = await makeRepo();
     const agent = fakeAgent("pwd > where.txt && git add where.txt && git commit -qm where");
@@ -131,6 +145,25 @@ describe.skipIf(!dockerUp)("run() with docker", () => {
 
     expect(result.commits.map((c) => c.subject)).toEqual(["agent: from container"]);
     expect((await Bun.file(join(repo, "os.txt")).text()).trim()).toMatch(/^\d+\.\d+/);
+  }, 60_000);
+
+  test("env set at runtime is forwarded into the container", async () => {
+    const repo = await makeRepo();
+    process.env.BUNKER_TEST_RUNTIME_VAR = "into-container";
+    const agent = fakeAgent('printf %s "$BUNKER_TEST_RUNTIME_VAR" > v.txt && git add v.txt && git commit -qm v');
+
+    try {
+      await run({
+        cwd: repo,
+        prompt: "x",
+        agent,
+        sandbox: docker({ image: GIT_IMAGE, env: ["BUNKER_TEST_RUNTIME_VAR"] }),
+      });
+    } finally {
+      delete process.env.BUNKER_TEST_RUNTIME_VAR;
+    }
+
+    expect(await Bun.file(join(repo, "v.txt")).text()).toBe("into-container");
   }, 60_000);
 
   test("builds and uses the repo's .bunker/Dockerfile", async () => {

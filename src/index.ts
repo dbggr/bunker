@@ -49,7 +49,9 @@ export function claudeCode(opts: { model?: string } = {}): Agent {
 export function noSandbox(): Sandbox {
   return {
     exec: (cmd, { worktree }) =>
-      Bun.spawn(cmd, { cwd: worktree, stdio: ["ignore", "inherit", "inherit"] }).exited,
+      // Explicit env: Bun.spawn otherwise passes the startup environment, dropping
+      // anything set at runtime (e.g. the token loaded from .bunker/.env).
+      Bun.spawn(cmd, { cwd: worktree, env: process.env, stdio: ["ignore", "inherit", "inherit"] }).exited,
   };
 }
 
@@ -128,7 +130,7 @@ export function docker(opts: DockerOptions = {}): Sandbox {
         image,
         ...args,
       ];
-      return Bun.spawn(docker, { stdio: ["ignore", "inherit", "inherit"] }).exited;
+      return Bun.spawn(docker, { env: process.env, stdio: ["ignore", "inherit", "inherit"] }).exited;
     },
   };
 }
