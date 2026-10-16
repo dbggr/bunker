@@ -183,23 +183,23 @@ export async function buildBaseImage(tag = BASE_IMAGE, dockerBin = "docker") {
   if (code !== 0) throw new Error(`docker build of ${tag} failed (exit ${code})`);
 }
 
-async function dockerBuild(tag: string, context: string, dockerfile = join(context, "Dockerfile")) {
+async function dockerBuild(bin: string, tag: string, context: string, dockerfile = join(context, "Dockerfile")) {
   console.error(`bunker: building ${tag}`);
-  const code = await Bun.spawn(["docker", "build", "-q", "-t", tag, "-f", dockerfile, context], {
+  const code = await Bun.spawn([bin, "build", "-q", "-t", tag, "-f", dockerfile, context], {
     stdio: ["ignore", "ignore", "inherit"],
   }).exited;
-  if (code !== 0) throw new Error(`docker build of ${tag} failed (exit ${code})`);
+  if (code !== 0) throw new Error(`${bin} build of ${tag} failed (exit ${code})`);
 }
 
 /**
  * Picks the agent image: an explicit `image`, else the repo's .bunker/Dockerfile
  * (built FROM the base), else the base. The base is built on first use.
  */
-async function resolveImage(opts: DockerOptions, worktree: string, gitCommonDir: string): Promise<string> {
+async function resolveImage(bin: string, opts: DockerOptions, worktree: string, gitCommonDir: string): Promise<string> {
   if (opts.image) return opts.image;
   const base = opts.baseImage ?? BASE_IMAGE;
-  if (base === BASE_IMAGE && (await $`docker image inspect ${base}`.quiet().nothrow()).exitCode !== 0) {
-    await buildBaseImage(base);
+  if (base === BASE_IMAGE && (await $`${bin} image inspect ${base}`.quiet().nothrow()).exitCode !== 0) {
+    await buildBaseImage(base, bin);
   }
   const repoDockerfile = join(worktree, ".bunker", "Dockerfile");
   if (!(await Bun.file(repoDockerfile).exists())) return base;
@@ -207,7 +207,7 @@ async function resolveImage(opts: DockerOptions, worktree: string, gitCommonDir:
   const repo = dirname(gitCommonDir);
   const slug = basename(repo).toLowerCase().replace(/[^a-z0-9_.-]/g, "-");
   const tag = `bunker-repo-${slug}-${Bun.hash(repo).toString(16).slice(0, 8)}`;
-  await dockerBuild(tag, dirname(repoDockerfile), repoDockerfile);
+  await dockerBuild(bin, tag, dirname(repoDockerfile), repoDockerfile);
   return tag;
 }
 
@@ -218,6 +218,8 @@ export interface DockerOptions {
   baseImage?: string;
   /** Env var names passed through to the container. */
   env?: string[];
+  /** Container CLI to invoke. Defaults to the provider's own (`docker` / `podman`). */
+  bin?: string;
 }
 
 /**
@@ -227,6 +229,20 @@ export interface DockerOptions {
  * the agent writes (including git objects) owned by you, not root.
  */
 export function docker(opts: DockerOptions = {}): Sandbox {
+  const user = `${process.getuid?.()}:${process.getgid?.()}`;
+  return containerSandbox(opts.bin ?? "docker", ["--user", user], opts);
+}
+
+/**
+ * Same contract as docker(), for rootless podman. `--userns=keep-id` maps the host uid
+ * into the container, so files the agent writes stay owned by you (podman's `--user`
+ * alone would pick a uid inside the user namespace).
+ */
+export function podman(opts: DockerOptions = {}): Sandbox {
+  return containerSandbox(opts.bin ?? "podman", ["--userns=keep-id"], opts);
+}
+
+function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions): Sandbox {
   const env = opts.env ?? ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
   // runAll() calls exec once per task at the same time; share one image build per repo.
   const images = new Map<string, Promise<string>>();
@@ -234,7 +250,7 @@ export function docker(opts: DockerOptions = {}): Sandbox {
     async exec(cmd, { worktree, gitCommonDir, prefix }) {
       const [entrypoint, ...args] = cmd;
       if (!entrypoint) throw new Error("empty agent command");
-      if (!images.has(gitCommonDir)) images.set(gitCommonDir, resolveImage(opts, worktree, gitCommonDir));
+      if (!images.has(gitCommonDir)) images.set(gitCommonDir, resolveImage(bin, opts, worktree, gitCommonDir));
       const image = await images.get(gitCommonDir)!;
       // ~/.gitconfig isn't in the container, so carry the commit identity over.
       const name = (await $`git -C ${worktree} config user.name`.nothrow().text()).trim();
@@ -245,9 +261,9 @@ export function docker(opts: DockerOptions = {}): Sandbox {
         GIT_AUTHOR_EMAIL: email,
         GIT_COMMITTER_EMAIL: email,
       }).flatMap(([k, v]) => (v ? ["-e", `${k}=${v}`] : []));
-      const docker = [
-        "docker", "run", "--rm",
-        "--user", `${process.getuid?.()}:${process.getgid?.()}`,
+      const argv = [
+        bin, "run", "--rm",
+        ...userArgs,
         "-e", "HOME=/tmp",
         ...env.flatMap((name) => ["-e", name]), // name only: value comes from our env, never argv
         ...identity,
@@ -258,7 +274,7 @@ export function docker(opts: DockerOptions = {}): Sandbox {
         image,
         ...args,
       ];
-      return teeStdout(Bun.spawn(docker, { env: process.env, stdio: ["ignore", "pipe", "inherit"] }), prefix);
+      return teeStdout(Bun.spawn(argv, { env: process.env, stdio: ["ignore", "pipe", "inherit"] }), prefix);
     },
   };
 }
