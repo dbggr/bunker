@@ -5,6 +5,8 @@ import { claudeCode, formatUsage, docker, noSandbox, review, run, runAll } from 
 import { runAudit } from "./audit.ts";
 import { runIssue, runQueue } from "./issue.ts";
 import { redact } from "./redact.ts";
+import { HELP } from "./help.ts";
+import { options } from "./options.ts";
 import pkg from "../package.json" with { type: "json" };
 
 // Everything the CLI prints goes through redact().
@@ -13,31 +15,25 @@ for (const method of ["log", "error", "warn"] as const) {
   console[method] = (...args: unknown[]) => orig(...args.map((a) => (typeof a === "string" ? redact(a) : a)));
 }
 
-const { values, positionals } = parseArgs({
-  allowPositionals: true,
-  options: {
-    "no-sandbox": { type: "boolean", default: false },
-    image: { type: "string" },
-    model: { type: "string" },
-    task: { type: "string", multiple: true },
-    "max-iterations": { type: "string" },
-    review: { type: "boolean", default: false },
-    "max-rounds": { type: "string" },
-    "reviewer-model": { type: "string" },
-    issue: { type: "string" },
-    setup: { type: "string" },
-    verify: { type: "string" },
-    "verify-on-host": { type: "boolean", default: false },
-    merge: { type: "boolean", default: false },
-    "ci-timeout": { type: "string" },
-    queue: { type: "boolean", default: false },
-    limit: { type: "string" },
-    audit: { type: "boolean", default: false },
-    "max-issues": { type: "string" },
-    focus: { type: "string" },
-    version: { type: "boolean", default: false },
-  },
-});
+let parsed;
+try {
+  parsed = parseArgs({ allowPositionals: true, options });
+} catch (e) {
+  if (process.argv.slice(2).some((a) => a === "--help" || a === "-h")) {
+    console.log(HELP);
+    process.exit(0);
+  }
+  const msg = e instanceof Error ? e.message : String(e);
+  const unknown = msg.match(/Unknown option '(-[^']*)'/);
+  console.error(`bunker: ${unknown ? `unknown option ${unknown[1]}` : msg.split(". ")[0]}\nsee bunker --help`);
+  process.exit(2);
+}
+const { values, positionals } = parsed;
+
+if (values.help) {
+  console.log(HELP);
+  process.exit(0);
+}
 
 if (values.version) {
   console.log(pkg.version);
@@ -107,7 +103,8 @@ if (!values.audit && values.issue === undefined && !values.queue && !prompt === 
       '       bunker --issue <n> [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--max-rounds <n>] [--reviewer-model <id>]   (issue → reviewed PR)\n' +
       '       bunker --queue [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--limit <n>]   (work the `bunker` label queue)\n' +
       '       bunker --audit [--max-issues <n>] [--focus "<text>"] [--setup "<cmd>"]   (file improvement ideas as `discovered` issues)\n' +
-      '       bunker --task "<prompt>" --task "<prompt>" ...   (parallel, one worktree each)',
+      '       bunker --task "<prompt>" --task "<prompt>" ...   (parallel, one worktree each)\n' +
+      "run bunker --help for all options",
   );
   process.exit(2);
 }

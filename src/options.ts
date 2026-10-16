@@ -1,0 +1,25 @@
+import type { ParseArgsOptionsConfig } from "node:util";
+
+export const options = {
+  help: { type: "boolean", short: "h", default: false },
+  "no-sandbox": { type: "boolean", default: false },
+  image: { type: "string" },
+  model: { type: "string" },
+  task: { type: "string", multiple: true },
+  "max-iterations": { type: "string" },
+  review: { type: "boolean", default: false },
+  "max-rounds": { type: "string" },
+  "reviewer-model": { type: "string" },
+  issue: { type: "string" },
+  setup: { type: "string" },
+  verify: { type: "string" },
+  "verify-on-host": { type: "boolean", default: false },
+  merge: { type: "boolean", default: false },
+  "ci-timeout": { type: "string" },
+  queue: { type: "boolean", default: false },
+  limit: { type: "string" },
+  audit: { type: "boolean", default: false },
+  "max-issues": { type: "string" },
+  focus: { type: "string" },
+  version: { type: "boolean", default: false },
+} as const satisfies ParseArgsOptionsConfig;
