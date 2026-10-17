@@ -180,7 +180,8 @@ async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">, pref
   const tail = decoder.decode();
   stdout += tail;
   pending += tail;
-  if (pending) out(pending);
+  // Prefixed output is interleaved with other tasks': end the last line, or the next task's runs on after it.
+  if (pending) out(prefix && !onLine ? `${pending}\n` : pending);
   return { code: await proc.exited, stdout: redact(stdout) };
 }
 
@@ -365,10 +366,23 @@ export async function runSetup(
   return { cmd, ...out };
 }
 
+let worktreeAdminTail: Promise<unknown> = Promise.resolve();
+
+/**
+ * Runs `fn` (git worktree add/remove, branch -D) after this process's earlier such commands. They read every worktree's
+ * admin dir under .git/worktrees, so one running beside a `worktree add` can read it half-written and fail
+ * ("failed to read .../commondir"), as parallel queue slots did.
+ */
+export function worktreeAdmin<T>(fn: () => Promise<T>): Promise<T> {
+  const run = worktreeAdminTail.then(fn);
+  worktreeAdminTail = run.catch(() => {});
+  return run;
+}
+
 async function addWorktree(cwd: string, base: string): Promise<Worktree> {
   const id = crypto.randomUUID().slice(0, 8);
   const wt = { branch: `bunker/${id}`, path: join(tmpdir(), `bunker-${id}`) };
-  await $`git -C ${cwd} worktree add -q -b ${wt.branch} ${wt.path} ${base}`;
+  await worktreeAdmin(() => $`git -C ${cwd} worktree add -q -b ${wt.branch} ${wt.path} ${base}`);
   return wt;
 }
 
@@ -537,7 +551,7 @@ async function runAgent(
     return { commits, iterations, ...totalUsage(iterations) };
   } finally {
     await store.done();
-    await $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet();
+    await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
   }
 }
 
@@ -782,7 +796,7 @@ export async function review({
     error = redact(e instanceof Error ? e.message : String(e));
   } finally {
     await store.done();
-    await $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet();
+    await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
   }
   if (status === "approved") {
     error = await mergeBack(cwd, wt.branch, commits);

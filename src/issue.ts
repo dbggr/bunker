@@ -6,7 +6,7 @@ import { redact } from "./redact.ts";
 import { emit } from "./events.ts";
 import { tailLines, testCounts } from "./output.ts";
 import { hyperlink } from "./events.ts";
-import { AgentFailure, emitStage, review, runSetup, type Agent, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
+import { AgentFailure, emitStage, review, runSetup, worktreeAdmin, type Agent, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
 
 export interface IssueInfo {
   number: number;
@@ -365,14 +365,26 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   }
   const head = await $`git ${gitCfg} -C ${repo} ls-remote --symref ${remote} HEAD`.env(env).nothrow().quiet();
   const defaultBranch = /^ref: refs\/heads\/(\S+)\s+HEAD$/m.exec(head.stdout.toString())?.[1] ?? "main";
-  const fetch = await $`git ${gitCfg} -C ${repo} fetch -q ${remote} ${defaultBranch}`.env(env).nothrow().quiet();
-  if (fetch.exitCode !== 0) return fail("failed", { error: `could not fetch origin/${defaultBranch}:\n${fetch.stderr}` });
+  /**
+   * Origin's default branch commit, or the fetch's stderr. Not via FETCH_HEAD: parallel issues (and other bunker
+   * processes) share the repo, and their fetches rewrite it between ours and our read. A private ref is ours alone.
+   */
+  const fetchDefault = async (): Promise<{ sha: string } | { error: string }> => {
+    const ref = `refs/bunker/fetch/${number}-${crypto.randomUUID()}`;
+    const fetched = await $`git ${gitCfg} -C ${repo} fetch -q --no-write-fetch-head ${remote} ${`+refs/heads/${defaultBranch}:${ref}`}`.env(env).nothrow().quiet();
+    if (fetched.exitCode !== 0) return { error: fetched.stderr.toString() };
+    const sha = (await $`git -C ${repo} rev-parse ${ref}`.text()).trim();
+    await $`git -C ${repo} update-ref -d ${ref}`.nothrow().quiet();
+    return { sha };
+  };
+  const fetched = await fetchDefault();
+  if ("error" in fetched) return fail("failed", { error: `could not fetch origin/${defaultBranch}:\n${fetched.error}` });
 
-  let baseSha = (await $`git -C ${repo} rev-parse FETCH_HEAD`.text()).trim();
+  let baseSha = fetched.sha;
   // Default verify: the base branch's .bunker/verify, read now so the agent can't weaken it in its worktree.
   let verifySource = "--verify";
   if (!verify) {
-    const file = await $`git -C ${repo} show FETCH_HEAD:.bunker/verify`.nothrow().quiet();
+    const file = await $`git -C ${repo} show ${`${baseSha}:.bunker/verify`}`.nothrow().quiet();
     if (file.exitCode === 0 && file.stdout.toString().trim()) {
       verify = file.stdout.toString().trim();
       verifySource = ".bunker/verify";
@@ -380,7 +392,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   }
   if (merge && !verify) return fail("failed", { error: "merge requires --verify or a .bunker/verify file" });
   if (verifyOnHost && !verify) return fail("failed", { error: "--verify-on-host requires --verify or a .bunker/verify file" });
-  const add = await $`git -C ${repo} worktree add -q -b ${branch} ${worktree} FETCH_HEAD`.nothrow().quiet();
+  const add = await worktreeAdmin(() => $`git -C ${repo} worktree add -q -b ${branch} ${worktree} ${baseSha}`.nothrow().quiet());
   if (add.exitCode !== 0) return fail("failed", { error: `could not create worktree:\n${add.stderr}` });
 
   const prompt =
@@ -420,8 +432,8 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     } else {
       const blockedBy = { number: Number(m[1]), title: blocker.title };
       await markBlocked(number, blockedBy, cwd, env);
-      await $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet();
-      await $`git -C ${repo} branch -D ${branch}`.nothrow().quiet();
+      await worktreeAdmin(() => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
+      await worktreeAdmin(() => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
       emit(onEvent, { type: "note", text: `blocked by #${blockedBy.number}: ${blockedBy.title}` });
       return fail("blocked", { review: result, blockedBy });
     }
@@ -469,9 +481,9 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   /** Merges the latest default branch into the branch; re-verifies if that changed anything. Undefined when all is well. */
   const updateToLatest = async (): Promise<IssueResult | undefined> => {
     emit(onEvent, { type: "note", text: `updating to origin/${defaultBranch}` });
-    const refetch = await $`git ${gitCfg} -C ${repo} fetch -q ${remote} ${defaultBranch}`.env(env).nothrow().quiet();
-    if (refetch.exitCode !== 0) return fail("failed", { review: result, error: `could not fetch origin/${defaultBranch}:\n${refetch.stderr}` });
-    const latest = (await $`git -C ${repo} rev-parse FETCH_HEAD`.text()).trim();
+    const refetched = await fetchDefault();
+    if ("error" in refetched) return fail("failed", { review: result, error: `could not fetch origin/${defaultBranch}:\n${refetched.error}` });
+    const latest = refetched.sha;
     const before = (await $`git -C ${worktree} rev-parse HEAD`.text()).trim();
     const identity = (await $`git -C ${worktree} config user.email`.nothrow().quiet().text()).trim() ? [] : ["-c", "user.name=bunker", "-c", "user.email=bunker@localhost"];
     const merged = await $`git ${identity} -C ${worktree} merge --no-edit ${latest}`.env(env).nothrow().quiet();
@@ -534,8 +546,8 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
       return fail("merge-unverified", { ...opened, error: `merged, but ${target} differs from ${branch} in:\n${differing.join("\n")}` });
     }
 
-    await $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet();
-    await $`git -C ${repo} branch -D ${branch}`.nothrow().quiet();
+    await worktreeAdmin(() => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
+    await worktreeAdmin(() => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
     return fail("merged", opened);
   };
   return merge && mergeTurn ? mergeTurn(publish) : publish();
