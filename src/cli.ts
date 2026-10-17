@@ -11,6 +11,7 @@ import { runIssue, runQueue } from "./issue.ts";
 import { loadSpendCaps } from "./spend.ts";
 import { configAllowedLabelers, enforceLabeler } from "./labeler.ts";
 import { parseDuration, runWatch } from "./watch.ts";
+import { desktopNotifier, resolveMention } from "./notify.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { redact } from "./redact.ts";
@@ -389,8 +390,11 @@ if (values.audit) {
       ctl.abort();
     });
   }
+  const notify = desktopNotifier({ enabled: !values["no-notify"] && repoCfg.notify.enabled !== false });
+  const ghToken = process.env.BUNKER_GH_TOKEN;
+  const mention = await resolveMention(process.cwd(), (ghToken ? { ...process.env, GH_TOKEN: ghToken } : process.env) as Record<string, string>, repoCfg.notify.github_user);
   try {
-    await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, ...timeouts, parallel, allowLabelers, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
+    await runWatch({ notify, mention, onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, ...timeouts, parallel, allowLabelers, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();

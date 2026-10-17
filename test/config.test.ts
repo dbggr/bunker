@@ -31,6 +31,10 @@ ci_timeout = 45
 
 [queue]
 allow_labelers = ["alice", "bob"]
+
+[notify]
+enabled = false
+github_user = "carol"
 `;
 
 describe("parseConfig", () => {
@@ -45,11 +49,12 @@ describe("parseConfig", () => {
       watch: { interval: 5, parallel: 3, max_cost_day: 10, max_cost_month: 100.5, audit_every: 30 },
       merge: { ci_timeout: 45 },
       queue: { allow_labelers: ["alice", "bob"] },
+      notify: { enabled: false, github_user: "carol" },
     });
   });
 
   test("empty file is an empty config", () => {
-    expect(parseConfig("").config).toEqual({ models: {}, watch: {}, merge: {}, queue: {} });
+    expect(parseConfig("").config).toEqual({ models: {}, watch: {}, merge: {}, queue: {}, notify: {} });
   });
 
   test("unknown keys warn, naming the key", () => {
@@ -188,5 +193,20 @@ describe("cli", () => {
     expect(r.out).toContain("watch.interval: 7 (config.toml)");
     expect(r.out).toContain("verify: bun test (.bunker/verify)");
     expect(r.out).toContain("merge.ci_timeout: 30 (default)");
+  });
+});
+
+describe("config.toml notify table", () => {
+  test("notify.enabled (boolean) and notify.github_user (string) are read", () => {
+    const { config, warnings } = parseConfig('[notify]\nenabled = false\ngithub_user = "paul"\n');
+    expect(warnings).toEqual([]);
+    expect(config.notify).toEqual({ enabled: false, github_user: "paul" });
+  });
+  test("notify.enabled must be a boolean", () => {
+    expect(() => parseConfig('[notify]\nenabled = "no"\n')).toThrow(ConfigError);
+    expect(() => parseConfig('[notify]\nenabled = "no"\n')).toThrow(/notify.enabled must be true or false/);
+  });
+  test("an empty config has an empty notify table", () => {
+    expect(parseConfig("").config.notify).toEqual({});
   });
 });

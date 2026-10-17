@@ -393,3 +393,65 @@ describe("bunker --watch (CLI)", () => {
     expect(existsSync(join(repo, ".bunker", "watch.lock"))).toBe(false);
   });
 });
+
+describe("runWatch() notifications", () => {
+  type Note = { title: string; body: string };
+  const collect = () => {
+    const notes: Note[] = [];
+    return { notes, notify: (title: string, body: string) => void notes.push({ title, body }) };
+  };
+
+  test("a failed issue notifies once and its comment @mentions the configured login", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    const { notes, notify } = collect();
+    const ctl = new AbortController();
+    await runWatch({
+      ...base, cwd: repo, agent: fakeAgent({ failing: ["First"] }), notify, mention: "@paul", signal: ctl.signal,
+      log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); },
+    });
+    const failed = notes.filter((n) => /#1/.test(n.title) && /failed/i.test(n.title));
+    expect(failed).toHaveLength(1);
+    expect(await Bun.file(join(root, "comments.log")).text()).toContain("@paul");
+  });
+
+  test("a pass that merged notifies a summary; the stop notifies too", async () => {
+    const { repo } = await setup(three.slice(0, 2));
+    const { notes, notify } = collect();
+    const ctl = new AbortController();
+    await runWatch({
+      ...base, cwd: repo, agent: fakeAgent(), notify, signal: ctl.signal,
+      log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); },
+    });
+    expect(notes.filter((n) => /pass 1 · 2 merged/.test(n.title))).toHaveLength(1);
+    expect(notes.filter((n) => /stopped/i.test(n.title))).toHaveLength(1);
+  });
+
+  test("reaching the spend cap notifies", async () => {
+    const { repo } = await setup(three);
+    const { notes, notify } = collect();
+    await runWatch({ ...base, cwd: repo, agent: fakeAgent({ cost: 15 }), maxCostUsd: 20, forMs: 400, notify, log: () => {} });
+    expect(notes.some((n) => /spend cap/i.test(n.title + n.body))).toBe(true);
+  });
+
+  test("a crash notifies before the error propagates", async () => {
+    const { repo } = await setup(three.slice(0, 1));
+    const { notes, notify } = collect();
+    const sandbox: Sandbox = { exec: () => { throw new Error("boom"); } };
+    // A sandbox that throws synchronously inside the queue surfaces as a failed issue, not a crash;
+    // force a crash from the loop itself instead: a log that throws on the first pass line.
+    await expect(
+      runWatch({ ...base, sandbox, cwd: repo, agent: fakeAgent(), notify, log: (l) => { if (/pass 1 /.test(l)) throw new Error("log exploded"); } }),
+    ).rejects.toThrow("log exploded");
+    expect(notes.some((n) => /crashed/i.test(n.title))).toBe(true);
+  });
+
+  test("no notify given: nothing breaks and no mention is added", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    const ctl = new AbortController();
+    await runWatch({
+      ...base, cwd: repo, agent: fakeAgent({ failing: ["First"] }), signal: ctl.signal,
+      log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); },
+    });
+    expect(await Bun.file(join(root, "comments.log")).text()).not.toContain("@");
+  });
+});
