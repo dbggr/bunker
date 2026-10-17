@@ -90,7 +90,7 @@ export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues 
     const usages: (Usage | undefined)[] = [];
     let prompt = base;
     for (let k = 0; ; k++) {
-      const res = await sandbox.exec(agent.command(prompt, "review"), { ...ctx, limits: agentLimits(timeouts, ["</audit>"]) });
+      const res = await sandbox.exec(agent.command(prompt, "review"), { ...ctx, limits: agentLimits(timeouts) });
       if (res.timedOut) throw new IdleTimeout(timeoutMessage("audit agent", res.timedOut, timeouts));
       if (res.code !== 0) throw new Error(`agent exited with ${res.code}`);
       const parsed = agent.parse?.(res.stdout);

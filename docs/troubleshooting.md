@@ -30,7 +30,7 @@ Each entry is symptom, cause, fix. The run log (`.bunker/runs/<N>-<timestamp>.lo
 
 - **Symptom**: status `idle-timeout`; the error says an agent, reviewer, setup or verify "produced no output" or "timed out".
 - **Cause**: an agent or reviewer printed nothing for `--idle-timeout` minutes (default 10), or setup/verify ran longer than `--step-timeout` minutes (default 30). The process (for a container, the container itself) was killed.
-- **Fix**: raise the limit if the step is legitimately slow; otherwise look at the run log to see where it hung. The worktree and branch are kept. Under `--watch` the issue is relabelled `bunker-failed`. An agent that finishes but doesn't exit is killed `--completion-timeout` seconds (default 60) after its completion signal or final result, and counts as done, with a warning.
+- **Fix**: raise the limit if the step is legitimately slow; otherwise look at the run log to see where it hung. The worktree and branch are kept. Under `--watch` the issue is relabelled `bunker-failed`. An agent that finishes but doesn't exit is killed `--completion-timeout` seconds (default 60) after its final result event, and counts as done, with a warning.
 
 ## Issue relabelled `bunker-failed`
 
