@@ -205,13 +205,15 @@ export async function runClean(o: CleanOptions): Promise<CleanResult> {
     const name = basename(p);
     if (pausedPaths.has(p)) continue;
     let reason: string | undefined;
-    if (dirname(p) === tmpRoot && /^bunker-[0-9a-f]{8}$/.test(name)) {
-      if (inUse(p)) {
-        if (!o.auto) note(`skipping worktree ${p}: in use by a running process`);
-        continue;
-      }
+    const isRun = dirname(p) === tmpRoot && /^bunker-[0-9a-f]{8}$/.test(name);
+    const isIssue = dirname(p) === issueRoot && /^\d+-/.test(name);
+    if ((isRun || isIssue) && inUse(p)) {
+      if (!o.auto) note(`skipping worktree ${p}: in use by a running process`);
+      continue;
+    }
+    if (isRun) {
       reason = "leftover run worktree no process is using";
-    } else if (dirname(p) === issueRoot && /^\d+-/.test(name)) {
+    } else if (isIssue) {
       const n = name.split("-")[0]!;
       if (await issueClosed(n)) reason = `issue #${n} is closed`;
       else if (wt.branch && (await prDone(wt.branch))) reason = `the PR of ${wt.branch} is merged or closed`;
