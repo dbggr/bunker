@@ -62,7 +62,7 @@ async function setup(issues: [number, string, string][]) {
     join(bin, "gh"),
     `#!/bin/sh
 echo "$*" >> "${root}/gh.log"
-if [ "$1" = "api" ]; then case "$*" in *created_at*) n=$(echo "$*" | sed 's|.*issues/\\([0-9]*\\)/events.*|\\1|'); [ -f "${root}/labeled-at-$n" ] && cat "${root}/labeled-at-$n"; exit 0;; *"/events"*) [ -f "${root}/events-fail" ] && { echo "api down" >&2; exit 1; }; echo owner; exit 0;; *"/permission"*) if [ -f "${root}/perm" ]; then cat "${root}/perm"; else echo admin; fi; exit 0;; esac; fi
+if [ "$1" = "api" ]; then case "$*" in *graphql*|*renamed*) exit 0;; *created_at*) n=$(echo "$*" | sed 's|.*issues/\\([0-9]*\\)/events.*|\\1|'); if [ -f "${root}/labeled-at-$n" ]; then cat "${root}/labeled-at-$n"; else echo 2020-01-01T00:00:00Z; fi; exit 0;; *"/events"*) [ -f "${root}/events-fail" ] && { echo "api down" >&2; exit 1; }; echo owner; exit 0;; *"/permission"*) if [ -f "${root}/perm" ]; then cat "${root}/perm"; else echo admin; fi; exit 0;; esac; fi
 if [ "$1 $2" = "issue list" ]; then
   printf '['; sep=''
   hide=0; case "$*" in *"--label bunker --state"*) [ -f "${root}/hide-2" ] && hide=$(cat "${root}/hide-2");; esac

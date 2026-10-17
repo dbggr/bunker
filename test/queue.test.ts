@@ -61,7 +61,7 @@ async function setup(issues: [number, string, string][], mergeMode: "ff" | "none
   await Bun.write(
     join(bin, "gh"),
     `#!/bin/sh
-if [ "$1" = "api" ]; then case "$*" in *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
+if [ "$1" = "api" ]; then case "$*" in *graphql*|*renamed*) exit 0;; *created_at*) echo 2020-01-01T00:00:00Z; exit 0;; *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
 if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker-blocked"; then
   if [ -f "${root}/blocked-list.json" ]; then cat "${root}/blocked-list.json"; else echo '[]'; fi
   exit 0
@@ -638,7 +638,7 @@ describe("runQueue() label-adder check", () => {
     const bin = join(env.repo, "..", "bin");
     const orig = await Bun.file(join(bin, "gh")).text();
     const gate = adderRole === null ? 'echo "HTTP 403" >&2; exit 1' : `echo ${adderRole}; exit 0`;
-    await Bun.write(join(bin, "gh"), orig.replace(/^if \[ "\$1" = "api" \].*$/m, `if [ "$1" = "api" ]; then case "$*" in *"/events"*) echo tess; exit 0;; *"/permission"*) ${gate};; esac; fi`));
+    await Bun.write(join(bin, "gh"), orig.replace(/^if \[ "\$1" = "api" \].*$/m, `if [ "$1" = "api" ]; then case "$*" in *graphql*|*renamed*) exit 0;; *created_at*) echo 2020-01-01T00:00:00Z; exit 0;; *"/events"*) echo tess; exit 0;; *"/permission"*) ${gate};; esac; fi`));
   };
   const run = (env: Env, allowLabelers?: string[]) =>
     runQueue({ agent: fakeAgent(), sandbox: noSandbox(), cwd: env.repo, listRetryMs: 0, ...(allowLabelers ? { allowLabelers } : {}) });

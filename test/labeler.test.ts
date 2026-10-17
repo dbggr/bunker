@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 
 /** Fake gh: label events name `adder`; `roles` maps login -> role_name (missing = lookup error). */
-async function fakeGh(adder: string | null, roles: Record<string, string>, eventsFail = false) {
+async function fakeGh(adder: string | null, roles: Record<string, string>, eventsFail = false, edits: { at: string; login: string }[] = [], graphqlFail = false) {
   const root = await mkdtemp(join(tmpdir(), "bunker-labeler-"));
   dirs.push(root);
   const roleCases = Object.entries(roles).map(([u, r]) => `  *"collaborators/${u}/permission"*) echo ${r};;`).join("\n");
@@ -21,6 +21,9 @@ async function fakeGh(adder: string | null, roles: Record<string, string>, event
     `#!/bin/sh
 echo "$*" >> "${root}/log"
 case "$*" in
+  *graphql*) ${graphqlFail ? 'echo "HTTP 502" >&2; exit 1' : [...edits.map((e) => `printf "edit\\t%s\\t%s\\n" ${e.at} "${e.login}"`), "exit 0"].join("; ")};;
+  *renamed*) exit 0;;
+  *created_at*) ${eventsFail ? 'echo "HTTP 403" >&2; exit 1' : adder ? "echo 2026-01-01T00:00:00Z" : "true"};;
   *"/events"*) ${eventsFail ? 'echo "HTTP 403" >&2; exit 1' : adder ? `echo previous; echo ${adder}` : "true"};;
 ${roleCases}
   *"collaborators/"*) echo "HTTP 403: Resource not accessible" >&2; exit 1;;
@@ -69,6 +72,47 @@ describe("enforceLabeler()", () => {
     expect(await enforceLabeler(7, { cwd: process.cwd(), env: g.env, log: (t) => logs.push(t) })).toBe(false);
     expect(logs.join("\n")).toContain("no `bunker` label event found on #7 (add the label first");
     expect(await g.log()).not.toContain("issue edit");
+  });
+
+  describe("edits after labelling", () => {
+    const run = (g: Awaited<ReturnType<typeof fakeGh>>) => enforceLabeler(7, { cwd: process.cwd(), env: g.env, log: () => {} });
+
+    test("an outsider's edit after the label is refused: label removed, adder told", async () => {
+      const g = await fakeGh("owner", { owner: "admin", eve: "read" }, false, [{ at: "2026-01-02T00:00:00Z", login: "eve" }]);
+      expect(await run(g)).toBe(false);
+      const log = await g.log();
+      expect(log).toContain("issue edit 7 --remove-label bunker");
+      expect(log).toContain("issue comment 7 --body @owner issue was edited after it was queued; re-check and relabel");
+    });
+
+    test("an edit before the label runs", async () => {
+      const g = await fakeGh("owner", { owner: "admin", eve: "read" }, false, [{ at: "2025-12-31T00:00:00Z", login: "eve" }]);
+      expect(await run(g)).toBe(true);
+    });
+
+    test("a maintainer's edit after the label runs", async () => {
+      const g = await fakeGh("owner", { owner: "admin", mia: "maintain" }, false, [{ at: "2026-01-02T00:00:00Z", login: "mia" }]);
+      expect(await run(g)).toBe(true);
+    });
+
+    test("an edit by a deleted user is refused", async () => {
+      const g = await fakeGh("owner", { owner: "admin" }, false, [{ at: "2026-01-02T00:00:00Z", login: "" }]);
+      expect(await run(g)).toBe(false);
+    });
+
+    test("an API error fails closed without touching the issue", async () => {
+      const g = await fakeGh("owner", { owner: "admin" }, false, [], true);
+      const logs: string[] = [];
+      expect(await enforceLabeler(7, { cwd: process.cwd(), env: g.env, log: (t) => logs.push(t) })).toBe(false);
+      expect(logs.join("\n")).toContain("could not check #7 for edits");
+      expect(await g.log()).not.toContain("issue edit");
+    });
+
+    test("an editor whose permission can't be read fails closed", async () => {
+      const g = await fakeGh("owner", { owner: "admin" }, false, [{ at: "2026-01-02T00:00:00Z", login: "eve" }]);
+      expect(await run(g)).toBe(false);
+      expect(await g.log()).not.toContain("issue edit");
+    });
   });
 
   test("an events lookup error fails closed", async () => {
