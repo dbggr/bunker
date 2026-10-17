@@ -38,7 +38,7 @@ describe("doctor", () => {
     delete (env as Record<string, string | undefined>).CLAUDE_CODE_OAUTH_TOKEN;
     const r = await runDoctor({ cwd: w.repo, env });
     expect(failed(r.checks)).toEqual(
-      expect.arrayContaining(["docker", "auth-claude", "verify", "label-discovered", "label-bunker-failed", "label-bunker-blocked", "auto-merge", "ci", "required-check"]),
+      expect.arrayContaining(["docker", "auth-claude", "verify", "label-discovered", "label-bunker-failed", "label-bunker-blocked", "label-priority:high", "label-priority:medium", "label-priority:low", "auto-merge", "ci", "required-check"]),
     );
     expect(failed(r.checks)).not.toContain("label-bunker");
     expect(r.code).toBe(1);

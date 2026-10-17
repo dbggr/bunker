@@ -3,10 +3,11 @@ import { join } from "node:path";
 import { AUTH_VARS, loadBunkerEnv } from "./env.ts";
 import { DEFAULT_MODEL_LABEL, resolveModels } from "./models.ts";
 import { redact } from "./redact.ts";
+import { PRIORITY_LABELS } from "./priority.ts";
 
 type Env = Record<string, string | undefined>;
 
-export const LABELS = ["bunker", "discovered", "bunker-failed", "bunker-blocked"] as const;
+export const LABELS = ["bunker", "discovered", "bunker-failed", "bunker-blocked", ...PRIORITY_LABELS.map((p) => p.name)] as const;
 
 export interface Check {
   id: string;

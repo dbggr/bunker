@@ -43,7 +43,9 @@ Single prompt and --task:
 
 --issue and --queue:
   --issue <n>                implement GitHub issue n and open a PR
-  --queue                    run open issues labelled `bunker`, oldest first; skips any with an open
+  --queue                    run open issues labelled `bunker`, in order: `priority:high`, `priority:medium`, no priority,
+                             `priority:low`; within a priority `bug` issues first; then oldest first (--watch re-orders between
+                             issues). Prints the order with the reason per issue. Skips any with an open
                              `Blocked by #N` / `Depends on #N`. An agent that reports a blocked_by item in its <report>/<verdict> JSON
                              gets its blocker filed as `discovered` and the issue relabelled `bunker-blocked`
                              (no PR, doesn't count toward --limit); it returns to `bunker` once the blockers close

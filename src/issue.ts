@@ -1,3 +1,4 @@
+import { describeQueue, orderQueue, PRIORITY_LABELS, type Queued } from "./priority.ts";
 import { $ } from "bun";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { appendFile, rm } from "node:fs/promises";
@@ -56,6 +57,8 @@ export interface IssueOptions extends Timeouts {
   mergeTurn?: (run: () => Promise<IssueResult>) => Promise<IssueResult>;
   /** 1 for the first attempt; later ones get a `-<n>` suffix on the branch and worktree. */
   attempt?: number;
+  /** The queue order this issue was picked in (`queue: #160 (high, bug) · #131`); written to its run log. */
+  queueOrder?: string;
 }
 
 export interface IssueResult {
@@ -86,7 +89,8 @@ const VERIFY_TAIL = 2000;
 const ISSUE_CONVENTION =
   "For problems you find outside this task's scope, do not fix them; instead report them. " +
   "If this issue cannot be done until something else is done, do not work around it: report what blocks it and stop. " +
-  'Report by ending your answer with <report>{"issues": [{"title": "short title", "body": "one-paragraph body"}], ' +
+  'Report by ending your answer with <report>{"issues": [{"title": "short title", "body": "one-paragraph body", "bug": true if it is a defect}], ' +
+  "Never set a priority; a human does that when triaging. " +
   '"blocked_by": [{"title": "short title", "body": "why it blocks, plus acceptance criteria"}]}</report> (valid JSON; both lists optional, omit the whole block if there is nothing to report; only the last <report> counts).';
 
 const REVIEWER_CONVENTION =
@@ -94,9 +98,9 @@ const REVIEWER_CONVENTION =
   'If this issue cannot be done until something else is done, put that in "blocked_by".';
 
 /** Follow-ups from the agents' structured output; the old tag scan applies only to a text whose structured block is absent or invalid. */
-function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: string; body: string }[]; blocker?: { title: string; body: string } } {
+function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: string; body: string; bug?: boolean }[]; blocker?: { title: string; body: string } } {
   const real = (f: { title: string }) => !isPlaceholder(f.title.trim());
-  const seen = new Map<string, string>();
+  const seen = new Map<string, { body: string; bug: boolean }>();
   const blocked: { title: string; body: string }[] = [];
   for (const r of rounds) {
     const sources = [
@@ -108,11 +112,11 @@ function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: st
       const scan = !structured && !(text === r.output && r.reportError);
       const issues = structured ? structured.issues : scan ? parseIssueBlocks(text) : [];
       const blocks = structured ? structured.blocked_by : scan ? [parseBlockedBy(text)].filter((b) => b !== undefined) : [];
-      for (const i of issues) if (real(i) && !seen.has(i.title.trim())) seen.set(i.title.trim(), i.body.trim());
+      for (const i of issues) if (real(i) && !seen.has(i.title.trim())) seen.set(i.title.trim(), { body: i.body.trim(), bug: "bug" in i && i.bug === true });
       for (const b of blocks) if (real(b)) blocked.push({ title: b.title.trim(), body: b.body.trim() });
     }
   }
-  return { issues: [...seen].map(([title, body]) => ({ title, body })), ...(blocked[0] ? { blocker: blocked[0] } : {}) };
+  return { issues: [...seen].map(([title, f]) => ({ title, body: f.body, ...(f.bug ? { bug: true } : {}) })), ...(blocked[0] ? { blocker: blocked[0] } : {}) };
 }
 
 /**
@@ -422,7 +426,7 @@ async function reclaimLeftover(o: { repo: string; cwd: string; number: number; b
   return undefined;
 }
 
-async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
+async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -447,6 +451,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   mkdirSync(join(repo, ".bunker", "runs"), { recursive: true });
   const log = (title: string, text = "") => appendFileSync(logPath, redact(`== ${title} ==\n${text.trimEnd()}\n\n`));
   log(`issue #${number}: ${issue.title}`, `branch ${branch}`);
+  if (queueOrder) log("queue order", queueOrder);
   emit(onEvent, { type: "meta", logPath });
   const fail = (status: IssueResult["status"], extra: Partial<IssueResult> = {}): IssueResult => {
     log(`final status: ${status}`, [extra.error, extra.prUrl].filter(Boolean).join("\n"));
@@ -546,7 +551,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   const { issues: blocks, blocker } = collectFollowUps(result.rounds);
   for (const b of blocks) {
     const body = `${b.body}\n\nFound while working on #${number}.`;
-    const created = await $`gh issue create --label discovered --title ${b.title} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
+    const created = await $`gh issue create --label discovered ${b.bug ? ["--label", "bug"] : []} --title ${b.title} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
     if (created.exitCode !== 0) {
       log(`gh issue create failed: ${b.title}`, created.stderr.toString());
       continue;
@@ -707,6 +712,8 @@ export interface QueueOptions extends Omit<IssueOptions, "issue"> {
   shouldStop?: () => boolean;
   /** Issues for which this returns true are not started. */
   skip?: (issue: number) => boolean;
+  /** Re-list between issues so a newly labelled bug or `priority:high` issue runs next. For long-lived callers (`--watch`). */
+  relist?: boolean;
   /** Called after each issue run (not before the next one starts when `parallel` > 1). */
   onResult?: (entry: QueueEntry) => void | Promise<void>;
   /**
@@ -725,16 +732,16 @@ export interface QueueEntry extends IssueResult {
 }
 
 /**
- * Works open issues labelled `bunker`, oldest first, `parallel` at a time (default one). Without `merge`
+ * Works open issues labelled `bunker` (priority:high → medium → none → low; bugs first within a priority; then oldest first), `parallel` at a time (default one). Without `merge`
  * stops after the first PR opens; with `merge` continues only after `merged`.
  * Stops starting issues at the first other outcome, or after `limit` issues.
  */
-export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shouldStop, skip, onResult, parallel = 1, ...opts }: QueueOptions): Promise<QueueEntry[]> {
+export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shouldStop, skip, onResult, parallel = 1, relist, ...opts }: QueueOptions): Promise<QueueEntry[]> {
   const cwd = opts.cwd ?? process.cwd();
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
   const listIssues = async () => {
-    const list = await $`gh issue list --label bunker --state open --limit 1000 --json number,title,createdAt`.cwd(cwd).env(env).nothrow().quiet();
+    const list = await $`gh issue list --label bunker --state open --limit 1000 --json number,title,createdAt,labels`.cwd(cwd).env(env).nothrow().quiet();
     // A transient failure of one list must not abort the queue; the other list may still succeed.
     if (list.exitCode !== 0) {
       console.warn(`bunker: gh issue list failed:\n${list.stderr}`);
@@ -743,18 +750,45 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
     try {
       const parsed: unknown = JSON.parse(list.stdout.toString());
       if (!Array.isArray(parsed)) throw new Error("not an array");
-      return parsed.filter((i): i is { number: number; title: string; createdAt: string } => i !== null && typeof i === "object" && typeof i.number === "number" && typeof i.title === "string" && typeof i.createdAt === "string");
+      return parsed.filter((i): i is Queued => i !== null && typeof i === "object" && typeof i.number === "number" && typeof i.title === "string" && typeof i.createdAt === "string").map((i) => ({ ...i, labels: Array.isArray(i.labels) ? i.labels.filter((l) => l !== null && typeof l === "object" && typeof l.name === "string") : [] }));
     } catch {
       console.warn("bunker: gh issue list returned unparseable output");
       return [];
     }
   };
   await resumeBlocked(cwd, env);
+  for (const p of PRIORITY_LABELS) await $`gh label create ${p.name} --description ${"bunker queue priority"} --color ${p.color}`.cwd(cwd).env(env).nothrow().quiet();
   // The list can lag with a partial result too, so always list twice and merge.
   const first = await listIssues();
   await Bun.sleep(listRetryMs);
   const merged = new Map([...first, ...(await listIssues())].map((q) => [q.number, q]));
-  const queue = [...merged.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.number - b.number);
+  let queue = orderQueue([...merged.values()]);
+  const seen = new Set<number>();
+  let announced = "";
+  const announce = (reason?: string) => {
+    const rest = queue.filter((c) => !seen.has(c.number));
+    const text = describeQueue(rest);
+    if (!rest.length || text === announced) return;
+    announced = text;
+    const order = reason ? `${text} (${reason})` : text;
+    emit(opts.onEvent, { type: "note", text: order });
+    orderNote = text;
+  };
+  let orderNote = "";
+  announce();
+  /** The next candidate; under `relist` the order is re-evaluated first, so a relabelled issue jumps the queue. */
+  const next = async () => {
+    if (relist && seen.size) {
+      const fresh = await listIssues();
+      if (fresh.length) {
+        queue = orderQueue(fresh);
+        announce("re-ordered");
+      }
+    }
+    const q = queue.find((c) => !seen.has(c.number));
+    if (q) seen.add(q.number);
+    return q;
+  };
   const done: (QueueEntry | undefined)[] = [];
   /** In-flight issues by number: also the lock that keeps two slots off the same issue. */
   const active = new Map<number, Promise<void>>();
@@ -769,7 +803,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
     const mergeTurn = parallel > 1 ? (run: () => Promise<IssueResult>) => before.then(run) : undefined;
     const attempt = async (n: number): Promise<IssueResult> => {
       try {
-        return await runIssue({ ...opts, cwd, issue: q.number, ...(mergeTurn ? { mergeTurn, attempt: n } : {}) });
+        return await runIssue({ ...opts, cwd, issue: q.number, ...(orderNote ? { queueOrder: orderNote } : {}), ...(mergeTurn ? { mergeTurn, attempt: n } : {}) });
       } catch (e) {
         if (!keepGoing) throw e;
         const usage = e instanceof AgentFailure ? e.usage : undefined;
@@ -800,9 +834,11 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
   };
 
   let index = 0;
-  for (const q of queue) {
+  for (;;) {
     while (active.size >= parallel || (counted >= limit && active.size > 0)) await Promise.race(active.values());
     if (stop || counted >= limit || shouldStop?.()) break;
+    const q = await next();
+    if (!q) break;
     if (skip?.(q.number) || active.has(q.number)) continue;
     // The list lags label changes by seconds, so confirm the live state before working it.
     const view = await $`gh issue view ${q.number} --json state,labels,body,comments`.cwd(cwd).env(env).nothrow().quiet();
