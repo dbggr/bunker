@@ -4,7 +4,7 @@ import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
 import { $ } from "bun";
 import { AgentFailure, UsageLimit, claudeCode, formatDuration, formatUsage, docker, noSandbox, review, run, runAll, worktreeAdmin } from "./index.ts";
 import { loadRepoConfigOrExit } from "./config.ts";
-import { modelLabel, resolveModels } from "./models.ts";
+import { resolveModels } from "./models.ts";
 import { formatChecks, runDoctor } from "./doctor.ts";
 import { runInit, terminalIo } from "./init.ts";
 import { runAudit } from "./audit.ts";
@@ -354,7 +354,7 @@ const progress = createProgress({ write: (s) => output.write(redact(s)), tty, co
 let hub: Hub | undefined;
 let publisher: Publisher | undefined;
 const hubUrl = `http://127.0.0.1:${uiPort}`;
-if (values.ui || values.queue || values.issue !== undefined) {
+if (values.ui || values.audit || values.queue || values.issue !== undefined) {
   try {
     if (values.ui && !(await hubReachable(uiPort, readToken()))) {
       hub = startHub({ port: uiPort, token: readToken() });
@@ -389,8 +389,7 @@ if (values.audit) {
   let result;
   try {
     const auditor = claudeCode({ model: models.auditor, json: true });
-    emit(onEvent, { type: "stage", name: "audit", role: "auditor", model: modelLabel(auditor) });
-    result = await runAudit({ agent: auditor, sandbox, maxIssues, focus: values.focus, setup: values.setup, ...timeouts });
+    result = await runAudit({ agent: auditor, sandbox, maxIssues, focus: values.focus, setup: values.setup, onEvent, ...timeouts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();

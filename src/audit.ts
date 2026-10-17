@@ -1,7 +1,8 @@
 import { $ } from "bun";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { IdleTimeout, agentLimits, runSetup, sumUsage, timeoutMessage, type Timeouts, type Agent, type Sandbox, type Usage } from "./index.ts";
+import { IdleTimeout, agentLimits, emitStage, lineHook, runSetup, sumUsage, timeoutMessage, type OnEvent, type Timeouts, type Agent, type Sandbox, type Usage } from "./index.ts";
+import { modelLabel } from "./models.ts";
 import { SEVERITY_HELP, auditOutput, extractOutput, pickFollowUps, type FollowUp } from "./structured.ts";
 
 export interface AuditOptions extends Timeouts {
@@ -17,6 +18,8 @@ export interface AuditOptions extends Timeouts {
   setup?: string;
   /** Times to re-ask the agent for a missing or invalid `<audit>` block. Defaults to 2. */
   maxRetries?: number;
+  /** Receives the run's progress events (stage, agent output), e.g. for the hub. */
+  onEvent?: OnEvent;
 }
 
 export interface AuditResult {
@@ -51,7 +54,20 @@ export function auditPrompt(maxIssues: number, focus?: string): string {
  * issues in its final `<audit>` JSON block (re-asked when invalid) are filed as `discovered` (never `bunker`), minus
  * titles that match an open issue. The worktree is always removed.
  */
-export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, focus, setup, maxRetries = 2, ...timeouts }: AuditOptions): Promise<AuditResult> {
+export async function runAudit(opts: AuditOptions): Promise<AuditResult> {
+  const target = { onEvent: opts.onEvent, role: "auditor" as const };
+  emitStage(target, "audit", undefined, modelLabel(opts.agent));
+  try {
+    const result = await auditRun(opts);
+    emitStage(target, "done");
+    return result;
+  } catch (e) {
+    emitStage(target, "failed", e instanceof Error ? e.message : String(e));
+    throw e;
+  }
+}
+
+async function auditRun({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, focus, setup, maxRetries = 2, onEvent, ...timeouts }: AuditOptions): Promise<AuditResult> {
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
   const gitCfg = token ? ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"] : [];
@@ -84,6 +100,7 @@ export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues 
   let issues: FollowUp[];
   let usage: Usage | undefined;
   try {
+    const hook = lineHook(agent, { onEvent, role: "auditor" });
     const ctx = { worktree, gitCommonDir };
     const prep = await runSetup(sandbox, ctx, setup, timeouts);
     if (prep?.timedOut) throw new IdleTimeout(timeoutMessage("setup", prep.timedOut, timeouts));
@@ -92,7 +109,7 @@ export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues 
     const usages: (Usage | undefined)[] = [];
     let prompt = base;
     for (let k = 0; ; k++) {
-      const res = await sandbox.exec(agent.command(prompt, "review"), { ...ctx, limits: agentLimits(timeouts) });
+      const res = await sandbox.exec(agent.command(prompt, "review"), { ...ctx, ...(hook ? { onLine: hook } : {}), limits: agentLimits(timeouts) });
       if (res.timedOut) throw new IdleTimeout(timeoutMessage("audit agent", res.timedOut, timeouts));
       if (res.code !== 0) throw new Error(`agent exited with ${res.code}`);
       const parsed = agent.parse?.(res.stdout);

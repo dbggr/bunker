@@ -581,7 +581,7 @@ export interface EventTarget {
 }
 
 /** The exec `onLine` hook for `agent`: parsed events to onEvent, raw lines to onRaw. Undefined if nobody listens or the agent doesn't stream. */
-function lineHook(agent: Agent, t: EventTarget): ((line: string) => void) | undefined {
+export function lineHook(agent: Agent, t: EventTarget): ((line: string) => void) | undefined {
   if (!agent.parseLine || (!t.onEvent && !t.onRaw)) return undefined;
   const label = { ...(t.task !== undefined ? { task: t.task } : {}), ...(t.round !== undefined ? { round: t.round } : {}), ...(t.role ? { role: t.role } : {}) };
   return (line) => {
