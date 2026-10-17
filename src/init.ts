@@ -140,7 +140,7 @@ export async function runInit(opts: { cwd: string; env?: Env; yes: boolean; io: 
         const probe = await probeGhToken(repo, first.defaultBranch ?? "HEAD", { ...env, BUNKER_GH_TOKEN: t });
         if (probe.missing.length) io.say(`That token can't access: ${probe.missing.join(", ")}. Not saved; fix the permissions and re-run \`bunker init\`.`);
         else await store("BUNKER_GH_TOKEN", t);
-      } else if (t) await store("BUNKER_GH_TOKEN", t);
+      } else if (t) io.say("No GitHub origin detected, so the token can't be validated. Not saved; add a GitHub origin remote and re-run `bunker init`.");
     }
   }
 

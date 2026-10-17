@@ -133,6 +133,17 @@ describe("init interactive", () => {
     expect(s.text()).toContain("Issues");
   });
 
+  test("a GitHub token is not stored unvalidated when there is no GitHub origin", async () => {
+    const w = await bunRepo();
+    await Bun.$`git -C ${w.repo} remote remove origin`.quiet().nothrow();
+    const env = { ...w.env };
+    delete (env as Record<string, string | undefined>).BUNKER_GH_TOKEN;
+    const s = scripted({ secrets: ["github_pat_unvalidated123"] });
+    await runInit({ cwd: w.repo, env, yes: false, io: s.io });
+    expect(await exists(join(w.home, ".config/bunker/.env"))).toBe(false);
+    expect(s.text()).toContain("GitHub origin");
+  });
+
   test("declining a file writes nothing; models go to the repo's .bunker/.env", async () => {
     const w = await bunRepo();
     const s = scripted({ no: [/config\.toml/, /\.bunker\/Dockerfile/, /label/i], asks: ["claude-sonnet-5-5", "claude-opus-5-5", "repo"] });
