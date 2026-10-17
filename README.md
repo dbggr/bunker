@@ -32,5 +32,6 @@ bunker --queue --merge              # everything labelled `bunker`
 - [Security](docs/security.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [CLI reference](docs/cli.md) (generated from `bunker --help`)
+- [Releasing](docs/release.md)
 
 Develop with `bun test` and `bun run typecheck`.

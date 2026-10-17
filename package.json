@@ -14,7 +14,8 @@
     "test": "bun test",
     "build": "bun scripts/build.ts",
     "typecheck": "tsc --noEmit",
-    "docs:cli": "bun scripts/cli-docs.ts"
+    "docs:cli": "bun scripts/cli-docs.ts",
+    "changelog": "bun scripts/changelog.ts"
   },
   "bin": {
     "bunker": "src/cli.ts"
