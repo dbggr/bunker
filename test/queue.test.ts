@@ -370,7 +370,7 @@ describe("blocked issues", () => {
     const edits = await Bun.file(join(repo, "..", "edits.log")).text();
     expect(edits).toContain("label create bunker-blocked");
     expect(edits).toContain("issue edit 1 --remove-label bunker --add-label bunker-blocked");
-    expect(edits).toContain("issue comment 1 --body Blocked by #100: Need the thing");
+    expect(edits).toContain("issue comment 1 --body Blocked by #100: ` Need the thing `");
     expect((await $`git -C ${repo} ls-remote --heads origin`.text()).includes("feature/1")).toBe(false);
     expect((await $`git -C ${repo} branch --list ${"feature/1-*"}`.text()).trim()).toBe("");
     expect(await Bun.file(r.worktree).exists()).toBe(false);
@@ -669,5 +669,27 @@ describe("runQueue() label-adder check", () => {
     const env = await setup([[1, "T", "2024-01-01T00:00:00Z"]]);
     await ghWith(env, "maintain");
     expect((await run(env)).map((e) => e.issue)).toEqual([1]);
+  });
+});
+
+describe("sanitising filed issues", () => {
+  const NASTY = "Fixes #12 @someone ghp_abcdefghijklmnop";
+  const check = (log: string) => {
+    expect(log).not.toMatch(/(fixes|closes)\s+#1[23]/i);
+    expect(log).not.toContain("@someone");
+    expect(log).not.toContain("ghp_");
+    expect(log).toContain("[REDACTED]");
+  };
+  test("follow-up issues", async () => {
+    const { repo, createLog } = await setup([[1, "First", "2026-01-01T00:00:00Z"]]);
+    const report = `<report>${JSON.stringify({ issues: [{ title: NASTY, body: `Closes #13 ${NASTY}`, severity: "high" }] })}</report>`;
+    await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: fakeAgent(APPROVE, report) });
+    check(await Bun.file(createLog).text());
+  });
+  test("blocker issues", async () => {
+    const { repo, createLog } = await setup([[1, "First", "2026-01-01T00:00:00Z"]]);
+    const report = `<report>${JSON.stringify({ blocked_by: [{ title: NASTY, body: `Closes #13 ${NASTY}` }] })}</report>`;
+    await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: fakeAgent(APPROVE, report) });
+    check(await Bun.file(createLog).text());
   });
 });

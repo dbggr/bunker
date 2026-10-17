@@ -18,3 +18,20 @@ const extra = new Set<string>();
 export function addSecrets(values: string[]): void {
   for (const v of values) if (v.length >= 4) extra.add(v);
 }
+
+const ZWJ = "‍";
+const CLOSING_REF = /\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?=:?\s+(?:#\d+|GH-\d+|[\w.-]+\/[\w.-]+#\d+|https?:\/\/\S+))/gi;
+
+/** Redacts secrets and defuses what GitHub would act on in agent-written text: closing keywords (`Fixes #12`) and `@mentions`. */
+export function neutralise(text: string): string {
+  return redact(text)
+    .replace(CLOSING_REF, `$1${ZWJ}`)
+    .replace(/@(?=[\w-])/g, `@${ZWJ}`);
+}
+
+/** Agent text as an inline code span (neutralised first); fences longer than any backtick run inside. */
+export function codeSpan(text: string): string {
+  const t = neutralise(text).replace(/\s+/g, " ").trim();
+  const fence = "`".repeat(Math.max(0, ...[...t.matchAll(/`+/g)].map((m) => m[0].length)) + 1);
+  return `${fence} ${t} ${fence}`;
+}

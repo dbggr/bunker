@@ -236,3 +236,17 @@ describe("runAudit() events", () => {
     expect(events.filter((e) => e.type === "stage").map((e) => e.name)).toEqual(["audit", "failed"]);
   });
 });
+
+describe("sanitising filed issues", () => {
+  test("title and body are neutralised and redacted", async () => {
+    const { repo, createLog } = await setup();
+    const out = `<audit>${JSON.stringify({ issues: [{ title: "Fixes #12 @someone", body: "Closes #13 cc @other ghp_abcdefghijklmnop", severity: "high" }] })}</audit>`;
+    await runAudit({ cwd: repo, agent: fakeAgent(out), sandbox: noSandbox() });
+    const log = await Bun.file(createLog).text();
+    expect(log).not.toMatch(/(fixes|closes)\s+#1[23]/i);
+    expect(log).not.toContain("@someone");
+    expect(log).not.toContain("@other");
+    expect(log).not.toContain("ghp_");
+    expect(log).toContain("[REDACTED]");
+  });
+});

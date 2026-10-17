@@ -201,6 +201,26 @@ describe("runIssue()", () => {
     expect(await $`git -C ${other} status --porcelain`.text()).toContain(".env");
   });
 
+  test("agent text in the PR body is neutralised; bunker's own Closes line is intact", async () => {
+    const { repo, prLog } = await setup(issue());
+    const report = `<report>{"issues":[{"title":"Fixes #12 @someone ghp_abcdefghijklmnop","body":"b","severity":"low"},{"title":"Closes #13 @other","body":"b","severity":"low"}]}</report>`;
+    const agent: Agent = {
+      command(_p, mode = "write") {
+        if (mode === "write") return ["sh", "-c", `echo hi > feature.txt && git add . && git commit -qm "feat: impl"`];
+        return ["sh", "-c", `echo '<verdict>{"approved":true,"required_changes":[]}</verdict>'; echo '${report}'`];
+      },
+    };
+    const r = await runIssue({ cwd: repo, issue: 7, agent, sandbox: noSandbox() });
+    expect(r.status).toBe("pr-opened");
+    const args = (await Bun.file(prLog).text()).split("\n");
+    const body = args.slice(args.indexOf("--body") + 1).join("\n");
+    expect(body).toContain("Closes #7");
+    expect(body).not.toMatch(/(fixes|closes)\s+#1[23]/i);
+    expect(body).not.toContain("@someone");
+    expect(body).not.toContain("@other");
+    expect(body).not.toContain("ghp_");
+  });
+
   test("approved + verify passes → pushed, PR opened", async () => {
     const { repo, origin, prLog } = await setup(issue());
     const prompts: string[] = [];
