@@ -1,6 +1,6 @@
 import { $ } from "bun";
 import { loadRepoConfig } from "./config.ts";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -512,13 +512,51 @@ export async function runSetup(
 
 let worktreeAdminTail: Promise<unknown> = Promise.resolve();
 
+/** Path of the lock file that serializes worktree admin commands across bunker processes on `repo`. */
+export async function worktreeAdminLockPath(repo: string): Promise<string> {
+  const common = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
+  return join(common, "bunker-worktree-admin.lock");
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function acquireWorktreeLock(lock: string): Promise<void> {
+  for (;;) {
+    try {
+      writeFileSync(lock, String(process.pid), { flag: "wx" });
+      return;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+    const pid = Number.parseInt(await Bun.file(lock).text().catch(() => ""), 10);
+    // An unreadable or half-written lock is left alone; only a dead owner's lock is taken over.
+    if (Number.isInteger(pid) && pid !== process.pid && !pidAlive(pid)) rmSync(lock, { force: true });
+    else await Bun.sleep(50);
+  }
+}
+
 /**
- * Runs `fn` (git worktree add/remove, branch -D) after this process's earlier such commands. They read every worktree's
- * admin dir under .git/worktrees, so one running beside a `worktree add` can read it half-written and fail
- * ("failed to read .../commondir"), as parallel queue slots did.
+ * Runs `fn` (git worktree add/remove, branch -D) after earlier such commands on `repo`, in this process and in any other
+ * bunker process (a lock file under the git common dir). They read every worktree's admin dir under .git/worktrees, so
+ * one running beside a `worktree add` can read it half-written and fail ("failed to read .../commondir").
  */
-export function worktreeAdmin<T>(fn: () => Promise<T>): Promise<T> {
-  const run = worktreeAdminTail.then(fn);
+export function worktreeAdmin<T>(repo: string, fn: () => Promise<T>): Promise<T> {
+  const run = worktreeAdminTail.then(async () => {
+    const lock = await worktreeAdminLockPath(repo);
+    await acquireWorktreeLock(lock);
+    try {
+      return await fn();
+    } finally {
+      rmSync(lock, { force: true });
+    }
+  });
   worktreeAdminTail = run.catch(() => {});
   return run;
 }
@@ -546,7 +584,7 @@ function cleanupTmpWorktrees(): void {
 async function addWorktree(cwd: string, base: string): Promise<Worktree> {
   const id = crypto.randomUUID().slice(0, 8);
   const wt = { branch: `bunker/${id}`, path: join(tmpdir(), `bunker-${id}`) };
-  await worktreeAdmin(() => $`git -C ${cwd} worktree add -q -b ${wt.branch} ${wt.path} ${base}`);
+  await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree add -q -b ${wt.branch} ${wt.path} ${base}`);
   tmpWorktrees.set(wt.path, { repo: cwd, base, branch: wt.branch });
   if (!tmpHooked) {
     tmpHooked = true;
@@ -564,8 +602,8 @@ async function copyInto(cwd: string, wt: Worktree, patterns: string[]): Promise<
   try {
     return await copyIntoWorktree(cwd, wt.path, patterns);
   } catch (e) {
-    await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.nothrow().quiet());
-    await worktreeAdmin(() => $`git -C ${cwd} branch -D ${wt.branch}`.nothrow().quiet());
+    await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree remove --force ${wt.path}`.nothrow().quiet());
+    await worktreeAdmin(cwd, () => $`git -C ${cwd} branch -D ${wt.branch}`.nothrow().quiet());
     throw e;
   }
 }
@@ -778,7 +816,7 @@ async function runAgent(
     return { commits, iterations, ...totalUsage(iterations) };
   } finally {
     await store.done();
-    await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
+    await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
   }
 }
 
@@ -991,7 +1029,7 @@ export async function review({
   if (resumeFrom) {
     wt = { branch: resumeFrom.branch, path: resumeFrom.worktree };
     // A cleaned-up temp dir loses uncommitted work, but the branch's commits are still there.
-    if (!existsSync(wt.path)) await worktreeAdmin(() => $`git -C ${cwd} worktree add -q ${wt.path} ${wt.branch}`);
+    if (!existsSync(wt.path)) await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree add -q ${wt.path} ${wt.branch}`);
   } else {
     wt = await addWorktree(cwd, base);
   }
@@ -1125,7 +1163,7 @@ export async function review({
     await store.done();
     // A paused run keeps its worktree: whatever the agent had not committed yet is the work.
     if (pause) tmpWorktrees.delete(wt.path); // kept for the resume
-    else await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
+    else await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
   }
   if (status === "approved") {
     error = await mergeBack(cwd, wt.branch, commits);

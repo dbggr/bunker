@@ -223,7 +223,7 @@ export async function runClean(o: CleanOptions): Promise<CleanResult> {
     if (wt.branch) removedBranches.add(wt.branch);
     gone.add(wt.path);
     if (o.yes) {
-      await worktreeAdmin(() => $`git -C ${repo} worktree remove --force ${wt.path}`.nothrow().quiet());
+      await worktreeAdmin(repo, () => $`git -C ${repo} worktree remove --force ${wt.path}`.nothrow().quiet());
       if (existsSync(wt.path)) rmSync(wt.path, { recursive: true, force: true });
     }
   }
@@ -245,9 +245,9 @@ export async function runClean(o: CleanOptions): Promise<CleanResult> {
     if (!(await keep(branch, branch, sha))) continue;
     note(`${verb}delete branch ${branch} (${reason})`);
     acted = true;
-    if (o.yes) await worktreeAdmin(() => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
+    if (o.yes) await worktreeAdmin(repo, () => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
   }
-  if (o.yes) await worktreeAdmin(() => $`git -C ${repo} worktree prune`.nothrow().quiet());
+  if (o.yes) await worktreeAdmin(repo, () => $`git -C ${repo} worktree prune`.nothrow().quiet());
 
   if (!o.auto) {
     if (o.logsDays !== undefined) {
