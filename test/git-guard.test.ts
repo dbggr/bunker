@@ -104,7 +104,7 @@ describe("container sandbox mounts and verify isolation", () => {
     expect(a).toContain(`${admin}:${admin}`);
     for (const f of [join(admin, "commondir"), join(admin, "gitdir"), join(worktree, ".git")]) expect(a).toContain(`${f}:${f}:ro`);
     expect(a).not.toContain(`${gitCommonDir}:${gitCommonDir}`);
-    expect(a).not.toContain("--network");
+    expect(a.join(" ")).toContain("--network host"); // no veth churn on docker0 per run
   });
 
   test("an isolated exec (verify) has no network and no Claude credentials", async () => {
@@ -113,6 +113,7 @@ describe("container sandbox mounts and verify isolation", () => {
     await sb.exec(["true"], { worktree, gitCommonDir, isolate: true });
     const a = args(root);
     expect(a.join(" ")).toContain("--network none");
+    expect(a.join(" ")).not.toContain("--network host");
     expect(a).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
     expect(a).not.toContain("ANTHROPIC_API_KEY");
   });
