@@ -100,6 +100,14 @@ describe("runAudit()", () => {
     expect((await $`git -C ${repo} worktree list`.text()).trim().split("\n")).toHaveLength(1);
   });
 
+  test("audits origin's default branch via a private ref, not the shared FETCH_HEAD", async () => {
+    const { repo } = await setup();
+    process.env.AUDIT_PWD = join(repo, "..", "pwd");
+    await runAudit({ cwd: repo, agent: fakeAgent(block("A")), sandbox: noSandbox() });
+    expect(existsSync(join(repo, ".git", "FETCH_HEAD"))).toBe(false);
+    expect((await $`git -C ${repo} for-each-ref refs/bunker`.text()).trim()).toBe("");
+  });
+
   test("returns the usage the agent's parse reports", async () => {
     const { repo } = await setup();
     process.env.AUDIT_PWD = join(repo, "..", "pwd");
