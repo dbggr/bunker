@@ -42,6 +42,7 @@ describe("doctor", () => {
     );
     expect(failed(r.checks)).not.toContain("label-bunker");
     expect(r.code).toBe(1);
+    for (const id of ["auto-merge", "required-check"]) expect(r.checks.find((c) => c.id === id)?.required).toBe(true);
     for (const c of r.checks.filter((c) => !c.ok && c.required)) expect(c.fix).toBeTruthy();
     const out = formatChecks(r.checks);
     expect(out).toContain("✗");

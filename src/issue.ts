@@ -746,11 +746,11 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     if (armed.exitCode !== 0) {
       const out = `${armed.stderr}${armed.stdout}`;
       if (!/auto[- ]?merge/i.test(out)) return fail("merge-failed", { ...opened, error: `gh pr merge --auto failed (exit ${armed.exitCode}):\n${out}` });
-      // The repo doesn't allow auto-merge: merge now, if branch protection lets us.
-      const plain = await $`gh pr merge ${prUrl} --squash`.cwd(worktree).env(env).nothrow().quiet();
-      if (plain.exitCode !== 0) {
-        return fail("merge-failed", { ...opened, error: `auto-merge unavailable and gh pr merge failed (exit ${plain.exitCode}):\n${plain.stderr}${plain.stdout}` });
-      }
+      // Never merge immediately: without auto-merge + required checks the only gate before the default branch is the agent reviewer.
+      return fail("merge-failed", {
+        ...opened,
+        error: `the repo doesn't allow auto-merge, so bunker will not merge the PR (it would merge before CI finishes). Enable "Allow auto-merge" and require a status check on the default branch (\`bunker doctor\` checks both).\n${out}`,
+      });
     }
     emitStage({ onEvent }, "waiting for merge");
     const waited = await waitForMerge(prUrl, worktree, env, ciTimeoutMin * 60_000, ciPollMs);
