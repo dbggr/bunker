@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
 import { existsSync } from "node:fs";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, type Agent } from "../src/index.ts";
 import { runAudit } from "../src/audit.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 const dirs: string[] = [];
 const origPath = process.env.PATH;

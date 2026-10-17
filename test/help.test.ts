@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { options } from "../src/options.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 const cli = (...args: string[]) => {
   const p = Bun.spawnSync(["bun", "src/cli.ts", ...args], { cwd: import.meta.dir + "/..", env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "sk-test-token-0123456789" } });

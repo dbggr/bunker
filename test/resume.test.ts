@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeCode, noSandbox, review, run, type Agent, type Sandbox } from "../src/index.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 const dirs: string[] = [];
 const realHome = process.env.HOME;
@@ -33,6 +35,7 @@ async function makeRepo(): Promise<string> {
 }
 
 const APPROVE = "<review>APPROVE</review>";
+const REJ = '<verdict>{"approved":false,"required_changes":["fix"]}</verdict>';
 
 /**
  * A fake `claude`: records "<mode> resume=<id|none> present=<yes|no>" per call, writes a session
@@ -57,7 +60,7 @@ function fakeClaude(opts: { reviewer?: (n: number) => string; failResume?: boole
         opts.failResume && resume ? "exit 1" : "true",
         `echo '{"type":"system","subtype":"init","session_id":"${id}"}' > "$P/${id}.jsonl"`,
         review ? "true" : `N=$(git rev-list --count HEAD); echo $N > f$N.txt && git add . && git commit -qm "impl $N"`,
-        `echo '{"type":"result","result":"${text}","session_id":"${id}","total_cost_usd":0.1,"duration_ms":5}'`,
+        `echo '{"type":"result","result":${JSON.stringify(text)},"session_id":"${id}","total_cost_usd":0.1,"duration_ms":5}'`,
       ].join("\n");
       return ["sh", "-c", script];
     },
@@ -101,7 +104,7 @@ describe("review() resume", () => {
     const repo = await makeRepo();
     const sessionsDir = join(home, "sessions");
     const r = await review({
-      cwd: repo, prompt: "do it", agent: fakeClaude({ reviewer: (n) => (n === 2 ? "rename foo" : APPROVE) }), sandbox: forgetful(), sessionsDir,
+      cwd: repo, prompt: "do it", agent: fakeClaude({ reviewer: (n) => (n === 2 ? REJ : APPROVE) }), sandbox: forgetful(), sessionsDir,
     });
     expect(r.status).toBe("approved");
     // The sandbox forgets its sessions between calls, so only the restore from sessionsDir can satisfy the resume.
@@ -114,7 +117,7 @@ describe("review() resume", () => {
   test("resume failure falls back to a fresh session", async () => {
     const repo = await makeRepo();
     const prompts: string[] = [];
-    const agent = fakeClaude({ reviewer: (n) => (n === 2 ? "fix" : APPROVE), failResume: true });
+    const agent = fakeClaude({ reviewer: (n) => (n === 2 ? REJ : APPROVE), failResume: true });
     const inner = agent.command;
     agent.command = (p, m, o) => (m === "write" && prompts.push(p), inner(p, m, o));
     const notes: string[] = [];
@@ -131,7 +134,7 @@ describe("review() resume", () => {
 
   test("resume: false never passes --resume", async () => {
     const repo = await makeRepo();
-    const r = await review({ cwd: repo, prompt: "p", agent: fakeClaude({ reviewer: (n) => (n === 2 ? "x" : APPROVE) }), sandbox: noSandbox(), resume: false, sessionsDir: join(home, "s") });
+    const r = await review({ cwd: repo, prompt: "p", agent: fakeClaude({ reviewer: (n) => (n === 2 ? REJ : APPROVE) }), sandbox: noSandbox(), resume: false, sessionsDir: join(home, "s") });
     expect(r.status).toBe("approved");
     expect((await calls()).every((l) => l.includes("resume=none"))).toBe(true);
   });

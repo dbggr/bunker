@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { redact } from "./redact.ts";
+import { extractOutput, reportOutput, verdictOutput, type Report, type Verdict } from "./structured.ts";
 import { output, tailLines } from "./output.ts";
 import { emit, findSessionId, findStreamResult, parseClaudeStreamLine, type OnEvent, type Stage, type StreamEvent } from "./events.ts";
 export type { BunkerEvent, OnEvent } from "./events.ts";
@@ -184,7 +185,8 @@ async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">, pref
   const tail = decoder.decode();
   stdout += tail;
   pending += tail;
-  if (pending) out(pending);
+  // Prefixed output is interleaved with other tasks': end the last line, or the next task's runs on after it.
+  if (pending) out(prefix && !onLine ? `${pending}\n` : pending);
   return { code: await proc.exited, stdout: redact(stdout) };
 }
 
@@ -199,9 +201,10 @@ export function noSandbox(): Sandbox {
       return join(process.env.HOME ?? tmpdir(), ".claude", "projects");
     },
     exec: (cmd, { worktree, prefix, onLine }) =>
+      // detached: own process group, so a terminal Ctrl-C reaches only bunker, which lets the step finish.
       // Explicit env: Bun.spawn otherwise passes the startup environment, dropping
       // anything set at runtime (e.g. the token loaded from .bunker/.env).
-      teeStdout(Bun.spawn(cmd, { cwd: worktree, env: agentEnv(), stdio: ["ignore", "pipe", "inherit"] }), prefix, onLine),
+      teeStdout(Bun.spawn(cmd, { cwd: worktree, env: agentEnv(), stdio: ["ignore", "pipe", "inherit"], detached: true }), prefix, onLine),
   };
 }
 
@@ -327,7 +330,7 @@ function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions):
         image,
         ...args,
       ];
-      return teeStdout(Bun.spawn(argv, { env: process.env, stdio: ["ignore", "pipe", "inherit"] }), prefix, onLine);
+      return teeStdout(Bun.spawn(argv, { env: process.env, stdio: ["ignore", "pipe", "inherit"], detached: true }), prefix, onLine);
     },
   };
 }
@@ -369,10 +372,23 @@ export async function runSetup(
   return { cmd, ...out };
 }
 
+let worktreeAdminTail: Promise<unknown> = Promise.resolve();
+
+/**
+ * Runs `fn` (git worktree add/remove, branch -D) after this process's earlier such commands. They read every worktree's
+ * admin dir under .git/worktrees, so one running beside a `worktree add` can read it half-written and fail
+ * ("failed to read .../commondir"), as parallel queue slots did.
+ */
+export function worktreeAdmin<T>(fn: () => Promise<T>): Promise<T> {
+  const run = worktreeAdminTail.then(fn);
+  worktreeAdminTail = run.catch(() => {});
+  return run;
+}
+
 async function addWorktree(cwd: string, base: string): Promise<Worktree> {
   const id = crypto.randomUUID().slice(0, 8);
   const wt = { branch: `bunker/${id}`, path: join(tmpdir(), `bunker-${id}`) };
-  await $`git -C ${cwd} worktree add -q -b ${wt.branch} ${wt.path} ${base}`;
+  await worktreeAdmin(() => $`git -C ${cwd} worktree add -q -b ${wt.branch} ${wt.path} ${base}`);
   return wt;
 }
 
@@ -541,7 +557,7 @@ async function runAgent(
     return { commits, iterations, ...totalUsage(iterations) };
   } finally {
     await store.done();
-    await $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet();
+    await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
   }
 }
 
@@ -645,8 +661,10 @@ export interface ReviewOptions {
   cwd?: string;
   /** Max implement → review rounds. Defaults to 2. */
   maxRounds?: number;
-  /** Reviewer stdout containing this approves the change. Defaults to "<review>APPROVE</review>". */
+  /** Legacy fallback, used only when the reviewer printed no `<verdict>` at all: stdout containing this approves. Defaults to "<review>APPROVE</review>". */
   approveSignal?: string;
+  /** Times to re-ask the reviewer (resuming its session) for a missing or invalid `<verdict>`. Defaults to 2. */
+  maxRetries?: number;
   /** Extra instruction appended to every reviewer prompt. */
   reviewerInstruction?: string;
   /** Shell command run in the worktree, inside `sandbox`, before the first agent run. Defaults to `.bunker/setup` if present. */
@@ -669,6 +687,12 @@ export interface ReviewRound {
   approved: boolean;
   /** The reviewer's stdout. */
   feedback: string;
+  /** The reviewer's structured verdict, absent when only the legacy approve signal was used. */
+  verdict?: Verdict;
+  /** The implementer's structured `<report>`, if it printed a valid one. */
+  report?: Report;
+  /** Why the implementer's `<report>` was ignored, when it printed one that was invalid. */
+  reportError?: string;
   /** The implementer's stdout. */
   output: string;
   /** Implementer + reviewer this round. */
@@ -676,7 +700,7 @@ export interface ReviewRound {
 }
 
 export interface ReviewResult {
-  status: "approved" | "rejected" | "failed" | "conflict";
+  status: "approved" | "rejected" | "failed" | "conflict" | "bad-output";
   branch: string;
   commits: Commit[];
   rounds: ReviewRound[];
@@ -687,13 +711,20 @@ export interface ReviewResult {
 
 const DEFAULT_APPROVE = "<review>APPROVE</review>";
 
-function reviewerPrompt(task: string, diff: string, approveSignal: string, extra?: string): string {
+const VERDICT_FORMAT =
+  'end your answer with <verdict>{"approved": true|false, "required_changes": ["…"], "issues": [{"title": "…", "body": "…"}], "blocked_by": [{"title": "…", "body": "…"}]}</verdict>: ' +
+  "valid JSON, `approved` true only if the change is acceptable, `required_changes` what must change otherwise. " +
+  "Only the last <verdict> in your answer counts.";
+
+class BadOutput extends Error {}
+
+function reviewerPrompt(task: string, diff: string, extra?: string, approveSignal = DEFAULT_APPROVE): string {
   return (
     `You are reviewing a change made for this task:\n\n${task}\n\n` +
     `Here is the full diff of the change:\n\n${diff}\n\n` +
     "Do not modify any files and do not commit anything. " +
-    `If the change is acceptable, print ${approveSignal}. ` +
-    "Otherwise list the changes that are required." +
+    `Review it, then ${VERDICT_FORMAT}` +
+    (approveSignal !== DEFAULT_APPROVE ? ` If you approve, you may instead print ${approveSignal} on its own.` : "") +
     (extra ? `\n\n${extra}` : "")
   );
 }
@@ -713,6 +744,7 @@ export async function review({
   sandbox,
   maxRounds = 2,
   approveSignal = DEFAULT_APPROVE,
+  maxRetries = 2,
   reviewerInstruction,
   setup,
   onEvent,
@@ -761,32 +793,55 @@ export async function review({
       emitStage(revTarget, "review", undefined, modelLabel(reviewer));
       const revHook = lineHook(reviewer, revTarget);
       // Reviewers never resume: each review is independent.
-      const rev = await agentStep({
-        agent: reviewer, sandbox, mode: "review", prompt: reviewerPrompt(prompt, diff, approveSignal, reviewerInstruction), target: revTarget,
+      const revPrompt = reviewerPrompt(prompt, diff, reviewerInstruction, approveSignal);
+      let rev = await agentStep({
+        agent: reviewer, sandbox, mode: "review", prompt: revPrompt, target: revTarget,
         ctx: revHook ? { ...ctx, onLine: revHook } : ctx,
         dest: join(store.dir, `reviewer-${i + 1}.jsonl`),
       });
+      let revOut = interpret(reviewer, rev.stdout);
+      const attempts: (Usage | undefined)[] = [];
+      let parsed = extractOutput(revOut.text, verdictOutput);
+      // A reviewer that never heard of <verdict> may still say the old approve signal; that stays a fallback.
+      const legacy = (text: string, p: typeof parsed) => !p.ok && !p.present && text.includes(approveSignal);
+      for (let k = 1; rev.code === 0 && !parsed.ok && !legacy(revOut.text, parsed) && k <= maxRetries; k++) {
+        attempts.push(revOut.usage);
+        const ask = `Your answer had no usable verdict (${parsed.error}). Reply again, ${VERDICT_FORMAT}`;
+        rev = await agentStep({
+          agent: reviewer, sandbox, mode: "review", prompt: `${revPrompt}\n\n${ask}`, resumePrompt: ask, prev: rev.session, target: revTarget,
+          ctx: revHook ? { ...ctx, onLine: revHook } : ctx,
+          dest: join(store.dir, `reviewer-${i + 1}-retry${k}.jsonl`),
+        });
+        revOut = interpret(reviewer, rev.stdout);
+        parsed = extractOutput(revOut.text, verdictOutput);
+      }
       // Only the implementer's commits survive, whatever the reviewer did.
       await $`git -C ${wt.path} reset -q --hard ${head}`.quiet();
       await $`git -C ${wt.path} clean -qfd`.quiet();
-      const revOut = interpret(reviewer, rev.stdout);
-      usages.push(revOut.usage);
+      attempts.push(revOut.usage);
+      usages.push(...attempts);
       if (rev.code !== 0) throw new Error(`reviewer exited with ${rev.code}; work kept on ${wt.branch}`);
+      if (!parsed.ok && !legacy(revOut.text, parsed)) throw new BadOutput(`reviewer gave bad output after ${maxRetries} retries: ${parsed.error}; work kept on ${wt.branch}`);
 
-      const approved = revOut.text.includes(approveSignal);
-      const usage = sumUsage([implOut.usage, revOut.usage]);
-      rounds.push({ ...(impl.session ? { sessionId: impl.session.id } : {}), commits: added, approved, feedback: revOut.text, output: implOut.text, ...(usage ? { usage } : {}) });
+      const verdict = parsed.ok ? parsed.value : undefined;
+      const approved = verdict ? verdict.approved : true;
+      const reported = extractOutput(implOut.text, reportOutput);
+      const reportError = reported.ok || !reported.present ? undefined : reported.error;
+      if (reportError) emit(onEvent, { type: "note", round: i + 1, role: "implementer", text: `ignoring the implementer's <report>: ${reportError}` });
+      const changes = verdict && !verdict.approved && verdict.required_changes.length ? verdict.required_changes.map((c) => `- ${c}`).join("\n") + "\n\n" : "";
+      const usage = sumUsage([implOut.usage, ...attempts]);
+      rounds.push({ ...(impl.session ? { sessionId: impl.session.id } : {}), commits: added, approved, feedback: changes + revOut.text, ...(verdict ? { verdict } : {}), ...(reported.ok ? { report: reported.value } : {}), ...(reportError ? { reportError } : {}), output: implOut.text, ...(usage ? { usage } : {}) });
       if (approved) {
         status = "approved";
         break;
       }
     }
   } catch (e) {
-    status = "failed";
+    status = e instanceof BadOutput ? "bad-output" : "failed";
     error = redact(e instanceof Error ? e.message : String(e));
   } finally {
     await store.done();
-    await $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet();
+    await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
   }
   if (status === "approved") {
     error = await mergeBack(cwd, wt.branch, commits);

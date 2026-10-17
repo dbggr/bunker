@@ -7,7 +7,7 @@ import { emit } from "./events.ts";
 import { tailLines, testCounts } from "./output.ts";
 import { hyperlink } from "./events.ts";
 import { modelLabel } from "./models.ts";
-import { AgentFailure, emitStage, review, runSetup, type Agent, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
+import { AgentFailure, emitStage, review, runSetup, worktreeAdmin, type Agent, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
 
 export interface IssueInfo {
   number: number;
@@ -56,7 +56,7 @@ export interface IssueOptions {
 }
 
 export interface IssueResult {
-  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked";
+  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked" | "bad-output";
   /** With status `blocked`: the `discovered` issue filed for what this one waits on. */
   blockedBy?: { number: number; title: string };
   branch: string;
@@ -81,10 +81,36 @@ const MAX_SLUG = 40;
 const VERIFY_TAIL = 2000;
 
 const ISSUE_CONVENTION =
-  "For problems you find outside this task's scope, do not fix them; instead print " +
-  '<issue title="short title">one-paragraph body</issue> for each one. ' +
-  "If this issue cannot be done until something else is done, do not work around it: instead print " +
-  '<blocked-by title="short title">why it blocks, plus acceptance criteria</blocked-by> and stop.';
+  "For problems you find outside this task's scope, do not fix them; instead report them. " +
+  "If this issue cannot be done until something else is done, do not work around it: report what blocks it and stop. " +
+  'Report by ending your answer with <report>{"issues": [{"title": "short title", "body": "one-paragraph body"}], ' +
+  '"blocked_by": [{"title": "short title", "body": "why it blocks, plus acceptance criteria"}]}</report> (valid JSON; both lists optional, omit the whole block if there is nothing to report; only the last <report> counts).';
+
+const REVIEWER_CONVENTION =
+  "Out-of-scope problems you find go in the verdict's \"issues\" (do not ask for them to be fixed). " +
+  'If this issue cannot be done until something else is done, put that in "blocked_by".';
+
+/** Follow-ups from the agents' structured output; the old tag scan applies only to a text whose structured block is absent or invalid. */
+function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: string; body: string }[]; blocker?: { title: string; body: string } } {
+  const real = (f: { title: string }) => !isPlaceholder(f.title.trim());
+  const seen = new Map<string, string>();
+  const blocked: { title: string; body: string }[] = [];
+  for (const r of rounds) {
+    const sources = [
+      { structured: r.report, text: r.output },
+      { structured: r.verdict, text: r.feedback },
+    ];
+    for (const { structured, text } of sources) {
+      // A present-but-invalid <report> is never rescued by the regex scan: that would re-open quoted-example bugs.
+      const scan = !structured && !(text === r.output && r.reportError);
+      const issues = structured ? structured.issues : scan ? parseIssueBlocks(text) : [];
+      const blocks = structured ? structured.blocked_by : scan ? [parseBlockedBy(text)].filter((b) => b !== undefined) : [];
+      for (const i of issues) if (real(i) && !seen.has(i.title.trim())) seen.set(i.title.trim(), i.body.trim());
+      for (const b of blocks) if (real(b)) blocked.push({ title: b.title.trim(), body: b.body.trim() });
+    }
+  }
+  return { issues: [...seen].map(([title, body]) => ({ title, body })), ...(blocked[0] ? { blocker: blocked[0] } : {}) };
+}
 
 /**
  * `text` with fenced code and inline code spans blanked out (same length, so offsets line up with the original):
@@ -369,14 +395,26 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   }
   const head = await $`git ${gitCfg} -C ${repo} ls-remote --symref ${remote} HEAD`.env(env).nothrow().quiet();
   const defaultBranch = /^ref: refs\/heads\/(\S+)\s+HEAD$/m.exec(head.stdout.toString())?.[1] ?? "main";
-  const fetch = await $`git ${gitCfg} -C ${repo} fetch -q ${remote} ${defaultBranch}`.env(env).nothrow().quiet();
-  if (fetch.exitCode !== 0) return fail("failed", { error: `could not fetch origin/${defaultBranch}:\n${fetch.stderr}` });
+  /**
+   * Origin's default branch commit, or the fetch's stderr. Not via FETCH_HEAD: parallel issues (and other bunker
+   * processes) share the repo, and their fetches rewrite it between ours and our read. A private ref is ours alone.
+   */
+  const fetchDefault = async (): Promise<{ sha: string } | { error: string }> => {
+    const ref = `refs/bunker/fetch/${number}-${crypto.randomUUID()}`;
+    const fetched = await $`git ${gitCfg} -C ${repo} fetch -q --no-write-fetch-head ${remote} ${`+refs/heads/${defaultBranch}:${ref}`}`.env(env).nothrow().quiet();
+    if (fetched.exitCode !== 0) return { error: fetched.stderr.toString() };
+    const sha = (await $`git -C ${repo} rev-parse ${ref}`.text()).trim();
+    await $`git -C ${repo} update-ref -d ${ref}`.nothrow().quiet();
+    return { sha };
+  };
+  const fetched = await fetchDefault();
+  if ("error" in fetched) return fail("failed", { error: `could not fetch origin/${defaultBranch}:\n${fetched.error}` });
 
-  let baseSha = (await $`git -C ${repo} rev-parse FETCH_HEAD`.text()).trim();
+  let baseSha = fetched.sha;
   // Default verify: the base branch's .bunker/verify, read now so the agent can't weaken it in its worktree.
   let verifySource = "--verify";
   if (!verify) {
-    const file = await $`git -C ${repo} show FETCH_HEAD:.bunker/verify`.nothrow().quiet();
+    const file = await $`git -C ${repo} show ${`${baseSha}:.bunker/verify`}`.nothrow().quiet();
     if (file.exitCode === 0 && file.stdout.toString().trim()) {
       verify = file.stdout.toString().trim();
       verifySource = ".bunker/verify";
@@ -384,7 +422,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   }
   if (merge && !verify) return fail("failed", { error: "merge requires --verify or a .bunker/verify file" });
   if (verifyOnHost && !verify) return fail("failed", { error: "--verify-on-host requires --verify or a .bunker/verify file" });
-  const add = await $`git -C ${repo} worktree add -q -b ${branch} ${worktree} FETCH_HEAD`.nothrow().quiet();
+  const add = await worktreeAdmin(() => $`git -C ${repo} worktree add -q -b ${branch} ${worktree} ${baseSha}`.nothrow().quiet());
   if (add.exitCode !== 0) return fail("failed", { error: `could not create worktree:\n${add.stderr}` });
 
   const prompt =
@@ -394,7 +432,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     ISSUE_CONVENTION;
   log("models", `implementer: ${modelLabel(agent)}\nreviewer: ${modelLabel(reviewer ?? agent)}`);
   log("raw agent events (stream-json lines follow, interleaved with the sections below)");
-  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), setup, reviewerInstruction: ISSUE_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
+  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), setup, reviewerInstruction: REVIEWER_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
   spent.usage = result.usage;
 
   for (const [i, r] of result.rounds.entries()) {
@@ -404,7 +442,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   if (result.error) log("review error", result.error);
 
   // Follow-ups the agents found: filed for human triage, never queued.
-  const blocks = parseIssueBlocks(result.rounds.flatMap((r) => [r.output, r.feedback]).join("\n"));
+  const { issues: blocks, blocker } = collectFollowUps(result.rounds);
   for (const b of blocks) {
     const body = `${b.body}\n\nFound while working on #${number}.`;
     const created = await $`gh issue create --label discovered --title ${b.title} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
@@ -416,7 +454,6 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     filed.push({ number: Number.isInteger(n) ? n : 0, title: b.title });
   }
   // The issue can't be done yet: file what it waits on, park it, and leave nothing behind.
-  const blocker = parseBlockedBy(result.rounds.flatMap((r) => [r.output, r.feedback]).join("\n"));
   if (blocker) {
     const created = await $`gh issue create --label discovered --title ${blocker.title} --body ${`${blocker.body}\n\nBlocks #${number}.`}`.cwd(cwd).env(env).nothrow().quiet();
     const m = created.exitCode === 0 ? /\/issues\/(\d+)/.exec(created.stdout.toString()) : null;
@@ -425,8 +462,8 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     } else {
       const blockedBy = { number: Number(m[1]), title: blocker.title };
       await markBlocked(number, blockedBy, cwd, env);
-      await $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet();
-      await $`git -C ${repo} branch -D ${branch}`.nothrow().quiet();
+      await worktreeAdmin(() => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
+      await worktreeAdmin(() => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
       emit(onEvent, { type: "note", text: `blocked by #${blockedBy.number}: ${blockedBy.title}` });
       return fail("blocked", { review: result, blockedBy });
     }
@@ -474,9 +511,9 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   /** Merges the latest default branch into the branch; re-verifies if that changed anything. Undefined when all is well. */
   const updateToLatest = async (): Promise<IssueResult | undefined> => {
     emit(onEvent, { type: "note", text: `updating to origin/${defaultBranch}` });
-    const refetch = await $`git ${gitCfg} -C ${repo} fetch -q ${remote} ${defaultBranch}`.env(env).nothrow().quiet();
-    if (refetch.exitCode !== 0) return fail("failed", { review: result, error: `could not fetch origin/${defaultBranch}:\n${refetch.stderr}` });
-    const latest = (await $`git -C ${repo} rev-parse FETCH_HEAD`.text()).trim();
+    const refetched = await fetchDefault();
+    if ("error" in refetched) return fail("failed", { review: result, error: `could not fetch origin/${defaultBranch}:\n${refetched.error}` });
+    const latest = refetched.sha;
     const before = (await $`git -C ${worktree} rev-parse HEAD`.text()).trim();
     const identity = (await $`git -C ${worktree} config user.email`.nothrow().quiet().text()).trim() ? [] : ["-c", "user.name=bunker", "-c", "user.email=bunker@localhost"];
     const merged = await $`git ${identity} -C ${worktree} merge --no-edit ${latest}`.env(env).nothrow().quiet();
@@ -539,8 +576,8 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
       return fail("merge-unverified", { ...opened, error: `merged, but ${target} differs from ${branch} in:\n${differing.join("\n")}` });
     }
 
-    await $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet();
-    await $`git -C ${repo} branch -D ${branch}`.nothrow().quiet();
+    await worktreeAdmin(() => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
+    await worktreeAdmin(() => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
     return fail("merged", opened);
   };
   return merge && mergeTurn ? mergeTurn(publish) : publish();

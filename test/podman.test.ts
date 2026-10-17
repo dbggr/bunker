@@ -1,8 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, test, setDefaultTimeout } from "bun:test";
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { podman } from "../src/index.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 test("podman() runs `podman run` with --userns=keep-id instead of --user", async () => {
   const dir = await mkdtemp(join(tmpdir(), "bunker-fakepodman-"));

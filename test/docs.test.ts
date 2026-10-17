@@ -1,7 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { readdirSync } from "node:fs";
 import { cliDoc } from "../scripts/cli-docs.ts";
 import { HELP } from "../src/help.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 const root = import.meta.dir + "/..";
 const docs = ["getting-started", "concepts", "security", "troubleshooting", "cli"].map((n) => `docs/${n}.md`);

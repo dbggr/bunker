@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +7,8 @@ import { noSandbox, type Agent } from "../src/index.ts";
 import { issueBranch, runIssue } from "../src/issue.ts";
 import { output } from "../src/output.ts";
 import { createProgress, type BunkerEvent } from "../src/events.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 const dirs: string[] = [];
 const origPath = process.env.PATH;
@@ -438,7 +440,7 @@ describe("runIssue()", () => {
     const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() });
     expect(r.status).toBe("pr-opened");
     expect((await Bun.file(join(r.worktree, "setup.out")).text()).trim()).toBe("FROMFILE");
-    await $`git -C ${repo} worktree remove --force ${r.worktree} && git -C ${repo} branch -D ${r.branch}`.quiet();
+    await $`git -C ${repo} worktree remove --force ${r.worktree} && git -C ${repo} branch -D ${r.branch} && git -C ${repo} push -q origin --delete ${r.branch}`.quiet();
     const r2 = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), setup: "echo EXPLICIT > setup.out" });
     expect((await Bun.file(join(r2.worktree, "setup.out")).text()).trim()).toBe("EXPLICIT");
   });
@@ -460,7 +462,7 @@ describe("runIssue()", () => {
     const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() });
     expect(r.status).toBe("pr-opened");
     expect(await Bun.file(prLog).text()).toContain("Verify: `test -f feature.txt` passed (.bunker/verify)");
-    await $`git -C ${repo} worktree remove --force ${r.worktree} && git -C ${repo} branch -D ${r.branch}`.quiet();
+    await $`git -C ${repo} worktree remove --force ${r.worktree} && git -C ${repo} branch -D ${r.branch} && git -C ${repo} push -q origin --delete ${r.branch}`.quiet();
     const r2 = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: "true" });
     expect(r2.status).toBe("pr-opened");
     expect(await Bun.file(prLog).text()).toContain("Verify: `true` passed (--verify)");
@@ -524,7 +526,7 @@ describe("runIssue()", () => {
 
   test("rejected → nothing pushed, worktree kept", async () => {
     const { repo, origin, prLog } = await setup(issue());
-    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent("nope"), sandbox: noSandbox(), maxRounds: 1 });
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent('<verdict>{"approved":false,"required_changes":["nope"]}</verdict>'), sandbox: noSandbox(), maxRounds: 1 });
     expect(r.status).toBe("rejected");
     expect(r.review?.status).toBe("rejected");
     expect(await originBranches(origin)).toEqual(["main"]);

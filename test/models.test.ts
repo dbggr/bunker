@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +7,8 @@ import { loadBunkerEnv } from "../src/env.ts";
 import { claudeCode, review, noSandbox } from "../src/index.ts";
 import { modelLabel, resolveModels } from "../src/models.ts";
 import { createProgress, type BunkerEvent } from "../src/events.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 const dirs: string[] = [];
 afterEach(async () => {
