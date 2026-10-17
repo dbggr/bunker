@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { reasonFromLog, failureReason } from "../src/reason.ts";
+import { reasonFromLog, failureReason } from "../src/core/reason.ts";
 import { collectStatus, createStatusRecorder, formatStatus, retryCommand } from "../src/status.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts

@@ -1,15 +1,15 @@
 import { $ } from "bun";
-import { loadRepoConfig } from "./config.ts";
+import { loadRepoConfig } from "./core/config.ts";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { redact } from "./redact.ts";
+import { redact } from "./core/redact.ts";
 import { committedCopies, copyIntoWorktree, copyPatterns, copyRejection } from "./copy.ts";
-import { SEVERITY_HELP, extractOutput, reportOutput, verdictOutput, type Report, type Verdict } from "./structured.ts";
-import { output, tailLines } from "./output.ts";
-import { emit, findSessionId, findUsageLimit, findStreamResult, parseClaudeStreamLine, type OnEvent, type Stage, type StreamEvent } from "./events.ts";
-export type { BunkerEvent, OnEvent } from "./events.ts";
+import { SEVERITY_HELP, extractOutput, reportOutput, verdictOutput, type Report, type Verdict } from "./core/structured.ts";
+import { output, tailLines } from "./core/output.ts";
+import { emit, findSessionId, findUsageLimit, findStreamResult, parseClaudeStreamLine, type OnEvent, type Stage, type StreamEvent } from "./core/events.ts";
+export type { BunkerEvent, OnEvent } from "./core/events.ts";
 import { modelLabel } from "./models.ts";
 import { gitMountArgs, guardGit, hardenHostGit } from "./git-guard.ts";
 

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, symlink, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, review, run, runAll, type Agent } from "../src/index.ts";
-import { redact } from "../src/redact.ts";
+import { redact } from "../src/core/redact.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

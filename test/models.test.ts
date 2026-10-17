@@ -3,10 +3,10 @@ import { $ } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadBunkerEnv } from "../src/env.ts";
+import { loadBunkerEnv } from "../src/core/env.ts";
 import { claudeCode, review, noSandbox } from "../src/index.ts";
 import { modelLabel, resolveModels } from "../src/models.ts";
-import { createProgress, type BunkerEvent } from "../src/events.ts";
+import { createProgress, type BunkerEvent } from "../src/core/events.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

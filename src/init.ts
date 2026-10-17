@@ -2,8 +2,8 @@ import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { formatChecks, exec, LABELS, probeGhToken, runDoctor, userEnv, TOKEN_FIX, type Check, type RepoInfo } from "./doctor.ts";
-import { addSecrets, redact } from "./redact.ts";
-import { PRIORITY_LABELS } from "./priority.ts";
+import { addSecrets, redact } from "./core/redact.ts";
+import { PRIORITY_LABELS } from "./core/priority.ts";
 
 type Env = Record<string, string | undefined>;
 

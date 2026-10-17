@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { noSandbox, type Agent } from "../src/index.ts";
 import { cleanupInterrupted, issueBranch, runIssue } from "../src/issue.ts";
-import { output } from "../src/output.ts";
-import { createProgress, type BunkerEvent } from "../src/events.ts";
+import { output } from "../src/core/output.ts";
+import { createProgress, type BunkerEvent } from "../src/core/events.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

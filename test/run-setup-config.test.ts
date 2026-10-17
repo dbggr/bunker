@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, runSetup } from "../src/index.ts";
-import { ConfigError } from "../src/config.ts";
+import { ConfigError } from "../src/core/config.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

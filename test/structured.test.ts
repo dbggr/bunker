@@ -1,5 +1,5 @@
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
-import { Output, extractOutput, verdictOutput, reportOutput, auditOutput, pickFollowUps } from "../src/structured.ts";
+import { Output, extractOutput, verdictOutput, reportOutput, auditOutput, pickFollowUps } from "../src/core/structured.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

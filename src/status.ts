@@ -1,8 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DAY_MS, MONTH_MS, spentWithin, type SpendCaps } from "./spend.ts";
-import { orderQueue, priorityRank, PRIORITY_LABELS, isBug, type Queued } from "./priority.ts";
-import type { BunkerEvent } from "./events.ts";
+import { DAY_MS, MONTH_MS, spentWithin, type SpendCaps } from "./core/spend.ts";
+import { orderQueue, priorityRank, PRIORITY_LABELS, isBug, type Queued } from "./core/priority.ts";
+import type { BunkerEvent } from "./core/events.ts";
 
 export const STATUS_FILE = "watch-status.json";
 export const LOCK_FILE = "watch.lock";

@@ -1,11 +1,11 @@
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { formatSpend, loadSpendCaps } from "./spend.ts";
-import { AUTH_VARS, loadBunkerEnv } from "./env.ts";
+import { formatSpend, loadSpendCaps } from "./core/spend.ts";
+import { AUTH_VARS, loadBunkerEnv } from "./core/env.ts";
 import { DEFAULT_MODEL_LABEL, resolveModels } from "./models.ts";
-import { ConfigError, effectiveSettings, formatValue, loadRepoConfig } from "./config.ts";
-import { redact } from "./redact.ts";
-import { PRIORITY_LABELS } from "./priority.ts";
+import { ConfigError, effectiveSettings, formatValue, loadRepoConfig } from "./core/config.ts";
+import { redact } from "./core/redact.ts";
+import { PRIORITY_LABELS } from "./core/priority.ts";
 
 type Env = Record<string, string | undefined>;
 

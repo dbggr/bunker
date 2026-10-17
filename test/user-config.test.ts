@@ -2,7 +2,7 @@ import { afterEach, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readUserConfig, userConfigPath } from "../src/user-config.ts";
+import { readUserConfig, userConfigPath } from "../src/core/user-config.ts";
 
 setDefaultTimeout(60_000);
 

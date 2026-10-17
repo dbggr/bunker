@@ -3,7 +3,7 @@ import { $ } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { output } from "../src/output.ts";
+import { output } from "../src/core/output.ts";
 import { noSandbox, runAll, type Agent } from "../src/index.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts

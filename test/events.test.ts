@@ -4,7 +4,7 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeCode, noSandbox, review, type Agent, type BunkerEvent } from "../src/index.ts";
-import { createProgress, findStreamResult, hyperlink, parseClaudeStreamLine } from "../src/events.ts";
+import { createProgress, findStreamResult, hyperlink, parseClaudeStreamLine } from "../src/core/events.ts";
 import { runIssue } from "../src/issue.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
