@@ -175,7 +175,7 @@ export function createProgress({ write, tty, columns = 100 }: ProgressOptions): 
 
 /**
  * Whether a stream-json stdout ends in claude hitting the plan's usage limit, and when it resets (epoch ms) if it says.
- * Matches an error `result` whose subtype or message names the limit; ordinary results that merely mention one don't count.
+ * Matches an error `result` whose subtype or message names the limit; ordinary results that merely mention one, and transient rate-limit errors, don't count.
  */
 export function findUsageLimit(stdout: string): { resetAt?: number } | undefined {
   const lines = stdout.split("\n");
@@ -191,7 +191,7 @@ export function findUsageLimit(stdout: string): { resetAt?: number } | undefined
     if (j?.type !== "result") continue;
     const text = typeof j.result === "string" ? j.result : "";
     const kind = typeof j.subtype === "string" ? j.subtype : "";
-    const named = /usage[_ ]limit|rate[_ ]limit|limit reached/i;
+    const named = /usage[_ ]limit|(?<!rate[_ ])limit reached/i; // a bare "rate limit" (API 429) is transient, not the plan limit
     if (!(j.is_error === true && (named.test(text) || named.test(kind))) && !/usage_limit/i.test(kind)) return undefined;
     const field = j.resets_at ?? j.reset_at ?? j.resetsAt;
     let at: number | undefined;

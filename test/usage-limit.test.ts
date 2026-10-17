@@ -33,6 +33,12 @@ describe("claudeCode().usageLimit", () => {
     expect(agent.usageLimit?.(JSON.stringify({ type: "result", subtype: "error_usage_limit", is_error: true, result: "stop", resets_at: new Date(at).toISOString() }))).toEqual({ resetAt: at });
     expect(agent.usageLimit?.(JSON.stringify({ type: "result", is_error: true, result: "5-hour limit reached" }))).toEqual({});
   });
+  test("treats a transient API rate limit (429) as an ordinary error, not a usage-limit pause", () => {
+    for (const result of ["API Error: 429 rate_limit_error: Rate limit exceeded", "Rate limit reached, retry shortly", "rate limit"]) {
+      expect(agent.usageLimit?.(JSON.stringify({ type: "result", is_error: true, result }))).toBeUndefined();
+    }
+    expect(agent.usageLimit?.(JSON.stringify({ type: "result", subtype: "error_rate_limit", is_error: true, result: "429" }))).toBeUndefined();
+  });
   test("ignores ordinary results and errors", () => {
     expect(agent.usageLimit?.(JSON.stringify({ type: "result", result: "I fixed the usage limit bug" }))).toBeUndefined();
     expect(agent.usageLimit?.(JSON.stringify({ type: "result", is_error: true, result: "boom" }))).toBeUndefined();
