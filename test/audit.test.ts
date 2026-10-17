@@ -60,7 +60,9 @@ exit 1
   return { repo, createLog: join(root, "create.log") };
 }
 
-const block = (t: string) => `<issue title="${t}">Do ${t}.\n- [ ] done</issue>`;
+const issue = (t: string) => ({ title: t, body: `Do ${t}.\n- [ ] done` });
+const block = (t: string) => `<audit>${JSON.stringify({ issues: [issue(t)] })}</audit>`;
+const blocks = (...ts: string[]) => `<audit>${JSON.stringify({ issues: ts.map(issue) })}</audit>`;
 
 // Prints `output`, records the prompt/mode and its worktree, and makes a commit (which must not survive).
 function fakeAgent(output: string, seen: { prompt?: string; mode?: string; cwd?: string } = {}): Agent {
@@ -79,7 +81,7 @@ describe("runAudit()", () => {
     const pwdFile = join(repo, "..", "pwd");
     process.env.AUDIT_PWD = pwdFile;
     const seen: { prompt?: string; mode?: string } = {};
-    const out = ["noise", block("existing THING"), block("A"), block("B"), block("C")].join("\n");
+    const out = `noise <issue title="Quoted">example</issue>\n${blocks("existing THING", "A", "B", "C")}`;
     const r = await runAudit({ cwd: repo, agent: fakeAgent(out, seen), sandbox: noSandbox(), maxIssues: 2, focus: "error handling" });
     expect(r.filed).toEqual([
       { number: 101, title: "A" },
@@ -120,8 +122,49 @@ describe("runAudit()", () => {
   test("default cap is 5", async () => {
     const { repo } = await setup();
     process.env.AUDIT_PWD = join(repo, "..", "pwd");
-    const out = "ABCDEFG".split("").map(block).join("\n");
+    const out = blocks(..."ABCDEFG".split(""));
     const r = await runAudit({ cwd: repo, agent: fakeAgent(out), sandbox: noSandbox() });
     expect(r.filed).toHaveLength(5);
+  });
+
+  test("quoted <issue> blocks and earlier <audit> examples are never filed", async () => {
+    const { repo, createLog } = await setup();
+    process.env.AUDIT_PWD = join(repo, "..", "pwd");
+    const out = `e.g. <issue title="X">y</issue> or ${block("Quoted")}\n${block("Real")}`;
+    const r = await runAudit({ cwd: repo, agent: fakeAgent(out), sandbox: noSandbox() });
+    expect(r.filed.map((f) => f.title)).toEqual(["Real"]);
+    expect(await Bun.file(createLog).text()).not.toContain("Quoted");
+  });
+
+  test("re-asks after invalid output, then files", async () => {
+    const { repo } = await setup();
+    process.env.AUDIT_PWD = join(repo, "..", "pwd");
+    const prompts: string[] = [];
+    const agent: Agent = {
+      command(prompt) {
+        prompts.push(prompt);
+        const out = prompts.length === 1 ? "<audit>not json</audit>" : block("A");
+        return ["sh", "-c", `cat <<'EOF'\n${out}\nEOF`];
+      },
+    };
+    const r = await runAudit({ cwd: repo, agent, sandbox: noSandbox() });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("invalid JSON");
+    expect(r.filed.map((f) => f.title)).toEqual(["A"]);
+  });
+
+  test("throws and files nothing when output stays invalid after the retries", async () => {
+    const { repo, createLog } = await setup();
+    process.env.AUDIT_PWD = join(repo, "..", "pwd");
+    let calls = 0;
+    const agent: Agent = {
+      command() {
+        calls++;
+        return ["sh", "-c", "echo no block here"];
+      },
+    };
+    await expect(runAudit({ cwd: repo, agent, sandbox: noSandbox(), maxRetries: 1 })).rejects.toThrow(/bad output after 1 retr/);
+    expect(calls).toBe(2);
+    expect(existsSync(createLog)).toBe(false);
   });
 });

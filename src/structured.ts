@@ -97,3 +97,17 @@ export const verdictSchema: Schema<Verdict> = {
 
 export const verdictOutput = Output.object({ tag: "verdict", schema: verdictSchema });
 export const reportOutput = Output.object({ tag: "report", schema: reportSchema });
+
+export interface Audit {
+  issues: FollowUp[];
+}
+
+export const auditSchema: Schema<Audit> = {
+  parse(v) {
+    if (!isObj(v)) throw new Error("expected a JSON object");
+    if (!Array.isArray(v.issues)) throw new Error('"issues" must be an array of {"title","body"}');
+    return { issues: followUps(v.issues, "issues") };
+  },
+};
+
+export const auditOutput = Output.object({ tag: "audit", schema: auditSchema });

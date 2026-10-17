@@ -1,8 +1,8 @@
 import { $ } from "bun";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runSetup, type Agent, type Sandbox, type Usage } from "./index.ts";
-import { parseIssueBlocks } from "./issue.ts";
+import { runSetup, sumUsage, type Agent, type Sandbox, type Usage } from "./index.ts";
+import { auditOutput, extractOutput } from "./structured.ts";
 
 export interface AuditOptions {
   agent: Agent;
@@ -15,6 +15,8 @@ export interface AuditOptions {
   focus?: string;
   /** Shell command run in the worktree, inside `sandbox`, before the agent. Defaults to the repo's `.bunker/setup` script if present. */
   setup?: string;
+  /** Times to re-ask the agent for a missing or invalid `<audit>` block. Defaults to 2. */
+  maxRetries?: number;
 }
 
 export interface AuditResult {
@@ -28,23 +30,26 @@ export interface AuditResult {
 
 const norm = (t: string) => t.trim().replace(/\s+/g, " ").toLowerCase();
 
+const AUDIT_FORMAT =
+  'End your answer with <audit>{"issues": [{"title": "short title", "body": "body with acceptance criteria as a checklist"}]}</audit>: ' +
+  "valid JSON (escape quotes and newlines in strings), with an empty array if there is nothing to report. Only the last <audit> in your answer counts.";
+
 export function auditPrompt(maxIssues: number, focus?: string): string {
   return (
     "Audit this repository. Read the code, tests and docs, and find the most valuable concrete improvements: " +
     "bugs, missing tests, gaps against the docs, risky behaviour, or missing features. Do not change any files or commit.\n\n" +
     (focus ? `Focus on: ${focus}\n\n` : "") +
-    `Report at most ${maxIssues} improvements, most valuable first, each as ` +
-    '<issue title="short title">body with acceptance criteria as a checklist</issue>. ' +
-    "Each must be specific and actionable on its own. Print nothing else that looks like an issue block."
+    `Report at most ${maxIssues} improvements, most valuable first. ${AUDIT_FORMAT} ` +
+    "Each must be specific and actionable on its own."
   );
 }
 
 /**
  * One read-only agent over a fresh worktree of origin's default branch; whatever
- * `<issue>` blocks it prints are filed as `discovered` (never `bunker`), minus
+ * issues in its final `<audit>` JSON block (re-asked when invalid) are filed as `discovered` (never `bunker`), minus
  * titles that match an open issue. The worktree is always removed.
  */
-export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, focus, setup }: AuditOptions): Promise<AuditResult> {
+export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, focus, setup, maxRetries = 2 }: AuditOptions): Promise<AuditResult> {
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
   const gitCfg = token ? ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"] : [];
@@ -70,24 +75,36 @@ export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues 
   const add = await $`git -C ${repo} worktree add -q --detach ${worktree} FETCH_HEAD`.nothrow().quiet();
   if (add.exitCode !== 0) throw new Error(`could not create worktree:\n${add.stderr}`);
 
-  let output: string;
+  let issues: { title: string; body: string }[];
   let usage: Usage | undefined;
   try {
     const ctx = { worktree, gitCommonDir };
     const prep = await runSetup(sandbox, ctx, setup);
     if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${prep.stdout.slice(-2000)}`);
-    const res = await sandbox.exec(agent.command(auditPrompt(maxIssues, focus), "review"), ctx);
-    if (res.code !== 0) throw new Error(`agent exited with ${res.code}`);
-    const parsed = agent.parse?.(res.stdout);
-    output = parsed?.text ?? res.stdout;
-    usage = parsed?.usage;
+    const base = auditPrompt(maxIssues, focus);
+    const usages: (Usage | undefined)[] = [];
+    let prompt = base;
+    for (let k = 0; ; k++) {
+      const res = await sandbox.exec(agent.command(prompt, "review"), ctx);
+      if (res.code !== 0) throw new Error(`agent exited with ${res.code}`);
+      const parsed = agent.parse?.(res.stdout);
+      usages.push(parsed?.usage);
+      const found = extractOutput(parsed?.text ?? res.stdout, auditOutput);
+      if (found.ok) {
+        issues = found.value.issues;
+        break;
+      }
+      if (k >= maxRetries) throw new Error(`audit agent gave bad output after ${maxRetries} retries: ${found.error}`);
+      prompt = `${base}\n\nYour previous answer had no usable audit (${found.error}). Answer again. ${AUDIT_FORMAT}`;
+    }
+    usage = sumUsage(usages);
   } finally {
     await $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet();
   }
 
   const result: AuditResult = { filed: [], skipped: [], ...(usage ? { usage } : {}) };
   const fresh: { title: string; body: string }[] = [];
-  for (const b of parseIssueBlocks(output)) {
+  for (const b of issues) {
     if (existing.has(norm(b.title))) result.skipped.push(b.title);
     else fresh.push(b);
   }
