@@ -94,3 +94,14 @@ describe("doctor", () => {
     expect(failed(r.checks)).not.toContain("required-check");
   });
 });
+
+describe("labeler check", () => {
+  test("passes when the token can read collaborator permissions, fails when it can't", async () => {
+    const ok = await fakeWorld();
+    expect((await runDoctor({ cwd: ok.repo, env: ok.env })).checks.find((c) => c.id === "labeler-check")?.ok).toBe(true);
+    const bad = await fakeWorld({ files: { "permission.json": "" } });
+    const r = await runDoctor({ cwd: bad.repo, env: bad.env });
+    expect(r.checks.find((c) => c.id === "labeler-check")?.ok).toBe(false);
+    expect(r.code).toBe(1);
+  });
+});

@@ -29,7 +29,7 @@ Public repos let anyone write an issue or a comment, and the issue text becomes 
 
 - The issue body is fenced and flagged as untrusted unless its author is the repo owner, a member or a collaborator. If the author association can't be fetched, bunker treats it as untrusted.
 - Only comments from owners, members and collaborators are included in the prompt. Others are dropped.
-- The `bunker` label is the trust gate. Only people with triage rights can add it, so only apply it to issues you've read. `discovered` issues are never queued until you relabel them.
+- The `bunker` label is the trust gate. bunker also checks who added it (latest `labeled` event): only repo admins and maintainers count, plus anyone named by `--allow-labeler <login>` or `allow-labelers = ["login"]` in `~/.config/bunker/config.toml`. Otherwise the issue is skipped, the label removed and a comment left; if the permission lookup fails the issue is skipped (fail closed). Still only apply the label to issues you have read. `discovered` issues are never queued until you relabel them.
 
 ## Live view
 

@@ -60,6 +60,7 @@ async function setup(issues: [number, string, string][], mergeMode: "ff" | "none
   await Bun.write(
     join(bin, "gh"),
     `#!/bin/sh
+if [ "$1" = "api" ]; then case "$*" in *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
 if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker-blocked"; then
   if [ -f "${root}/blocked-list.json" ]; then cat "${root}/blocked-list.json"; else echo '[]'; fi
   exit 0
@@ -568,5 +569,44 @@ describe("agent-filed issues", () => {
     expect(first).toContain("bug");
     expect(second).not.toContain("bug");
     expect(first).toContain("discovered");
+  });
+});
+
+describe("runQueue() label-adder check", () => {
+  const ghWith = async (env: Env, adderRole: string | null) => {
+    const bin = join(env.repo, "..", "bin");
+    const orig = await Bun.file(join(bin, "gh")).text();
+    const gate = adderRole === null ? 'echo "HTTP 403" >&2; exit 1' : `echo ${adderRole}; exit 0`;
+    await Bun.write(join(bin, "gh"), orig.replace(/^if \[ "\$1" = "api" \].*$/m, `if [ "$1" = "api" ]; then case "$*" in *"/events"*) echo tess; exit 0;; *"/permission"*) ${gate};; esac; fi`));
+  };
+  const run = (env: Env, allowLabelers?: string[]) =>
+    runQueue({ agent: fakeAgent(), sandbox: noSandbox(), cwd: env.repo, listRetryMs: 0, ...(allowLabelers ? { allowLabelers } : {}) });
+
+  test("a label added by a write user is skipped, removed, and commented on", async () => {
+    const env = await setup([[1, "T", "2024-01-01T00:00:00Z"]]);
+    await ghWith(env, "write");
+    expect(await run(env)).toEqual([]);
+    const edits = await Bun.file(join(env.repo, "..", "edits.log")).text();
+    expect(edits).toContain("issue edit 1 --remove-label bunker");
+    expect(edits).toContain("issue comment 1 --body @tess only maintainers can queue bunker work");
+  });
+
+  test("a failed permission lookup skips without touching the issue", async () => {
+    const env = await setup([[1, "T", "2024-01-01T00:00:00Z"]]);
+    await ghWith(env, null);
+    expect(await run(env)).toEqual([]);
+    expect(await Bun.file(join(env.repo, "..", "edits.log")).text()).not.toContain("issue edit");
+  });
+
+  test("allowLabelers lets the adder through", async () => {
+    const env = await setup([[1, "T", "2024-01-01T00:00:00Z"]]);
+    await ghWith(env, "write");
+    expect((await run(env, ["tess"])).map((e) => e.issue)).toEqual([1]);
+  });
+
+  test("a maintainer's label runs", async () => {
+    const env = await setup([[1, "T", "2024-01-01T00:00:00Z"]]);
+    await ghWith(env, "maintain");
+    expect((await run(env)).map((e) => e.issue)).toEqual([1]);
   });
 });

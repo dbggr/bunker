@@ -59,6 +59,7 @@ async function setup(numbers: number[]) {
   await Bun.write(
     join(bin, "gh"),
     `#!/bin/sh
+if [ "$1" = "api" ]; then case "$*" in *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
 if [ "$1 $2" = "issue list" ]; then
   if echo "$*" | grep -q -- "--label bunker-blocked"; then echo '[]'; else cat "${root}/list.json"; fi
   exit 0
