@@ -7,6 +7,7 @@ import { formatChecks, runDoctor } from "./doctor.ts";
 import { runInit, terminalIo } from "./init.ts";
 import { runAudit } from "./audit.ts";
 import { runIssue, runQueue } from "./issue.ts";
+import { loadSpendCaps } from "./spend.ts";
 import { configAllowedLabelers, enforceLabeler } from "./labeler.ts";
 import { parseDuration, runWatch } from "./watch.ts";
 import { existsSync } from "node:fs";
@@ -119,7 +120,7 @@ if (positionals.length === 1 && positionals[0] === "ui") {
 
 const prompt = positionals.join(" ");
 const tasks = values.task ?? [];
-let watchOpts: { intervalMs: number; maxCostUsd: number; forMs?: number; auditEveryDays?: number } | undefined;
+let watchOpts: { intervalMs: number; maxCostDayUsd?: number; maxCostMonthUsd?: number; forMs?: number; auditEveryDays?: number } | undefined;
 if (values.watch) {
   if (prompt || tasks.length || values.review || values.issue !== undefined || values.queue || values.audit || values.limit !== undefined) {
     console.error("bunker: --watch can't be combined with a prompt, --task, --review, --issue, --queue, --audit or --limit");
@@ -130,10 +131,21 @@ if (values.watch) {
     console.error("bunker: --interval must be a positive number of minutes");
     process.exit(2);
   }
-  const maxCostUsd = values["max-cost"] === undefined ? 20 : Number(values["max-cost"]);
-  if (!(maxCostUsd > 0) || !Number.isFinite(maxCostUsd)) {
-    console.error("bunker: --max-cost must be a positive number of US dollars");
+  if (values["max-cost"] !== undefined && values["max-cost-day"] !== undefined) {
+    console.error("bunker: --max-cost is an alias of --max-cost-day; pass only one");
     process.exit(2);
+  }
+  const capArgs = { day: values["max-cost-day"] ?? values["max-cost"], month: values["max-cost-month"] };
+  const fileCaps = await loadSpendCaps().catch((e) => (console.error(`bunker: ${e instanceof Error ? e.message : e}`), process.exit(2)));
+  const caps: { day?: number; month?: number } = { ...fileCaps };
+  for (const [k, flag] of [["day", values["max-cost-day"] === undefined ? "--max-cost" : "--max-cost-day"], ["month", "--max-cost-month"]] as const) {
+    if (capArgs[k] === undefined) continue;
+    const n = Number(capArgs[k]);
+    if (!(n > 0) || !Number.isFinite(n)) {
+      console.error(`bunker: ${flag} must be a positive number of US dollars`);
+      process.exit(2);
+    }
+    caps[k] = n;
   }
   let auditEveryDays: number | undefined;
   if (values["audit-every"] !== undefined) {
@@ -155,11 +167,11 @@ if (values.watch) {
     console.error("bunker: --watch needs a verify command: pass --verify \"<cmd>\" or add a .bunker/verify file");
     process.exit(2);
   }
-  watchOpts = { intervalMs: intervalMin * 60_000, maxCostUsd, ...(forMs === undefined ? {} : { forMs }), ...(auditEveryDays === undefined ? {} : { auditEveryDays }) };
+  watchOpts = { intervalMs: intervalMin * 60_000, ...(caps.day === undefined ? {} : { maxCostDayUsd: caps.day }), ...(caps.month === undefined ? {} : { maxCostMonthUsd: caps.month }), ...(forMs === undefined ? {} : { forMs }), ...(auditEveryDays === undefined ? {} : { auditEveryDays }) };
   values.queue = true;
   values.merge = true;
-} else if (values.interval !== undefined || values.for !== undefined || values["max-cost"] !== undefined || values["audit-every"] !== undefined) {
-  console.error("bunker: --interval, --for, --max-cost and --audit-every only apply to --watch");
+} else if (values.interval !== undefined || values.for !== undefined || values["max-cost"] !== undefined || values["max-cost-day"] !== undefined || values["max-cost-month"] !== undefined || values["audit-every"] !== undefined) {
+  console.error("bunker: --interval, --for, --max-cost, --max-cost-day, --max-cost-month and --audit-every only apply to --watch");
   process.exit(2);
 }
 if (values.audit) {
@@ -207,7 +219,7 @@ if (!values.audit && values.issue === undefined && !values.queue && !prompt === 
       '       bunker --review "<prompt>" [--max-rounds <n>] [--reviewer-model <id>]   (implement → review → fix)\n' +
       '       bunker --issue <n> [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--max-rounds <n>] [--reviewer-model <id>]   (issue → reviewed PR)\n' +
       '       bunker --queue [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--limit <n>] [--parallel <n>]   (work the `bunker` label queue)\n' +
-      '       bunker --watch [--interval <min>] [--for <duration>] [--max-cost <usd>] [--parallel <n>] [--verify "<cmd>"]   (work the queue unattended, auto-merging)\n' +
+      '       bunker --watch [--interval <min>] [--for <duration>] [--max-cost-day <usd>] [--max-cost-month <usd>] [--parallel <n>] [--verify "<cmd>"]   (work the queue unattended, auto-merging)\n' +
       '       bunker --audit [--max-issues <n>] [--focus "<text>"] [--setup "<cmd>"]   (file improvement ideas as `discovered` issues)\n' +
       '       bunker --task "<prompt>" --task "<prompt>" ...   (parallel, one worktree each)\n' +
       "run bunker --help for all options",

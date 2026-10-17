@@ -75,7 +75,10 @@ Single prompt and --task:
   --watch                    loop: work the queue, sleep, repeat until Ctrl-C; needs --verify or .bunker/verify
   --interval <min>           minutes to sleep when no work is waiting (default 10)
   --for <duration>           stop starting new issues after this long, e.g. 5h, 90m, 2h30m (default: until Ctrl-C)
-  --max-cost <usd>           spend cap per rolling 24 h, kept in .bunker/watch-spend.json (default 20)
+  --max-cost-day <usd>       stop starting issues once this much (notional USD, as \`claude -p\` reports it) was spent in a rolling 24 h,
+                             then sleep until the window frees up; kept in .bunker/watch-spend.json (default: no cap).
+                             Also max-cost-day in ~/.config/bunker/config.toml. \`--max-cost\` is an alias
+  --max-cost-month <usd>     same for a rolling 30 days (default: no cap; config.toml: max-cost-month)
   --audit-every <days>       also run --audit at most once per this many days, kept in .bunker/watch-state.json (default off; 30 is a good value)
   Failed issues get \`bunker-failed\` instead of \`bunker\` and are never retried automatically.
 
@@ -125,7 +128,7 @@ Examples:
   bunker --review "add a greet() helper" --max-rounds 3
   bunker --issue 12 --verify "bun test"
   bunker --queue --verify "bun test && bun run typecheck" --merge
-  bunker --watch --for 5h --max-cost 10
+  bunker --watch --for 5h --max-cost-day 10
   bunker ui
   bunker --audit --focus "error handling"
 `;

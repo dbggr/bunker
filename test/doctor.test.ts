@@ -105,3 +105,13 @@ describe("labeler check", () => {
     expect(r.code).toBe(1);
   });
 });
+
+describe("doctor spend", () => {
+  test("shows spend so far against the configured caps", async () => {
+    const w = await fakeWorld();
+    await Bun.write(join(w.repo, ".bunker", "watch-spend.json"), JSON.stringify([{ at: Date.now() - 1000, usd: 4 }]));
+    const r = await runDoctor({ cwd: w.repo, env: w.env });
+    expect(formatChecks(r.checks)).toContain("$4.00 today (no cap) · $4.00 this month (no cap)");
+    expect(r.code).toBe(0);
+  });
+});

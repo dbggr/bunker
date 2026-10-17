@@ -67,7 +67,7 @@ bunker --queue --merge
 Or leave it running unattended:
 
 ```sh
-bunker --watch --for 5h --max-cost 10
+bunker --watch --for 5h --max-cost-day 10
 ```
 
 `--watch` implies `--queue --merge`, so it needs `.bunker/verify`. Watch the run with `bunker ui`. Every flag is in [cli.md](cli.md); if something goes wrong see [troubleshooting.md](troubleshooting.md).
