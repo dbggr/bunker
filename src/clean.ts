@@ -11,13 +11,13 @@ export interface CleanOptions {
   cwd: string;
   /** Really remove; without it nothing is changed and the plan is printed. */
   yes?: boolean;
-  /** Also remove `.bunker/runs/*.log` older than this many days. */
+  /** Also remove `.bunker/runs/*.log` older than this many days (not those of a running or paused issue). */
   logsDays?: number;
   /** Also remove `bunker-repo-*` docker images no running container uses. */
   images?: boolean;
   /** Go ahead although a `--watch` lock is held by a live process. */
   force?: boolean;
-  /** Start-up cleanup: worktrees and branches only, quiet, and a no-op rather than an error when it can't run. */
+  /** Start-up cleanup: worktrees, branches, old logs and closed issues' sessions only, quiet, and a no-op rather than an error when it can't run. */
   auto?: boolean;
   log?: (line: string) => void;
 }
@@ -182,7 +182,10 @@ export async function runClean(o: CleanOptions): Promise<CleanResult> {
   const pausedPaths = new Set<string>();
   const pausedBranches = new Set<string>();
   const pausedDir = join(repo, ".bunker", "paused");
+  /** Issues whose logs and sessions must stay: paused, or with a worktree a process is using. */
+  const busyIssues = new Set<string>();
   for (const f of existsSync(pausedDir) ? readdirSync(pausedDir).filter((f) => f.endsWith(".json")) : []) {
+    busyIssues.add(f.slice(0, -5));
     try {
       const saved = JSON.parse(readFileSync(join(pausedDir, f), "utf8")) as { worktree?: string; branch?: string };
       if (saved.worktree) pausedPaths.add(existsSync(saved.worktree) ? realpathSync(saved.worktree) : saved.worktree);
@@ -208,6 +211,7 @@ export async function runClean(o: CleanOptions): Promise<CleanResult> {
     const isRun = dirname(p) === tmpRoot && /^bunker-[0-9a-f]{8}$/.test(name);
     const isIssue = dirname(p) === issueRoot && /^\d+-/.test(name);
     if ((isRun || isIssue) && inUse(p)) {
+      if (isIssue) busyIssues.add(name.split("-")[0]!);
       if (!o.auto) note(`skipping worktree ${p}: in use by a running process`);
       continue;
     }
@@ -251,18 +255,27 @@ export async function runClean(o: CleanOptions): Promise<CleanResult> {
   }
   if (o.yes) await worktreeAdmin(repo, () => $`git -C ${repo} worktree prune`.nothrow().quiet());
 
-  if (!o.auto) {
-    if (o.logsDays !== undefined) {
-      const dir = join(repo, ".bunker", "runs");
-      const cutoff = Date.now() - o.logsDays * 86_400_000;
-      for (const f of existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".log")) : []) {
-        const file = join(dir, f);
-        if (statSync(file).mtimeMs >= cutoff) continue;
-        note(`${verb}remove log ${file} (older than ${o.logsDays} day(s))`);
-        acted = true;
-        if (o.yes) rmSync(file, { force: true });
-      }
+  if (o.logsDays !== undefined) {
+    const dir = join(repo, ".bunker", "runs");
+    const cutoff = Date.now() - o.logsDays * 86_400_000;
+    for (const f of existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".log")) : []) {
+      const file = join(dir, f);
+      if (busyIssues.has(f.split("-")[0]!) || statSync(file).mtimeMs >= cutoff) continue;
+      if (!o.auto) note(`${verb}remove log ${file} (older than ${o.logsDays} day(s))`);
+      acted = true;
+      if (o.yes) rmSync(file, { force: true });
     }
+  }
+  // Sessions only matter while their issue is open; a failed lookup keeps the folder.
+  const sessionsDir = join(repo, ".bunker", "sessions");
+  for (const n of existsSync(sessionsDir) ? readdirSync(sessionsDir).filter((d) => /^\d+$/.test(d)) : []) {
+    if (busyIssues.has(n) || !(await issueClosed(n))) continue;
+    if (!o.auto) note(`${verb}remove ${join(sessionsDir, n)} (issue #${n} is closed)`);
+    acted = true;
+    if (o.yes) rmSync(join(sessionsDir, n), { recursive: true, force: true });
+  }
+
+  if (!o.auto) {
     if (o.images) {
       const lines = async (...a: string[]) => {
         const r = await $`docker ${a}`.nothrow().quiet();

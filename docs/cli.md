@@ -122,7 +122,7 @@ clean:
                              Anything with commits not on origin/<default>, or uncommitted changes, is first kept as the tag
                              bunker/stale/<name>-<timestamp> (printed). Only bunker's own names are touched. Ends with git worktree prune
   --yes                      (clean) really remove
-  --logs <days>              (clean) also remove .bunker/runs/*.log older than this (default: keep all)
+  --logs <days>              (clean) also remove .bunker/runs/*.log older than this (default: clean.logs_days from config, else keep all)
   --images                   (clean) also remove bunker-repo-* docker images no running container uses (bunker-claude is kept)
   --force                    (clean) go ahead although a --watch lock for this repo is held by a live process (otherwise exit 2)
   --issue, --queue and --watch run the same worktree and branch cleanup at start-up, and Ctrl-C/SIGTERM removes the
@@ -147,6 +147,7 @@ Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a sep
   watch.max_cost_month   USD cap per rolling 30 days for --watch
   watch.audit_every      days between periodic --audit runs in --watch
   merge.ci_timeout       minutes --merge waits for CI (default 30)
+  clean.logs_days        days to keep .bunker/runs logs; --watch / --queue start-up and `bunker clean` prune older ones (default 30)
   notify.enabled         desktop notifications from --watch (notify-send / osascript) (default true)
   notify.github_user     login @-mentioned when an issue becomes bunker-failed / bunker-blocked (default: the repo owner, if a user)
 

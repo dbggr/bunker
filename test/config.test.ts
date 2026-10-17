@@ -45,12 +45,13 @@ describe("parseConfig", () => {
       models: { implementer: "m-impl", reviewer: "m-rev", auditor: "m-aud", default: "m-def" },
       watch: { interval: 5, parallel: 3, max_cost_day: 10, max_cost_month: 100.5, audit_every: 30 },
       merge: { ci_timeout: 45 },
+      clean: {},
       notify: { enabled: false, github_user: "carol" },
     });
   });
 
   test("empty file is an empty config", () => {
-    expect(parseConfig("").config).toEqual({ models: {}, watch: {}, merge: {}, notify: {} });
+    expect(parseConfig("").config).toEqual({ models: {}, watch: {}, merge: {}, notify: {}, clean: {} });
   });
 
   test("unknown keys warn, naming the key", () => {
@@ -211,4 +212,9 @@ describe("config.toml notify table", () => {
   test("an empty config has an empty notify table", () => {
     expect(parseConfig("").config.notify).toEqual({});
   });
+});
+
+test("clean.logs_days is parsed and validated", () => {
+  expect(parseConfig("[clean]\nlogs_days = 7").config.clean.logs_days).toBe(7);
+  expect(() => parseConfig('[clean]\nlogs_days = "x"')).toThrow();
 });
