@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { parseArgs } from "node:util";
+import { FlagError, resolveCiTimeout, resolveParallel, resolveWatchSettings } from "./settings.ts";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
 import { $ } from "bun";
 import { AgentFailure, UsageLimit, claudeCode, formatDuration, formatUsage, docker, noSandbox, review, run, runAll, worktreeAdmin } from "./index.ts";
@@ -168,6 +169,15 @@ if (positionals.length === 1 && positionals[0] === "ui") {
   await new Promise(() => {});
 }
 
+const guardFlags = <T>(f: () => T): T => {
+  try {
+    return f();
+  } catch (e) {
+    if (!(e instanceof FlagError)) throw e;
+    console.error(`bunker: ${e.message}`);
+    process.exit(2);
+  }
+};
 const { config: repoCfg, legacy: legacyCfg } = await loadRepoConfigOrExit(process.cwd());
 const prompt = positionals.join(" ");
 const tasks = values.task ?? [];
@@ -177,35 +187,12 @@ if (values.watch) {
     console.error("bunker: --watch can't be combined with a prompt, --task, --review, --issue, --queue, --audit or --limit");
     process.exit(2);
   }
-  const intervalMin = values.interval === undefined ? repoCfg.watch.interval ?? 10 : Number(values.interval);
-  if (!(intervalMin > 0) || !Number.isFinite(intervalMin)) {
-    console.error("bunker: --interval must be a positive number of minutes");
-    process.exit(2);
-  }
   if (values["max-cost"] !== undefined && values["max-cost-day"] !== undefined) {
     console.error("bunker: --max-cost is an alias of --max-cost-day; pass only one");
     process.exit(2);
   }
-  const capArgs = { day: values["max-cost-day"] ?? values["max-cost"], month: values["max-cost-month"] };
   const fileCaps = await loadSpendCaps().catch((e) => (console.error(`bunker: ${e instanceof Error ? e.message : e}`), process.exit(2)));
-  const caps: { day?: number; month?: number } = { ...(repoCfg.watch.max_cost_day === undefined ? {} : { day: repoCfg.watch.max_cost_day }), ...(repoCfg.watch.max_cost_month === undefined ? {} : { month: repoCfg.watch.max_cost_month }), ...fileCaps };
-  for (const [k, flag] of [["day", values["max-cost-day"] === undefined ? "--max-cost" : "--max-cost-day"], ["month", "--max-cost-month"]] as const) {
-    if (capArgs[k] === undefined) continue;
-    const n = Number(capArgs[k]);
-    if (!(n > 0) || !Number.isFinite(n)) {
-      console.error(`bunker: ${flag} must be a positive number of US dollars`);
-      process.exit(2);
-    }
-    caps[k] = n;
-  }
-  let auditEveryDays: number | undefined = repoCfg.watch.audit_every;
-  if (values["audit-every"] !== undefined) {
-    auditEveryDays = Number(values["audit-every"]);
-    if (!(auditEveryDays > 0) || !Number.isFinite(auditEveryDays)) {
-      console.error("bunker: --audit-every must be a positive number of days");
-      process.exit(2);
-    }
-  }
+  const { intervalMin, caps, auditEveryDays } = guardFlags(() => resolveWatchSettings(values, repoCfg.watch, fileCaps));
   let forMs: number | undefined;
   if (values.for !== undefined) {
     forMs = parseDuration(values.for);
@@ -319,22 +306,7 @@ if (!Number.isInteger(limit) || limit < 1) {
   process.exit(2);
 }
 
-let parallel = values.watch ? repoCfg.watch.parallel ?? 1 : 1;
-if (values.parallel !== undefined) {
-  parallel = Number(values.parallel);
-  if (!Number.isInteger(parallel) || parallel < 1) {
-    console.error("bunker: --parallel must be a positive integer");
-    process.exit(2);
-  }
-  if (!values.queue) {
-    console.error("bunker: --parallel only applies to --queue and --watch");
-    process.exit(2);
-  }
-  if (parallel > 1 && !values.merge) {
-    console.error("bunker: --parallel above 1 needs --merge (--watch always merges)");
-    process.exit(2);
-  }
-}
+const parallel = guardFlags(() => resolveParallel(values, repoCfg.watch));
 
 await loadBunkerEnv(process.cwd());
 if (!values["no-sandbox"] && !hasAuth()) {
@@ -343,14 +315,7 @@ if (!values["no-sandbox"] && !hasAuth()) {
   process.exit(2);
 }
 
-let ciTimeoutMin: number | undefined = values.merge ? repoCfg.merge.ci_timeout : undefined;
-if (values["ci-timeout"] !== undefined) {
-  ciTimeoutMin = Number(values["ci-timeout"]);
-  if (!(ciTimeoutMin > 0) || !values.merge) {
-    console.error("bunker: --ci-timeout must be a positive number of minutes and requires --merge");
-    process.exit(2);
-  }
-}
+const ciTimeoutMin = guardFlags(() => resolveCiTimeout(values, repoCfg.merge));
 
 const timeouts: { idleTimeoutMs?: number; completionTimeoutMs?: number; stepTimeoutMs?: number } = {};
 for (const [flag, key, unit, ms] of [
