@@ -11,6 +11,7 @@ setDefaultTimeout(60_000);
 beforeEach(() => {
   output.verbose = false;
   output.write = () => true;
+  output.warn = () => {};
 });
 
 // Git's detached auto-maintenance (after commit, fetch, ...) is orphaned when the test exits; on a host whose PID 1

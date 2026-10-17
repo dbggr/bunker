@@ -2,6 +2,8 @@
 export const output = {
   verbose: ["1", "true"].includes(process.env.BUNKER_VERBOSE ?? ""),
   write: (s: string): unknown => process.stdout.write(s),
+  /** Where bunker's own warnings and progress notes go (stderr by default). Tests silence or capture it. */
+  warn: (line: string): unknown => console.error(line),
 };
 
 /** The last `n` lines of `text`. */

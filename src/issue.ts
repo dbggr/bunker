@@ -9,7 +9,7 @@ import { redact } from "./redact.ts";
 import { parseConfig } from "./config.ts";
 import { copyIntoWorktree, copyPatterns } from "./copy.ts";
 import { emit } from "./events.ts";
-import { tailLines, testCounts } from "./output.ts";
+import { output, tailLines, testCounts } from "./output.ts";
 import { hyperlink } from "./events.ts";
 import { modelLabel } from "./models.ts";
 import { AgentFailure, type Pause, emitStage, review, runSetup, stepLimits, timeoutMessage, worktreeAdmin, type Timeouts, type Agent, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
@@ -221,7 +221,7 @@ type Env = Record<string, string>;
 async function markBlocked(issue: number, blocker: { number: number; title: string }, cwd: string, env: Env): Promise<void> {
   await $`gh label create ${BLOCKED_LABEL} --description ${"waiting on another issue; bunker relabels it `bunker` once that is closed"} --color FBCA04`.cwd(cwd).env(env).nothrow().quiet();
   const edit = await $`gh issue edit ${issue} --remove-label bunker --add-label ${BLOCKED_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
-  if (edit.exitCode !== 0) console.warn(`bunker: could not relabel #${issue}: ${edit.stderr.toString().trim()}`);
+  if (edit.exitCode !== 0) output.warn(`bunker: could not relabel #${issue}: ${edit.stderr.toString().trim()}`);
   await $`gh issue comment ${issue} --body ${`Blocked by #${blocker.number}: ${blocker.title}`}`.cwd(cwd).env(env).nothrow().quiet();
 }
 
@@ -798,7 +798,7 @@ async function listQueued(cwd: string, env: Env): Promise<Queued[]> {
   const list = await $`gh issue list --label bunker --state open --limit 1000 --json number,title,createdAt,labels`.cwd(cwd).env(env).nothrow().quiet();
   // A transient failure of one list must not abort the queue; the other list may still succeed.
   if (list.exitCode !== 0) {
-    console.warn(`bunker: gh issue list failed:\n${list.stderr}`);
+    output.warn(`bunker: gh issue list failed:\n${list.stderr}`);
     return [];
   }
   try {
@@ -806,7 +806,7 @@ async function listQueued(cwd: string, env: Env): Promise<Queued[]> {
     if (!Array.isArray(parsed)) throw new Error("not an array");
     return parsed.filter((i): i is Queued => i !== null && typeof i === "object" && typeof i.number === "number" && typeof i.title === "string" && typeof i.createdAt === "string").map((i) => ({ ...i, labels: Array.isArray(i.labels) ? i.labels.filter((l) => l !== null && typeof l === "object" && typeof l.name === "string") : [] }));
   } catch {
-    console.warn("bunker: gh issue list returned unparseable output");
+    output.warn("bunker: gh issue list returned unparseable output");
     return [];
   }
 }
@@ -938,7 +938,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       let result = await attempt(1);
       let priorCostUsd = 0;
       if (result.stale) {
-        console.log(`bunker: #${q.number} ${result.status} after updating to the latest main; trying once more from the new base`);
+        output.warn(`bunker: #${q.number} ${result.status} after updating to the latest main; trying once more from the new base`);
         priorCostUsd = cost(result);
         result = await attempt(2);
       }
@@ -973,7 +973,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
     const view = await $`gh issue view ${q.number} --json state,labels,body,comments`.cwd(cwd).env(env).nothrow().quiet();
     if (view.exitCode !== 0) {
       // A transient API error on one candidate must not discard the results already collected.
-      console.warn(`bunker: skipping #${q.number}, gh issue view failed:\n${view.stderr}`);
+      output.warn(`bunker: skipping #${q.number}, gh issue view failed:\n${view.stderr}`);
       continue;
     }
     let live: Pick<IssueInfo, "state" | "labels" | "body" | "comments">;
@@ -981,7 +981,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       live = JSON.parse(view.stdout.toString());
       if (live === null || typeof live !== "object" || !isLiveShape(live)) throw new Error("unexpected shape");
     } catch {
-      console.warn(`bunker: skipping #${q.number}, gh issue view returned unparseable output`);
+      output.warn(`bunker: skipping #${q.number}, gh issue view returned unparseable output`);
       continue;
     }
     if (live.state !== "OPEN" || !live.labels.some((l) => l.name === "bunker")) continue;
@@ -993,7 +993,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       }
     }
     if (waiting !== undefined) {
-      console.log(`bunker: #${q.number} waiting on #${waiting}`);
+      output.warn(`bunker: #${q.number} waiting on #${waiting}`);
       continue;
     }
     if (!(await enforceLabeler(q.number, { cwd, env, ...(allowLabelers ? { allow: allowLabelers } : {}) }))) continue;

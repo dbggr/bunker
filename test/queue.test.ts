@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { afterEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, type Agent, type Sandbox } from "../src/index.ts";
+import { output } from "../src/output.ts";
 import { parseBlockedBy, parseIssueBlocks, runIssue, runQueue } from "../src/issue.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
@@ -290,6 +291,21 @@ describe("runQueue()", () => {
     await Bun.write(join(repo, "..", "view-fail-1"), "");
     const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 2, ciPollMs: 10 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[2, "merged"], [3, "merged"]]);
+  });
+
+  test("warnings go through the output sink, not the console", async () => {
+    const { repo } = await setup(issues, "ff");
+    await Bun.write(join(repo, "..", "view-fail-1"), "");
+    const lines: string[] = [];
+    output.warn = (l) => lines.push(l);
+    const spies = [spyOn(console, "warn"), spyOn(console, "error"), spyOn(console, "log")];
+    try {
+      await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 2, ciPollMs: 10 });
+      expect(spies.map((s) => s.mock.calls.length)).toEqual([0, 0, 0]);
+    } finally {
+      spies.forEach((s) => s.mockRestore());
+    }
+    expect(lines.join("\n")).toContain("skipping #1, gh issue view failed");
   });
 
   test("keeps earlier results when a later re-check fails", async () => {
