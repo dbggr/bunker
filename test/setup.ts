@@ -12,3 +12,13 @@ beforeEach(() => {
   output.verbose = false;
   output.write = () => true;
 });
+
+// Git's detached auto-maintenance (after commit, fetch, ...) is orphaned when the test exits; on a host whose PID 1
+// doesn't reap, those pile up as zombies. Disable it for every git the tests spawn (appending to any existing
+// GIT_CONFIG_* entries).
+const gitConfigCount = Number(process.env.GIT_CONFIG_COUNT ?? 0) || 0;
+for (const [i, [key, value]] of [["maintenance.auto", "false"], ["gc.auto", "0"]].entries()) {
+  process.env[`GIT_CONFIG_KEY_${gitConfigCount + i}`] = key;
+  process.env[`GIT_CONFIG_VALUE_${gitConfigCount + i}`] = value;
+}
+process.env.GIT_CONFIG_COUNT = String(gitConfigCount + 2);
