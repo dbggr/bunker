@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, type Agent } from "../src/index.ts";
 import { runQueue } from "../src/issue.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 const dirs: string[] = [];
 const origPath = process.env.PATH;
@@ -15,15 +17,22 @@ afterEach(async () => {
 
 const APPROVE = "<review>APPROVE</review>";
 
-/** `work` gets the issue number and how many times that issue has been attempted, and returns shell that edits files. */
-function fakeAgent(work: (issue: number, attempt: number) => string, slow: Record<number, number> = {}): Agent {
+/**
+ * `work` gets the issue number and how many times that issue has been attempted, and returns shell that edits files.
+ * `waitFor` makes an issue's first attempt block until the given issues' agents have finished, and `rendezvous` makes
+ * the listed issues wait for each other, so it only completes if they run concurrently. Both are barriers on marker
+ * files in `sync`, not sleeps; the polling cap is far above any load, so a broken barrier fails instead of hanging.
+ */
+function fakeAgent(sync: string, work: (issue: number, attempt: number) => string, waitFor: Record<number, number[]> = {}, rendezvous: number[] = []): Agent {
+  const wait = (files: string[]) => files.map((f) => `i=0; while [ ! -f "${join(sync, f)}" ]; do i=$((i+1)); [ $i -gt 3000 ] && exit 1; sleep 0.01; done; `).join("");
   const attempts: Record<number, number> = {};
   return {
     command(prompt, mode = "write") {
       if (mode !== "write") return ["sh", "-c", `echo '${APPROVE}'`];
       const issue = Number(/issue #(\d+)/.exec(prompt)![1]);
       attempts[issue] = (attempts[issue] ?? 0) + 1;
-      return ["sh", "-c", `sleep ${slow[issue] ?? 0}; ${work(issue, attempts[issue]!)} && git add . && git commit -qm "feat: impl"`];
+      const pre = (rendezvous.includes(issue) ? `touch "${join(sync, `started-${issue}`)}"; ${wait(rendezvous.filter((n) => n !== issue).map((n) => `started-${n}`))}` : "") + (attempts[issue] === 1 && waitFor[issue] ? wait(waitFor[issue]!.map((n) => `done-${n}`)) : "");
+      return ["sh", "-c", `${pre}${work(issue, attempts[issue]!)} && git add . && git commit -qm "feat: impl"; rc=$?; touch "${join(sync, `done-${issue}`)}"; exit $rc`];
     },
   };
 }
@@ -84,7 +93,7 @@ describe("runQueue() with parallel", () => {
   test("different files: both merged in queue order, the second updated onto the first", async () => {
     const { repo, root, origin } = await setup([1, 2]);
     // Issue 1 is slower, yet must merge first.
-    const agent = fakeAgent((n) => `echo ${n} > file${n}.txt`, { 1: 1 });
+    const agent = fakeAgent(root, (n) => `echo ${n} > file${n}.txt`, { 1: [2] });
     const rs = await queue(repo, agent, { parallel: 2 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"], [2, "merged"]]);
     expect((await Bun.file(join(root, "merge-order.log")).text()).trim().split("\n")).toEqual(["feature/1-issue-1", "feature/2-issue-2"]);
@@ -92,17 +101,52 @@ describe("runQueue() with parallel", () => {
     expect(await show(origin, "file2.txt")).toBe("2\n");
   });
 
+  test("slots don't read the repo's shared FETCH_HEAD, which another slot's fetch can rewrite", async () => {
+    const { repo, root, origin } = await setup([1, 2]);
+    // Every fetch is immediately followed by a FETCH_HEAD rewrite, as when another slot's fetch lands in between.
+    const git = Bun.which("git", { PATH: origPath })!;
+    await Bun.write(join(root, "bin", "git"), `#!/bin/sh\n"${git}" "$@"; rc=$?\ncase " $* " in *" fetch "*) rm -f "${repo}/.git/FETCH_HEAD";; esac\nexit $rc\n`);
+    await chmod(join(root, "bin", "git"), 0o755);
+    const rs = await queue(repo, fakeAgent(root, (n) => `echo ${n} > file${n}.txt`), { parallel: 2 });
+    expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"], [2, "merged"]]);
+    expect(await show(origin, "file1.txt")).toBe("1\n");
+    expect(await show(origin, "file2.txt")).toBe("2\n");
+  });
+
+  test("slots never run worktree add/remove or branch -D at the same time (git reads each other's half-made worktrees)", async () => {
+    const { repo, root, origin } = await setup([1, 2]);
+    // Holds each such command open long enough that two slots' would overlap, and fails the command if they do.
+    const git = Bun.which("git", { PATH: origPath })!;
+    const lock = join(root, "admin.lock");
+    await Bun.write(
+      join(root, "bin", "git"),
+      `#!/bin/sh
+case " $* " in
+  *" worktree add "*|*" worktree remove "*|*" branch -D "*)
+    mkdir "${lock}" 2>/dev/null || { echo "overlapping worktree admin: $*" >&2; exit 1; }
+    sleep 0.5; "${git}" "$@"; rc=$?; rmdir "${lock}"; exit $rc;;
+esac
+exec "${git}" "$@"
+`,
+    );
+    await chmod(join(root, "bin", "git"), 0o755);
+    const rs = await queue(repo, fakeAgent(root, (n) => `echo ${n} > file${n}.txt`), { parallel: 2 });
+    expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"], [2, "merged"]]);
+    expect(await show(origin, "file1.txt")).toBe("1\n");
+    expect(await show(origin, "file2.txt")).toBe("2\n");
+  });
+
   test("runs the agents concurrently", async () => {
-    const { repo } = await setup([1, 2]);
-    const agent = fakeAgent((n) => `echo ${n} > file${n}.txt`, { 1: 2, 2: 2 });
-    const t = Date.now();
-    await queue(repo, agent, { parallel: 2 });
-    expect(Date.now() - t).toBeLessThan(3900);
+    const { repo, root } = await setup([1, 2]);
+    // Each agent waits for the other to have started: sequential agents would hit the barrier cap and fail.
+    const agent = fakeAgent(root, (n) => `echo ${n} > file${n}.txt`, {}, [1, 2]);
+    const rs = await queue(repo, agent, { parallel: 2 });
+    expect(rs.map((r) => r.status)).toEqual(["merged", "merged"]);
   });
 
   test("same lines: the second conflicts and is retried once from the new main", async () => {
-    const { repo, origin } = await setup([1, 2]);
-    const agent = fakeAgent((n, attempt) => (n === 2 && attempt > 1 ? `echo "2 again" > other.txt` : `echo ${n} > shared.txt`), { 1: 1 });
+    const { repo, root, origin } = await setup([1, 2]);
+    const agent = fakeAgent(root, (n, attempt) => (n === 2 && attempt > 1 ? `echo "2 again" > other.txt` : `echo ${n} > shared.txt`), { 1: [2] });
     const rs = await queue(repo, agent, { parallel: 2 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"], [2, "merged"]]);
     expect(rs[1]!.branch).not.toBe("feature/2-issue-2");
@@ -111,33 +155,33 @@ describe("runQueue() with parallel", () => {
   });
 
   test("verify failing after the update: one retry, then the normal failure", async () => {
-    const { repo, origin } = await setup([1, 2]);
+    const { repo, root, origin } = await setup([1, 2]);
     // Each passes alone; together they fail.
     const verify = "! (test -f a.txt && test -f b.txt)";
-    const agent = fakeAgent((n) => (n === 1 ? "echo a > a.txt" : "echo b > b.txt"), { 1: 1 });
+    const agent = fakeAgent(root, (n) => (n === 1 ? "echo a > a.txt" : "echo b > b.txt"), { 1: [2] });
     const rs = await queue(repo, agent, { parallel: 2, verify });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"], [2, "verify-failed"]]);
     expect(await show(origin, "b.txt")).toBe("");
   });
 
   test("a verify failure before the update is not retried", async () => {
-    const { repo } = await setup([1, 2]);
+    const { repo, root } = await setup([1, 2]);
     let runs = 0;
-    const agent = fakeAgent((n) => (runs++, `echo ${n} > file${n}.txt`));
+    const agent = fakeAgent(root, (n) => (runs++, `echo ${n} > file${n}.txt`));
     const rs = await queue(repo, agent, { parallel: 2, verify: "false", keepGoing: true });
     expect(rs.map((r) => r.status)).toEqual(["verify-failed", "verify-failed"]);
     expect(runs).toBe(2);
   });
 
   test("limit counts concurrent issues", async () => {
-    const { repo } = await setup([1, 2]);
-    const rs = await queue(repo, fakeAgent((n) => `echo ${n} > file${n}.txt`), { parallel: 2, limit: 1 });
+    const { repo, root } = await setup([1, 2]);
+    const rs = await queue(repo, fakeAgent(root, (n) => `echo ${n} > file${n}.txt`), { parallel: 2, limit: 1 });
     expect(rs.map((r) => r.issue)).toEqual([1]);
   });
 
   test("parallel 1 is the sequential queue: no update step, the branch is pushed as is", async () => {
     const { repo, root } = await setup([1, 2]);
-    const rs = await queue(repo, fakeAgent((n) => `echo ${n} > file${n}.txt`), { parallel: 1 });
+    const rs = await queue(repo, fakeAgent(root, (n) => `echo ${n} > file${n}.txt`), { parallel: 1 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"], [2, "merged"]]);
     expect((await Bun.file(join(root, "merge-order.log")).text()).trim().split("\n")).toEqual(["feature/1-issue-1", "feature/2-issue-2"]);
   });

@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, statSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connectHub, readToken, repoIdFromUrl, startHub, type Hub } from "../src/ui.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 let hub: Hub | undefined;
 afterEach(async () => {
@@ -135,10 +137,14 @@ describe("connectHub()", () => {
   });
 
   test("no hub running: returns undefined, no errors", async () => {
-    const tmp = startHub({ port: 0, token: TOKEN });
-    const port = tmp.server.port!;
-    await tmp.stop();
-    expect(await connectHub({ port, repo: "a/one", token: TOKEN })).toBeUndefined();
+    // A port kept bound by a listener that drops every connection: a freed port could be rebound by a hub in another
+    // test process (e.g. a parallel verify running this suite) before connectHub checks it.
+    const dead = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { open: (s) => void s.end(), data() {} } });
+    try {
+      expect(await connectHub({ port: dead.port, repo: "a/one", token: TOKEN })).toBeUndefined();
+    } finally {
+      dead.stop(true);
+    }
   });
 
   test("hub vanishing mid-run is swallowed", async () => {

@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, type Agent, type Sandbox } from "../src/index.ts";
 import { parseBlockedBy, parseIssueBlocks, runIssue, runQueue } from "../src/issue.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 const dirs: string[] = [];
 const origPath = process.env.PATH;
