@@ -47,5 +47,6 @@ export const options = {
   images: { type: "boolean", default: false },
   force: { type: "boolean", default: false },
   verbose: { type: "boolean", default: false },
+  json: { type: "boolean", default: false },
   version: { type: "boolean", default: false },
 } as const satisfies ParseArgsOptionsConfig;

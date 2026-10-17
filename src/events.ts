@@ -19,6 +19,8 @@ export interface BunkerEvent {
   name?: string;
   /** Agent text, the failure status on a "failed" stage, or the message of a "note" (a permanent line, may span lines). */
   text?: string;
+  /** On a "failed" stage: one line saying why. */
+  reason?: string;
   /** On "result": what that agent run cost. */
   costUsd?: number;
   /** On "meta": the run-log path and the PR URL, once known. */
@@ -153,7 +155,7 @@ export function createProgress({ write, tty, columns = 100 }: ProgressOptions): 
       tools = 0;
       where = who(e);
       done = e.name === "merged" || e.name === "done" || e.name === "failed";
-      write(`bunker: ${[where, e.name, e.model, e.text && e.name === "failed" ? `(${e.text})` : "", e.name === "merged" && urls.get(key(e)) ? `PR ${urls.get(key(e))}` : ""].filter(Boolean).join(" · ")}\n`);
+      write(`bunker: ${[where, e.name, e.model, e.text && e.name === "failed" ? `(${e.text})` : "", e.name === "failed" && e.reason ? e.reason : "", e.name === "merged" && urls.get(key(e)) ? `PR ${urls.get(key(e))}` : ""].filter(Boolean).join(" · ")}\n`);
       if (done) urls.delete(key(e));
       return;
     }
