@@ -97,12 +97,28 @@ describe("createProgress()", () => {
     const p = createProgress({ write: (s) => (out += s), tty: true });
     p.onEvent({ type: "stage", name: "waiting for merge", issue: 7, at });
     p.onEvent({ type: "toolCall", name: "Edit x", issue: 7, at: at + 1000 });
-    p.onEvent({ type: "meta", url: "https://github.com/o/r/pull/9", at: at + 2000 });
+    p.onEvent({ type: "meta", url: "https://github.com/o/r/pull/9", issue: 7, at: at + 2000 });
     p.onEvent({ type: "stage", name: "merged", issue: 7, at: at + 3000 });
     p.onEvent({ type: "toolCall", name: "late", issue: 7, at: at + 4000 });
     p.clear();
     expect(out.endsWith("bunker: #7 · merged · PR https://github.com/o/r/pull/9\n")).toBe(true);
     expect(out.slice(out.lastIndexOf("\r") + 1).startsWith("\x1b[K")).toBe(true);
+  });
+
+  test("a PR url is attached only to the merged line of its own issue or task", () => {
+    let out = "";
+    const p = createProgress({ write: (s) => (out += s), tty: false });
+    p.onEvent({ type: "meta", url: "https://github.com/o/r/pull/1", issue: 1, at });
+    p.onEvent({ type: "meta", url: "https://github.com/o/r/pull/2", issue: 2, at });
+    p.onEvent({ type: "meta", url: "https://github.com/o/r/pull/3", task: 0, at });
+    p.onEvent({ type: "stage", name: "merged", issue: 1, at });
+    p.onEvent({ type: "stage", name: "merged", issue: 2, at });
+    p.onEvent({ type: "stage", name: "merged", task: 0, at });
+    p.onEvent({ type: "stage", name: "merged", task: 1, at });
+    expect(out).toContain("bunker: #1 · merged · PR https://github.com/o/r/pull/1\n");
+    expect(out).toContain("bunker: #2 · merged · PR https://github.com/o/r/pull/2\n");
+    expect(out).toContain("bunker: [0] · merged · PR https://github.com/o/r/pull/3\n");
+    expect(out).toContain("bunker: [1] · merged\n");
   });
 
   test("note events are permanent lines, no \\r off a TTY", () => {
