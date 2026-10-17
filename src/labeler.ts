@@ -25,6 +25,15 @@ export async function checkLabeler(issue: number, opts: { cwd: string; env: Env;
   return { ok: false, adder, denied: true, reason: `@${adder} has ${role || "unknown"} permission, not admin or maintain` };
 }
 
+/** When the latest `bunker` label was added (ms since epoch); undefined if there is no such event or the lookup failed. */
+export async function latestBunkerLabeledAt(issue: number, opts: { cwd: string; env: Env }): Promise<number | undefined> {
+  const events = await $`gh api repos/{owner}/{repo}/issues/${issue}/events --paginate --jq ${'.[] | select(.event == "labeled" and .label.name == "bunker") | .created_at'}`.cwd(opts.cwd).env(opts.env).nothrow().quiet();
+  if (events.exitCode !== 0) return undefined;
+  const last = events.stdout.toString().split("\n").map((l) => l.trim()).filter(Boolean).pop();
+  const at = last ? Date.parse(last) : NaN;
+  return Number.isNaN(at) ? undefined : at;
+}
+
 /** Checks the labeler; when refused for lack of permission, removes the label and says why on the issue. True if the issue may be worked. */
 export async function enforceLabeler(issue: number, opts: { cwd: string; env: Env; allow?: string[]; log?: (text: string) => void; onRefused?: () => void }): Promise<boolean> {
   const log = opts.log ?? ((t: string) => console.warn(t));

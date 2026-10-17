@@ -9,6 +9,7 @@ import { redact } from "./redact.ts";
 import { runAudit } from "./audit.ts";
 import type { Agent } from "./index.ts";
 import { countWaiting, runQueue, type QueueEntry, type QueueOptions } from "./issue.ts";
+import { latestBunkerLabeledAt } from "./labeler.ts";
 import { noNotify, type Notify } from "./notify.ts";
 
 export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult" | "onRefused"> {
@@ -158,10 +159,21 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   };
 
   /** Issues this watcher gave up on (a failed relabel must not let one be retried) found already in progress (an open PR) or refused by the labeler check (e.g. a failed permission lookup); skipped for the rest of the run. */
-  const handled = new Set<number>();
+  const handled = new Map<number, number>();
+  const giveUp = (n: number) => void handled.set(n, Date.now());
+  /** Skip a handled issue unless a human re-added `bunker` since the watcher gave up on it (a label that predates that, e.g. after a failed relabel, doesn't count). */
+  const skipHandled = async (n: number) => {
+    const since = handled.get(n);
+    if (since === undefined) return false;
+    const labeledAt = await latestBunkerLabeledAt(n, { cwd, env });
+    if (labeledAt === undefined || labeledAt <= since) return true;
+    handled.delete(n);
+    log(`bunker: #${n} relabelled; retrying`);
+    return false;
+  };
   let labelReady = false;
   const markFailed = async (e: QueueEntry) => {
-    handled.add(e.issue);
+    giveUp(e.issue);
     if (!labelReady) {
       await $`gh label create ${FAILED_LABEL} --description ${"bunker gave up on this issue; relabel `bunker` to retry"} --color B60205`.cwd(cwd).env(env).nothrow().quiet();
       labelReady = true;
@@ -206,8 +218,8 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       const failedBefore = summary.failed;
       await runQueue({
         ...opts, cwd, mention, merge: true, limit: Infinity, keepGoing: true, relist: true,
-        skip: (n) => handled.has(n),
-        onRefused: (n) => handled.add(n),
+        skip: skipHandled,
+        onRefused: giveUp,
         shouldStop: () => stopped() || capped().length > 0,
         onResult: async (e) => {
           const usd = ((e.review?.usage ?? e.usage)?.costUsd ?? 0) + (e.priorCostUsd ?? 0);
@@ -221,7 +233,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
             merged++;
             summary.merged++;
           } else if (e.status === "already-in-progress") {
-            handled.add(e.issue);
+            giveUp(e.issue);
           } else if (e.status === "blocked") {
             notify(`bunker: #${e.issue} blocked`, e.error ?? "waiting on another issue");
           } else {
@@ -251,7 +263,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       const progressed = merged > 0 || summary.failed > failedBefore;
       idlePasses = progressed ? 0 : idlePasses + 1;
       // Two passes in a row that merged and failed nothing (everything skipped) would spin; sleep instead.
-      const waiting = idlePasses >= 2 || capped().length > 0 ? 0 : await countWaiting(cwd, env, (n) => handled.has(n));
+      const waiting = idlePasses >= 2 || capped().length > 0 ? 0 : await countWaiting(cwd, env, skipHandled);
       if (waiting > 0) {
         log(`bunker: pass ${summary.passes} · ${merged} merged · next pass now (${waiting} waiting) · ${formatSpend(spendFile, caps)}`);
         continue;
