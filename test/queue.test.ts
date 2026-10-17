@@ -84,6 +84,7 @@ fi
 if [ "$1 $2" = "issue create" ]; then
   shift 2
   if [ -f "${root}/no-bug-label" ] && echo " $* " | grep -q -- " bug "; then echo "could not add label: 'bug' not found" >&2; exit 1; fi
+  if [ -f "${root}/no-severity-label" ] && echo " $* " | grep -q -- "severity:"; then echo "could not add label: 'severity:high' not found" >&2; exit 1; fi
   for a in "$@"; do printf '%s\\n' "$a"; done >> "${createLog}"
   echo "---" >> "${createLog}"
   echo "https://github.com/o/r/issues/100"
@@ -99,7 +100,7 @@ if [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue comment" ] || [ "$1 $2" = "l
   fi
   exit 0
 fi
-if [ "$1 $2" = "pr create" ]; then echo "https://github.com/o/r/pull/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"; exit 0; fi
+if [ "$1 $2" = "pr create" ]; then printf '%s' "$*" >> "${root}/pr-body.txt"; echo "https://github.com/o/r/pull/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"; exit 0; fi
 if [ "$1 $2" = "pr view" ]; then
   if [ -f "${root}/merged" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"abc"}}'; else echo '{"state":"OPEN","mergeCommit":null}'; fi
   exit 0
@@ -153,7 +154,7 @@ describe("parseIssueBlocks()", () => {
 });
 
 describe("filing discovered issues", () => {
-  test("implementer and reviewer blocks become discovered issues, deduped, never bunker", async () => {
+  test("files at most one follow-up (implementer and reviewer blocks, deduped), never bunker", async () => {
     const { repo, createLog } = await setup([[7, "Add feature", "2026-01-01T00:00:00Z"]]);
     const prompts: string[] = [];
     const r = await runIssue({
@@ -161,13 +162,56 @@ describe("filing discovered issues", () => {
       agent: fakeAgent(`${APPROVE} <issue title="Rev found">rb</issue> <issue title="Dup">second</issue>`, '<issue title="Dup">first</issue>', prompts),
     });
     expect(r.status).toBe("pr-opened");
-    expect(r.filed).toEqual([{ number: 100, title: "Dup" }, { number: 100, title: "Rev found" }]);
+    expect(r.filed).toEqual([{ number: 100, title: "Dup" }]);
     const log = await Bun.file(createLog).text();
-    expect(log.match(/--label\ndiscovered/g)?.length).toBe(2);
+    expect(log.match(/--label\ndiscovered/g)?.length).toBe(1);
     expect(log).not.toMatch(/bunker/);
     expect(log).toContain("first\n\nFound while working on #7.");
     expect(prompts.some((p) => p.startsWith("REVIEW:") && p.includes("<verdict>"))).toBe(true);
     expect(prompts[0]).toContain("<report>");
+    expect(prompts[0]).toContain("severity");
+  });
+
+  test("3 proposed follow-ups: the highest severity is filed with its label, the rest go to the PR body and log; low is never filed", async () => {
+    const { repo, createLog } = await setup([[7, "Add feature", "2026-01-01T00:00:00Z"]]);
+    const issues = [
+      { title: "Cosmetic nit", body: "n", severity: "low" },
+      { title: "Wrong output", body: "m", severity: "medium" },
+      { title: "Leaks token", body: "h", severity: "high" },
+    ];
+    const report = `<report>${JSON.stringify({ issues })}</report>`;
+    const r = await runIssue({ cwd: repo, issue: 7, sandbox: noSandbox(), agent: fakeAgent(APPROVE, report) });
+    expect(r.filed).toEqual([{ number: 100, title: "Leaks token" }]);
+    const log = await Bun.file(createLog).text();
+    expect(log.split("---").filter((x) => x.trim())).toHaveLength(1);
+    expect(log).toContain("discovered");
+    expect(log).toContain("severity:high");
+    expect(log).not.toMatch(/priority:|bunker/);
+    const prBody = await Bun.file(join(repo, "..", "pr-body.txt")).text();
+    expect(prBody).toContain("not filed");
+    expect(prBody).toContain("Wrong output");
+    expect(prBody).toContain("Cosmetic nit");
+    expect(prBody).not.toContain("Leaks token");
+    const runLog = await Bun.file(r.logPath!).text();
+    expect(runLog).toContain("not filed");
+    expect(runLog).toContain("Cosmetic nit");
+  });
+
+  test("a low-only report files nothing", async () => {
+    const { repo, createLog } = await setup([[7, "Add feature", "2026-01-01T00:00:00Z"]]);
+    const report = '<report>{"issues": [{"title": "Nit", "body": "n", "severity": "low"}]}</report>';
+    const r = await runIssue({ cwd: repo, issue: 7, sandbox: noSandbox(), agent: fakeAgent(APPROVE, report) });
+    expect(r.filed).toEqual([]);
+    expect(await Bun.file(createLog).exists()).toBe(false);
+  });
+
+  test("a repo without the severity label still gets the follow-up", async () => {
+    const { repo, createLog } = await setup([[7, "Add feature", "2026-01-01T00:00:00Z"]]);
+    await Bun.write(join(repo, "..", "no-severity-label"), "");
+    const report = '<report>{"issues": [{"title": "Real", "body": "b", "severity": "high"}]}</report>';
+    const r = await runIssue({ cwd: repo, issue: 7, sandbox: noSandbox(), agent: fakeAgent(APPROVE, report) });
+    expect(r.filed).toEqual([{ number: 100, title: "Real" }]);
+    expect(await Bun.file(createLog).text()).not.toContain("severity:");
   });
 });
 
@@ -439,10 +483,11 @@ describe("structured follow-ups", () => {
     const report = `<report>{"issues":[{"title":"Impl found","body":"use \`--flag\`"}]}</report>`;
     const r = await runIssue({ cwd: repo, issue: 7, sandbox: noSandbox(), agent: fakeAgent(verdict, report) });
     expect(r.status).toBe("pr-opened");
-    expect(r.filed.map((f) => f.title)).toEqual(["Impl found", "Rev found"]);
+    // Both are medium: only the first is filed, the other is listed in the PR body.
+    expect(r.filed.map((f) => f.title)).toEqual(["Impl found"]);
     const log = await Bun.file(createLog).text();
     expect(log).toContain("use `--flag`\n\nFound while working on #7.");
-    expect(log).toContain("see `rev.ts` and `x`");
+    expect(await Bun.file(join(repo, "..", "pr-body.txt")).text()).toContain("Rev found");
     expect(log).not.toContain("Quoted");
   });
 
@@ -574,15 +619,13 @@ describe("queue order: priority, bug, age", () => {
 describe("agent-filed issues", () => {
   test("never carry a priority label; a bug follow-up gets `bug`", async () => {
     const { repo, createLog } = await setup([[7, "Add feature", "2026-01-01T00:00:00Z"]]);
-    const report = '<report>{"issues":[{"title":"Crash on empty","body":"boom","bug":true},{"title":"Nice to have","body":"later"}]}</report>';
+    const report = '<report>{"issues":[{"title":"Crash on empty","body":"boom","bug":true,"severity":"high"},{"title":"Nice to have","body":"later"}]}</report>';
     const r = await runIssue({ cwd: repo, issue: 7, sandbox: noSandbox(), agent: fakeAgent(APPROVE, report) });
-    expect(r.filed.length).toBe(2);
+    expect(r.filed.length).toBe(1);
     const log = await Bun.file(createLog).text();
     expect(log).not.toContain("priority");
-    const [first, second] = log.split("---\n");
-    expect(first).toContain("bug");
-    expect(second).not.toContain("bug");
-    expect(first).toContain("discovered");
+    expect(log).toMatch(/^bug$/m);
+    expect(log).toContain("discovered");
   });
 });
 

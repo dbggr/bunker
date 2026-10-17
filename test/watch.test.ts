@@ -75,6 +75,7 @@ if [ "$1 $2" = "issue edit" ] && [ -f "${root}/edit-fails" ]; then echo "network
 if [ "$1 $2" = "issue edit" ]; then rm -f "${root}/q/$3.json"; exit 0; fi
 if [ "$1 $2" = "issue comment" ]; then shift 3; echo "COMMENT: $*" >> "${root}/comments.log"; exit 0; fi
 if [ "$1 $2" = "label create" ]; then exit 0; fi
+if [ "$1 $2" = "issue create" ]; then echo "https://github.com/o/r/issues/100"; exit 0; fi
 if [ "$1 $2" = "pr create" ]; then echo "https://github.com/o/r/pull/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"; exit 0; fi
 if [ "$1 $2" = "pr view" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"abc"}}'; exit 0; fi
 if [ "$1 $2" = "pr merge" ]; then rm -f "${root}/q/$(git rev-parse --abbrev-ref HEAD | sed 's|^[a-z]*/||; s|-.*||').json"; git --git-dir="${origin}" update-ref refs/heads/main "refs/heads/$(git rev-parse --abbrev-ref HEAD)"; exit 0; fi
@@ -102,6 +103,50 @@ describe("parseDuration()", () => {
   });
   test("rejects anything else", () => {
     for (const bad of ["", "5", "h", "5x", "0m", "0h0m", "-1h", "1.5h", "30m2h", "5h 30m", "abc"]) expect(parseDuration(bad)).toBeUndefined();
+  });
+});
+
+describe("runWatch() --audit-every", () => {
+  const auditor = (calls: string[]): Agent => ({
+    command(prompt) {
+      calls.push(prompt);
+      return ["sh", "-c", "echo '<audit>{\"issues\": []}</audit>'"];
+    },
+  });
+  const run = async (repo: string, calls: string[], passes: number) => {
+    const ctl = new AbortController();
+    return runWatch({
+      ...base, cwd: repo, agent: fakeAgent(), auditor: auditor(calls), auditEveryDays: 30, signal: ctl.signal,
+      log: (l) => { if (new RegExp(`pass ${passes} `).test(l)) ctl.abort(); },
+    });
+  };
+
+  test("runs the audit once per period and records it in .bunker/watch-state.json", async () => {
+    const { repo } = await setup(three.slice(0, 1));
+    const calls: string[] = [];
+    await run(repo, calls, 3);
+    expect(calls).toHaveLength(1);
+    const state = JSON.parse(await Bun.file(join(repo, ".bunker", "watch-state.json")).text());
+    expect(Date.now() - state.lastAuditAt).toBeLessThan(60_000);
+    // A second watch within the period does not audit again.
+    await run(repo, calls, 1);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("audits again once the period has passed", async () => {
+    const { repo } = await setup(three.slice(0, 1));
+    await Bun.write(join(repo, ".bunker", "watch-state.json"), JSON.stringify({ lastAuditAt: Date.now() - 31 * 24 * 3_600_000 }));
+    const calls: string[] = [];
+    await run(repo, calls, 1);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("is off by default", async () => {
+    const { repo } = await setup(three.slice(0, 1));
+    const calls: string[] = [];
+    const ctl = new AbortController();
+    await runWatch({ ...base, cwd: repo, agent: fakeAgent(), auditor: auditor(calls), signal: ctl.signal, log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); } });
+    expect(calls).toHaveLength(0);
   });
 });
 
