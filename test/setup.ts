@@ -12,3 +12,28 @@ beforeEach(() => {
   output.verbose = false;
   output.write = () => true;
 });
+
+// Git's detached auto-maintenance (after commit, fetch, ...) is orphaned when the test exits; on a host whose PID 1
+// doesn't reap, those pile up as zombies. Disable it for every git the tests spawn (appending to any existing
+// GIT_CONFIG_* entries).
+const gitConfigCount = Number(process.env.GIT_CONFIG_COUNT ?? 0) || 0;
+for (const [i, [key, value]] of [["maintenance.auto", "false"], ["gc.auto", "0"]].entries()) {
+  process.env[`GIT_CONFIG_KEY_${gitConfigCount + i}`] = key;
+  process.env[`GIT_CONFIG_VALUE_${gitConfigCount + i}`] = value;
+}
+process.env.GIT_CONFIG_COUNT = String(gitConfigCount + 2);
+
+// Bun.spawn/spawnSync hand children the environment from process start, not the live process.env edited above,
+// so default their env to the current process.env.
+const realSpawn = Bun.spawn;
+const realSpawnSync = Bun.spawnSync;
+const withEnv = (args: any[]) => {
+  const optsIndex = Array.isArray(args[0]) ? 1 : 0;
+  const opts = args[optsIndex];
+  if (opts?.env) return args;
+  const next = [...args];
+  next[optsIndex] = { ...opts, env: { ...process.env } };
+  return next;
+};
+(Bun as any).spawn = (...args: any[]) => (realSpawn as any)(...withEnv(args));
+(Bun as any).spawnSync = (...args: any[]) => (realSpawnSync as any)(...withEnv(args));
