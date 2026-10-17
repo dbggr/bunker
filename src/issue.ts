@@ -853,11 +853,18 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
   let queue = orderQueue([...merged.values()]);
   const seen = new Set<number>();
   let announced = "";
+  let announcedOrder: number[] = [];
   const announce = (reason?: string) => {
     const rest = queue.filter((c) => !seen.has(c.number));
     const text = describeQueue(rest);
     if (!rest.length || text === announced) return;
     announced = text;
+    // Only a change in the relative order of issues listed both times counts; started and newly listed ones don't.
+    const now = rest.map((c) => c.number);
+    const kept = announcedOrder.filter((n) => now.includes(n));
+    const nowKept = now.filter((n) => kept.includes(n));
+    announcedOrder = now;
+    if (reason === "re-ordered" && kept.every((n, i) => n === nowKept[i])) reason = undefined;
     const order = reason ? `${text} (${reason})` : text;
     emit(opts.onEvent, { type: "note", text: order });
     orderNote = text;
