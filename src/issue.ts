@@ -351,10 +351,15 @@ export async function runIssue(opts: IssueOptions): Promise<IssueResult> {
  * under a `bunker/stale/<n>-<timestamp>` tag; an open PR on origin means the issue is already being handled.
  * Only ever touches `{feature|fix}/<n>-<slug>` for this issue.
  */
-async function reclaimLeftover(o: { repo: string; cwd: string; number: number; branch: string; worktree: string; baseSha: string; remote: string; gitCfg: string[]; env: Record<string, string>; log: (t: string, s?: string) => void; onEvent?: OnEvent }): Promise<{ prUrl?: string; remoteSha?: string }> {
-  const { repo, number, branch, worktree, baseSha } = o;
+type LeftoverOpts = { repo: string; cwd: string; number: number; branch: string; worktree: string; baseSha: string; remote: string; gitCfg: string[]; env: Record<string, string>; log: (t: string, s?: string) => void; onEvent?: OnEvent };
+
+/**
+ * Deal with origin's copy of this issue's branch: an open PR means the issue is already being handled; otherwise the
+ * remote tip is kept under a tag and its sha returned, so the push can replace it with a lease on exactly that sha.
+ */
+async function claimRemoteBranch(o: LeftoverOpts): Promise<{ prUrl?: string; remoteSha?: string }> {
+  const { repo, number, branch } = o;
   if (!new RegExp(`^(feature|fix)/${number}-[a-z0-9-]*$`).test(branch)) return {};
-  const git = (...args: string[]) => $`git -C ${repo} ${args}`.nothrow().quiet();
   const remoteSha = (await $`git ${o.gitCfg} -C ${repo} ls-remote --heads ${o.remote} ${`refs/heads/${branch}`}`.env(o.env).nothrow().quiet()).stdout.toString().trim().split(/\s+/)[0] || undefined;
   if (remoteSha) {
     const prs = await $`gh pr list --head ${branch} --state open --json url`.cwd(o.cwd).env(o.env).nothrow().quiet();
@@ -376,6 +381,15 @@ async function reclaimLeftover(o: { repo: string; cwd: string; number: number; b
     o.log("stale remote branch kept", tag);
     emit(o.onEvent, { type: "note", text: `#${number}: origin already has ${branch} without an open PR; kept it as tag ${tag} and will replace it` });
   }
+  return { remoteSha };
+}
+
+async function reclaimLeftover(o: LeftoverOpts): Promise<{ prUrl?: string; remoteSha?: string }> {
+  const { repo, number, branch, worktree, baseSha } = o;
+  if (!new RegExp(`^(feature|fix)/${number}-[a-z0-9-]*$`).test(branch)) return {};
+  const git = (...args: string[]) => $`git -C ${repo} ${args}`.nothrow().quiet();
+  const { prUrl, remoteSha } = await claimRemoteBranch(o);
+  if (prUrl) return { prUrl };
   const hasBranch = (await git("rev-parse", "--verify", "-q", `refs/heads/${branch}`)).exitCode === 0;
   const hasDir = existsSync(worktree);
   if (!hasBranch && !hasDir) return { remoteSha };
@@ -528,6 +542,9 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   }
   if (paused) {
     baseSha = paused.issueBaseSha;
+    const remoteState = await claimRemoteBranch({ repo, cwd, number, branch, worktree, baseSha, remote, gitCfg, env, log, onEvent });
+    if (remoteState.prUrl) return fail("already-in-progress", { prUrl: remoteState.prUrl });
+    remoteSha = remoteState.remoteSha;
     setUntrack(track({ repo, worktree, branch, base: baseSha }));
     log("resuming after the usage limit", `session ${paused.sessionId ?? "(none)"}, ${paused.role} round ${paused.round}`);
     emit(onEvent, { type: "note", text: `#${number}: resuming after the usage limit (session ${paused.sessionId ?? "none"})` });
