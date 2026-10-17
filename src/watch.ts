@@ -2,6 +2,7 @@ import { $ } from "bun";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
+import { addSpend, DAY_MS, exceededCaps, formatSpend, type SpendCaps } from "./spend.ts";
 import { safePull } from "./pull.ts";
 import { redact } from "./redact.ts";
 import { runAudit } from "./audit.ts";
@@ -11,7 +12,11 @@ import { countWaiting, runQueue, type QueueEntry, type QueueOptions } from "./is
 export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult"> {
   /** Sleep between passes. Defaults to 10 minutes. */
   intervalMs?: number;
-  /** Spend cap in USD per rolling 24 h. Defaults to 20. */
+  /** Spend cap in notional USD per rolling 24 h. Defaults to no cap. */
+  maxCostDayUsd?: number;
+  /** Spend cap in notional USD per rolling 30 days. Defaults to no cap. */
+  maxCostMonthUsd?: number;
+  /** Alias of `maxCostDayUsd`. */
   maxCostUsd?: number;
   /** Stop starting new issues after this long. Defaults to running until `signal` aborts. */
   forMs?: number;
@@ -36,7 +41,6 @@ export interface WatchSummary {
   spentUsd: number;
 }
 
-const DAY_MS = 24 * 3_600_000;
 export const FAILED_LABEL = "bunker-failed";
 
 /** `5h`, `90m`, `2h30m` as milliseconds; undefined for anything else (or zero). */
@@ -45,20 +49,6 @@ export function parseDuration(text: string): number | undefined {
   if (!m || (!m[1] && !m[2])) return undefined;
   const ms = (Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0)) * 60_000;
   return ms > 0 ? ms : undefined;
-}
-
-interface Spend {
-  at: number;
-  usd: number;
-}
-
-function readSpend(file: string): Spend[] {
-  try {
-    const raw = JSON.parse(readFileSync(file, "utf8"));
-    return Array.isArray(raw) ? raw.filter((e) => typeof e?.at === "number" && typeof e?.usd === "number") : [];
-  } catch {
-    return [];
-  }
 }
 
 export const alive = (pid: number) => {
@@ -98,7 +88,7 @@ function acquireLock(file: string): () => void {
  * Works the `bunker` queue with auto-merge, pass after pass, until aborted or `forMs` is up.
  * Any outcome other than `merged` relabels the issue `bunker-failed` so it is never retried by itself.
  */
-export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forMs, signal, pull = false, auditEveryDays, auditor, maxIssues, log = console.log, ...opts }: WatchOptions): Promise<WatchSummary> {
+export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, auditor, maxIssues, log = console.log, ...opts }: WatchOptions): Promise<WatchSummary> {
   const cwd = opts.cwd ?? process.cwd();
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
@@ -127,21 +117,12 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
       }
     });
 
-  const spentNow = () => readSpend(spendFile).filter((e) => e.at > Date.now() - DAY_MS).reduce((a, e) => a + e.usd, 0);
-  /** When the oldest spend leaves the window far enough for spending to resume. */
-  const capLiftsAt = () => {
-    const entries = readSpend(spendFile).filter((e) => e.at > Date.now() - DAY_MS).sort((a, b) => a.at - b.at);
-    let total = entries.reduce((a, e) => a + e.usd, 0);
-    for (const e of entries) {
-      total -= e.usd;
-      if (total < maxCostUsd) return e.at + DAY_MS;
-    }
-    return Date.now();
+  const caps: SpendCaps = {
+    ...(maxCostDayUsd === undefined ? {} : { day: maxCostDayUsd }),
+    ...(maxCostMonthUsd === undefined ? {} : { month: maxCostMonthUsd }),
   };
-  const addSpend = (usd: number) => {
-    const entries = readSpend(spendFile).filter((e) => e.at > Date.now() - DAY_MS);
-    writeFileSync(spendFile, JSON.stringify([...entries, { at: Date.now(), usd }]));
-  };
+  const capped = () => exceededCaps(spendFile, caps);
+  const record = (usd: number) => addSpend(spendFile, usd);
 
   const stateFile = join(dir, "watch-state.json");
   const readState = (): { lastAuditAt?: number } => {
@@ -160,7 +141,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
     try {
       const r = await runAudit({ agent: auditor ?? opts.agent, sandbox: opts.sandbox, cwd, setup: opts.setup, ...(maxIssues === undefined ? {} : { maxIssues }), idleTimeoutMs: opts.idleTimeoutMs, completionTimeoutMs: opts.completionTimeoutMs, stepTimeoutMs: opts.stepTimeoutMs });
       if (r.usage?.costUsd) {
-        addSpend(r.usage.costUsd);
+        record(r.usage.costUsd);
         summary.spentUsd += r.usage.costUsd;
       }
       log(`bunker: audit filed ${r.filed.length} issue(s)${r.notFiled.length ? `, ${r.notFiled.length} not filed` : ""}`);
@@ -196,10 +177,13 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
   let idlePasses = 0;
   try {
     while (!stopped()) {
-      if (spentNow() >= maxCostUsd) {
-        const at = capLiftsAt();
-        log(`bunker: spend cap reached ($${spentNow().toFixed(2)} of $${maxCostUsd} in 24 h); sleeping until ${new Date(at).toISOString()}`);
-        await sleep(at - Date.now());
+      const hit = capped();
+      if (hit.length) {
+        // Every exceeded window must free up before work resumes.
+        const at = Math.max(...hit.map((h) => h.liftsAt));
+        for (const h of hit) log(`bunker: ${h.window === "day" ? "daily" : "monthly"} spend cap reached (${h.spent.toFixed(2)} of ${h.cap} in ${h.window === "day" ? "24 h" : "30 days"}); no new issues, sleeping until ${new Date(at).toISOString()}`);
+        // Re-check at least daily: a timer can't be that long.
+        await sleep(Math.min(at - Date.now(), DAY_MS));
         continue;
       }
       if (pull) {
@@ -214,10 +198,10 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
       await runQueue({
         ...opts, cwd, merge: true, limit: Infinity, keepGoing: true, relist: true,
         skip: (n) => handled.has(n),
-        shouldStop: () => stopped() || spentNow() >= maxCostUsd,
+        shouldStop: () => stopped() || capped().length > 0,
         onResult: async (e) => {
           const usd = ((e.review?.usage ?? e.usage)?.costUsd ?? 0) + (e.priorCostUsd ?? 0);
-          if (usd > 0) addSpend(usd);
+          if (usd > 0) record(usd);
           summary.spentUsd += usd;
           if (e.status === "paused-usage-limit") {
             // Not a failure: the issue keeps `bunker` and is resumed once the limit resets.
@@ -245,13 +229,13 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
       const progressed = merged > 0 || summary.failed > failedBefore;
       idlePasses = progressed ? 0 : idlePasses + 1;
       // Two passes in a row that merged and failed nothing (everything skipped) would spin; sleep instead.
-      const waiting = idlePasses >= 2 || spentNow() >= maxCostUsd ? 0 : await countWaiting(cwd, env, (n) => handled.has(n));
+      const waiting = idlePasses >= 2 || capped().length > 0 ? 0 : await countWaiting(cwd, env, (n) => handled.has(n));
       if (waiting > 0) {
-        log(`bunker: pass ${summary.passes} · ${merged} merged · next pass now (${waiting} waiting)`);
+        log(`bunker: pass ${summary.passes} · ${merged} merged · next pass now (${waiting} waiting) · ${formatSpend(spendFile, caps)}`);
         continue;
       }
       const mins = intervalMs / 60_000;
-      log(`bunker: pass ${summary.passes} · ${merged} merged · next pass in ${Number.isInteger(mins) ? mins : mins.toFixed(2)} min`);
+      log(`bunker: pass ${summary.passes} · ${merged} merged · next pass in ${Number.isInteger(mins) ? mins : mins.toFixed(2)} min · ${formatSpend(spendFile, caps)}`);
       await sleep(intervalMs);
     }
   } finally {

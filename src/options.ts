@@ -31,6 +31,8 @@ export const options = {
   interval: { type: "string" },
   for: { type: "string" },
   "max-cost": { type: "string" },
+  "max-cost-day": { type: "string" },
+  "max-cost-month": { type: "string" },
   "audit-every": { type: "string" },
   audit: { type: "boolean", default: false },
   "max-issues": { type: "string" },

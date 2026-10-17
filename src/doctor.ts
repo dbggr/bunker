@@ -1,5 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { formatSpend, loadSpendCaps } from "./spend.ts";
 import { AUTH_VARS, loadBunkerEnv } from "./env.ts";
 import { DEFAULT_MODEL_LABEL, resolveModels } from "./models.ts";
 import { redact } from "./redact.ts";
@@ -11,7 +12,7 @@ export const LABELS = ["bunker", "discovered", "bunker-failed", "bunker-blocked"
 
 export interface Check {
   id: string;
-  group: "tools" | "auth" | "repo" | "github" | "models";
+  group: "tools" | "auth" | "repo" | "github" | "models" | "spend";
   label: string;
   ok: boolean;
   /** Only required checks decide the exit code; an optional ✗ is shown as a note. */
@@ -240,10 +241,14 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
     detail: (["implementer", "reviewer", "auditor"] as const).map((r) => `${r}: ${models[r] ?? DEFAULT_MODEL_LABEL}`).join(", "),
   });
 
+  // spend (notional USD logged by --watch)
+  const caps = await loadSpendCaps(env).catch(() => ({}));
+  add({ id: "spend", group: "spend", label: "spend so far", ok: true, required: false, detail: formatSpend(join(cwd, ".bunker", "watch-spend.json"), caps) });
+
   return { checks, code: checks.some((c) => c.required && !c.ok) ? 1 : 0, ...(repo ? { repo } : {}), ...(defaultBranch ? { defaultBranch } : {}) };
 }
 
-const TITLES: Record<Check["group"], string> = { tools: "Tools", auth: "Auth", repo: "Repo", github: "GitHub", models: "Models" };
+const TITLES: Record<Check["group"], string> = { tools: "Tools", auth: "Auth", repo: "Repo", github: "GitHub", models: "Models", spend: "Watch spend" };
 
 export function formatChecks(all: Check[]): string {
   const order = Object.keys(TITLES);

@@ -247,6 +247,34 @@ describe("runWatch()", () => {
     expect(s.merged).toBe(1);
   });
 
+  test("a monthly cap stops new work even when the day cap is clear", async () => {
+    const { repo } = await setup(three.slice(0, 1));
+    await Bun.write(join(repo, ".bunker", "watch-spend.json"), JSON.stringify([{ at: Date.now() - 5 * 24 * 3_600_000, usd: 50 }]));
+    const prompts: string[] = [];
+    const lines: string[] = [];
+    await runWatch({ ...base, cwd: repo, agent: fakeAgent({ prompts }), maxCostDayUsd: 20, maxCostMonthUsd: 40, forMs: 300, log: (l) => lines.push(l) });
+    expect(prompts).toHaveLength(0);
+    expect(lines.some((l) => /monthly spend cap/i.test(l))).toBe(true);
+  });
+
+  test("no caps: never stops, and the pass summary reports spend", async () => {
+    const { repo } = await setup(three);
+    await Bun.write(join(repo, ".bunker", "watch-spend.json"), JSON.stringify([{ at: Date.now() - 1000, usd: 500 }]));
+    const lines: string[] = [];
+    const s = await runWatch({ ...base, cwd: repo, agent: fakeAgent({ cost: 15 }), forMs: 400, log: (l) => lines.push(l) });
+    expect(s.merged).toBeGreaterThanOrEqual(2);
+    expect(lines.some((l) => /cap reached/i.test(l))).toBe(false);
+    expect(lines.some((l) => /pass 1 .*\$.* today \(no cap\)/.test(l))).toBe(true);
+  });
+
+  test("maxCostUsd is an alias of maxCostDayUsd", async () => {
+    const { repo } = await setup(three.slice(0, 1));
+    await Bun.write(join(repo, ".bunker", "watch-spend.json"), JSON.stringify([{ at: Date.now() - 1000, usd: 25 }]));
+    const prompts: string[] = [];
+    await runWatch({ ...base, cwd: repo, agent: fakeAgent({ prompts }), maxCostUsd: 20, forMs: 300, log: () => {} });
+    expect(prompts).toHaveLength(0);
+  });
+
   test("when --for is up, no new issue starts and the in-flight one finishes", async () => {
     const { repo } = await setup(three);
     const s = await runWatch({ ...base, cwd: repo, agent: fakeAgent({ slow: 1 }), forMs: 300, log: () => {} });
@@ -344,7 +372,7 @@ describe("bunker --watch (CLI)", () => {
 
   test("invalid --for, --interval, --max-cost exit 2", async () => {
     const { repo } = await setup([]);
-    for (const a of [["--for", "5x"], ["--interval", "0"], ["--max-cost", "-1"]]) {
+    for (const a of [["--for", "5x"], ["--interval", "0"], ["--max-cost", "-1"], ["--max-cost-day", "0"], ["--max-cost-month", "abc"]]) {
       expect(run(repo, "--watch", "--no-sandbox", "--verify", "true", ...a).code).toBe(2);
     }
   });
