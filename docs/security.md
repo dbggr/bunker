@@ -37,4 +37,4 @@ Public repos let anyone write an issue or a comment, and the issue text becomes 
 
 ## Verify runs in the sandbox
 
-Agent-written code is executed by `.bunker/verify`. By default that happens inside the same container as the agent, not on the host with your credentials. `--verify-on-host` opts out; only use it for repos where you'd run the code yourself anyway.
+Agent-written code is executed by `.bunker/verify`. By default that happens inside the same container as the agent, not on the host with your credentials. `--verify-on-host` opts out; only use it for repos where you'd run the code yourself anyway. The `--step-timeout` limit applies to host verify too: a hung command is killed (with its child processes) and the run fails as `idle-timeout`.

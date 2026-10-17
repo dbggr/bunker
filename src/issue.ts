@@ -599,9 +599,19 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     let timedOut: "idle" | "step" | undefined;
     const verifyStart = Date.now();
     if (verifyOnHost) {
-      const out = await $`sh -c ${verify}`.cwd(worktree).env(env).nothrow().quiet();
-      code = out.exitCode;
-      text = out.stdout.toString() + out.stderr.toString();
+      // Own process group (setsid) so a timeout kills the whole tree, not just the shell.
+      const proc = Bun.spawn(["setsid", "sh", "-c", verify], { cwd: worktree, env, stdout: "pipe", stderr: "pipe" });
+      const timer = setTimeout(() => {
+        timedOut = "step";
+        try { process.kill(-proc.pid, "SIGKILL"); } catch { proc.kill("SIGKILL"); }
+      }, stepLimits(timeouts).stepMs);
+      try {
+        const [o, e] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+        code = proc.exitCode ?? 1;
+        text = o + e;
+      } finally {
+        clearTimeout(timer);
+      }
     } else {
       // Agent-written code: same sandbox as the agent, no GitHub tokens. stderr folded in so we can report it.
       const out = await sandbox.exec(["sh", "-c", `(${verify}) 2>&1`], { worktree, gitCommonDir, limits: stepLimits(timeouts) });
