@@ -52,6 +52,11 @@ Single prompt and --task:
   --verify-on-host           run --verify on the host instead of in the sandbox
   --merge                    auto-merge the PR once checks pass (requires --verify or .bunker/verify)
   --ci-timeout <min>         (--merge) minutes to wait for the merge (default 30)
+  --idle-timeout <min>       kill an agent or reviewer that prints nothing for this long; the step fails as
+                             idle-timeout, worktree and branch kept (default 10)
+  --completion-timeout <s>   seconds an agent may linger after its completion signal or final result before it is
+                             killed and the step counts as done, with a warning (default 60)
+  --step-timeout <min>       overall limit for setup and verify, which can be quiet for long (default 30)
 
 --issue, --queue, --watch, live view:
   Every run publishes to a bunker hub (bunker ui) if one is reachable on 127.0.0.1:4321,

@@ -26,6 +26,12 @@ Each entry is symptom, cause, fix. The run log (`.bunker/runs/<N>-<timestamp>.lo
 - **Cause**: not merged within `--ci-timeout` minutes (default 30). Checks are still running, failing, or waiting on a runner.
 - **Fix**: look at the PR's checks. Auto-merge is still armed, so GitHub may merge it later. For slow CI raise `--ci-timeout`. The worktree is kept; remove it with `git worktree remove` once the PR is dealt with.
 
+## `idle-timeout`
+
+- **Symptom**: status `idle-timeout`; the error says an agent, reviewer, setup or verify "produced no output" or "timed out".
+- **Cause**: an agent or reviewer printed nothing for `--idle-timeout` minutes (default 10), or setup/verify ran longer than `--step-timeout` minutes (default 30). The process (for a container, the container itself) was killed.
+- **Fix**: raise the limit if the step is legitimately slow; otherwise look at the run log to see where it hung. The worktree and branch are kept. Under `--watch` the issue is relabelled `bunker-failed`. An agent that finishes but doesn't exit is killed `--completion-timeout` seconds (default 60) after its completion signal or final result, and counts as done, with a warning.
+
 ## Issue relabelled `bunker-failed`
 
 - **Symptom**: `--watch` removed `bunker` from an issue, added `bunker-failed` and left a comment.
