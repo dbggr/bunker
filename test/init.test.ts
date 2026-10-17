@@ -49,6 +49,15 @@ describe("detectToolchain", () => {
 });
 
 describe("init --yes", () => {
+  test("redacts secrets in gh label create stderr", async () => {
+    const w = await bunRepo({ files: { "label-create-err.txt": "denied for token github_pat_leakyleaky123", "labels.json": JSON.stringify([{ name: "bunker" }]) } });
+    const s = scripted();
+    await runInit({ cwd: w.repo, env: w.env, yes: true, io: s.io });
+    expect(s.text()).toContain("could not create");
+    expect(s.text()).not.toContain("github_pat_leakyleaky123");
+    expect(s.text()).toContain("[REDACTED]");
+  });
+
   test("bun repo: writes setup/verify defaults, creates missing labels, changes no repo settings", async () => {
     const w = await bunRepo({ files: { "repo.json": JSON.stringify({ default_branch: "main", allow_auto_merge: false }), "labels.json": JSON.stringify([{ name: "bunker" }]) } });
     const s = scripted();
