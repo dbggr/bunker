@@ -64,15 +64,19 @@ export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues 
   }
   const head = await $`git ${gitCfg} -C ${repo} ls-remote --symref ${remote} HEAD`.env(env).nothrow().quiet();
   const defaultBranch = /^ref: refs\/heads\/(\S+)\s+HEAD$/m.exec(head.stdout.toString())?.[1] ?? "main";
-  const fetch = await $`git ${gitCfg} -C ${repo} fetch -q ${remote} ${defaultBranch}`.env(env).nothrow().quiet();
+  // A private ref, not FETCH_HEAD: other bunker processes share the repo and their fetches rewrite FETCH_HEAD.
+  const ref = `refs/bunker/fetch/audit-${crypto.randomUUID()}`;
+  const fetch = await $`git ${gitCfg} -C ${repo} fetch -q --no-write-fetch-head ${remote} ${`+refs/heads/${defaultBranch}:${ref}`}`.env(env).nothrow().quiet();
   if (fetch.exitCode !== 0) throw new Error(`could not fetch origin/${defaultBranch}:\n${fetch.stderr}`);
+  const baseSha = (await $`git -C ${repo} rev-parse ${ref}`.text()).trim();
+  await $`git -C ${repo} update-ref -d ${ref}`.nothrow().quiet();
 
   const open = await $`gh issue list --state open --limit 1000 --json number,title`.cwd(repo).env(env).nothrow().quiet();
   if (open.exitCode !== 0) throw new Error(`gh issue list failed:\n${open.stderr}`);
   const existing = new Set((JSON.parse(open.stdout.toString()) as { title: string }[]).map((i) => norm(i.title)));
 
   const worktree = join(tmpdir(), `bunker-audit-${crypto.randomUUID().slice(0, 8)}`);
-  const add = await $`git -C ${repo} worktree add -q --detach ${worktree} FETCH_HEAD`.nothrow().quiet();
+  const add = await $`git -C ${repo} worktree add -q --detach ${worktree} ${baseSha}`.nothrow().quiet();
   if (add.exitCode !== 0) throw new Error(`could not create worktree:\n${add.stderr}`);
 
   let issues: { title: string; body: string }[];
