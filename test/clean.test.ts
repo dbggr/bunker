@@ -34,6 +34,13 @@ async function setup() {
   await Bun.write(
     join(bin, "gh"),
     `#!/bin/sh
+echo "$*" >> "${root}/gh.log"
+if [ "$1 $2" = "issue list" ]; then
+  [ -f "${root}/list-fails" ] && exit 1
+  printf '['; sep=''
+  for f in "${root}"/issue-*.json; do [ -f "$f" ] || continue; grep -q CLOSED "$f" || continue; n=$(basename "$f" .json); n=\${n#issue-}; printf '%s{"number":%s}' "$sep" "$n"; sep=,; done
+  echo ']'; exit 0
+fi
 if [ "$1 $2" = "issue view" ] && [ -f "${root}/issue-$3.json" ]; then cat "${root}/issue-$3.json"; exit 0; fi
 if [ "$1 $2" = "pr list" ]; then f="${root}/pr-$(echo "$4" | tr '/' '_').json"; if [ -f "$f" ]; then cat "$f"; else echo '[]'; fi; exit 0; fi
 exit 1
@@ -297,6 +304,28 @@ describe("bunker clean", () => {
       expect(existsSync(s1)).toBe(false);
       expect(existsSync(s2)).toBe(true);
       expect(existsSync(s3)).toBe(true);
+    });
+
+    test("looks closed issues up once, not per session folder, and says so", async () => {
+      const { root, repo } = await setup();
+      await issueState(root, 1, "CLOSED");
+      for (const n of [1, 2, 3, 4]) await session(repo, n);
+      const r = await run(repo, { yes: true });
+      expect(r.out).toContain("checking 4 session folder(s)");
+      const calls = (await Bun.file(join(root, "gh.log")).text()).split("\n");
+      expect(calls.filter((l) => l.startsWith("issue view"))).toEqual([]);
+      expect(calls.filter((l) => l.startsWith("issue list")).length).toBe(1);
+      expect(existsSync(join(repo, ".bunker/sessions/1"))).toBe(false);
+      expect(existsSync(join(repo, ".bunker/sessions/2"))).toBe(true);
+    });
+
+    test("keeps every session when the closed-issue list cannot be fetched", async () => {
+      const { root, repo } = await setup();
+      await issueState(root, 1, "CLOSED");
+      await Bun.write(join(root, "list-fails"), "");
+      const s1 = await session(repo, 1);
+      await run(repo, { yes: true });
+      expect(existsSync(s1)).toBe(true);
     });
 
     test("keeps the session and log of a paused issue even if it is closed", async () => {
