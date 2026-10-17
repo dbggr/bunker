@@ -29,6 +29,8 @@ Single prompt and --task:
   --review                   implement -> review -> fix a single prompt
   --max-rounds <n>           review rounds before giving up (default 2)
   --reviewer-model <id>      model for the reviewer (default: --model)
+  --no-resume                start every implementer round (and --max-iterations pass) in a fresh agent session instead of
+                             resuming the previous one with the reviewer feedback
 
 --issue and --queue:
   --issue <n>                implement GitHub issue n and open a PR

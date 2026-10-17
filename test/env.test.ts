@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hasAuth, loadBunkerEnv, loadEnvFile } from "../src/env.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 const dirs: string[] = [];
 async function tempDir(): Promise<string> {

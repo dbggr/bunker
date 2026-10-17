@@ -1,9 +1,11 @@
 import { $ } from "bun";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { redact } from "./redact.ts";
 import { output, tailLines } from "./output.ts";
-import { emit, findStreamResult, parseClaudeStreamLine, type OnEvent, type Stage, type StreamEvent } from "./events.ts";
+import { emit, findSessionId, findStreamResult, parseClaudeStreamLine, type OnEvent, type Stage, type StreamEvent } from "./events.ts";
 export type { BunkerEvent, OnEvent } from "./events.ts";
 import baseDockerfile from "../images/base/Dockerfile" with { type: "text" };
 
@@ -12,7 +14,9 @@ export type AgentMode = "write" | "review";
 /** Turns a prompt into the command line that runs the agent. */
 export interface Agent {
   /** "review" is a read-only pass over someone else's work; "write" (default) is expected to commit. */
-  command(prompt: string, mode?: AgentMode): string[];
+  command(prompt: string, mode?: AgentMode, opts?: { resume?: string }): string[];
+  /** The id of the conversation the command just ran, from its raw stdout. Omit if the agent has no resumable sessions. */
+  sessionId?(stdout: string): string | undefined;
   /** Turns the command's raw stdout into the agent's text plus what the run cost. Omit if stdout is already the text. */
   parse?(stdout: string): { text: string; usage?: Usage };
   /** Turns one line of the command's stdout into progress events. Omit if stdout isn't a stream. */
@@ -53,6 +57,8 @@ export function formatUsage(u: Usage): string {
 
 /** Where the agent's command runs. Gets the worktree and the repo's shared .git dir. */
 export interface Sandbox {
+  /** Host directory that is the agent's `~/.claude/projects`, where its session files land. Without it nothing is resumed. */
+  readonly projectsDir?: string;
   exec(cmd: string[], ctx: { worktree: string; gitCommonDir: string; prefix?: string; onLine?: (line: string) => void }): Promise<{ code: number; stdout: string }>;
 }
 
@@ -73,10 +79,16 @@ export interface RunOptions {
   completionSignal?: string | string[];
   /** Progress events: stages, agent text and tool calls, results. */
   onEvent?: OnEvent;
+  /** Continue the previous iteration's agent session instead of starting fresh. Defaults to true. */
+  resume?: boolean;
+  /** Host directory to keep the agent's session files in (`<role>-<round>.jsonl`). Defaults to a temporary one. */
+  sessionsDir?: string;
 }
 
 export interface Iteration {
   exitCode: number;
+  /** The agent session this iteration ran in, if the agent reports one. */
+  sessionId?: string;
   /** Commits this iteration added. */
   commits: Commit[];
   usage?: Usage;
@@ -124,11 +136,13 @@ function parseClaudeJson(stdout: string): { text: string; usage?: Usage } {
 export function claudeCode(opts: { model?: string; attribution?: boolean; json?: boolean } = {}): Agent {
   return {
     ...(opts.json ? { parse: parseClaudeJson, parseLine: parseClaudeStreamLine } : {}),
-    command: (prompt, mode = "write") => [
+    ...(opts.json ? { sessionId: findSessionId } : {}),
+    command: (prompt, mode = "write", o) => [
       "claude",
       "-p",
       mode === "write" ? prompt + COMMIT_INSTRUCTION : prompt,
       "--dangerously-skip-permissions",
+      ...(o?.resume ? ["--resume", o.resume] : []),
       ...(opts.json ? ["--output-format", "stream-json", "--verbose"] : []),
       ...(opts.model ? ["--model", opts.model] : []),
       ...(opts.attribution ? [] : ["--settings", NO_ATTRIBUTION]),
@@ -166,7 +180,8 @@ async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">, pref
   const tail = decoder.decode();
   stdout += tail;
   pending += tail;
-  if (pending) out(pending);
+  // Prefixed output is interleaved with other tasks': end the last line, or the next task's runs on after it.
+  if (pending) out(prefix && !onLine ? `${pending}\n` : pending);
   return { code: await proc.exited, stdout: redact(stdout) };
 }
 
@@ -176,6 +191,10 @@ export const GH_TOKEN_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "BUNKER_GH_TOKEN"] as 
 /** Runs the agent straight on the host, in the worktree. No isolation (GitHub tokens are stripped from its env). */
 export function noSandbox(): Sandbox {
   return {
+    // Read late: the agent uses whatever HOME is current.
+    get projectsDir() {
+      return join(process.env.HOME ?? tmpdir(), ".claude", "projects");
+    },
     exec: (cmd, { worktree, prefix, onLine }) =>
       // detached: own process group, so a terminal Ctrl-C reaches only bunker, which lets the step finish.
       // Explicit env: Bun.spawn otherwise passes the startup environment, dropping
@@ -267,7 +286,17 @@ function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions):
   const env = opts.env ?? ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
   // runAll() calls exec once per task at the same time; share one image build per repo.
   const images = new Map<string, Promise<string>>();
+  // The container is throwaway; its claude session files live in a host dir mounted over ~/.claude/projects.
+  let store: string | undefined;
   return {
+    get projectsDir() {
+      if (!store) {
+        store = mkdtempSync(join(tmpdir(), "bunker-claude-projects-"));
+        const dir = store;
+        process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+      }
+      return store;
+    },
     async exec(cmd, { worktree, gitCommonDir, prefix, onLine }) {
       const [entrypoint, ...args] = cmd;
       if (!entrypoint) throw new Error("empty agent command");
@@ -288,6 +317,7 @@ function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions):
         "-e", "HOME=/tmp",
         ...env.flatMap((name) => ["-e", name]), // name only: value comes from our env, never argv
         ...identity,
+        "-v", `${this.projectsDir}:/tmp/.claude/projects`,
         "-v", `${worktree}:${worktree}`,
         "-v", `${gitCommonDir}:${gitCommonDir}`,
         "-w", worktree,
@@ -337,10 +367,23 @@ export async function runSetup(
   return { cmd, ...out };
 }
 
+let worktreeAdminTail: Promise<unknown> = Promise.resolve();
+
+/**
+ * Runs `fn` (git worktree add/remove, branch -D) after this process's earlier such commands. They read every worktree's
+ * admin dir under .git/worktrees, so one running beside a `worktree add` can read it half-written and fail
+ * ("failed to read .../commondir"), as parallel queue slots did.
+ */
+export function worktreeAdmin<T>(fn: () => Promise<T>): Promise<T> {
+  const run = worktreeAdminTail.then(fn);
+  worktreeAdminTail = run.catch(() => {});
+  return run;
+}
+
 async function addWorktree(cwd: string, base: string): Promise<Worktree> {
   const id = crypto.randomUUID().slice(0, 8);
   const wt = { branch: `bunker/${id}`, path: join(tmpdir(), `bunker-${id}`) };
-  await $`git -C ${cwd} worktree add -q -b ${wt.branch} ${wt.path} ${base}`;
+  await worktreeAdmin(() => $`git -C ${cwd} worktree add -q -b ${wt.branch} ${wt.path} ${base}`);
   return wt;
 }
 
@@ -379,6 +422,85 @@ export class AgentFailure extends Error {
   }
 }
 
+interface Session {
+  id: string;
+  /** Saved copy on the host. */
+  file: string;
+}
+
+/** Saves session `id` from the sandbox's store to `dest`, plus a redacted copy next to it. */
+async function captureSession(sandbox: Sandbox, id: string, dest: string): Promise<Session | undefined> {
+  const root = sandbox.projectsDir;
+  if (!root) return undefined;
+  try {
+    for (const dir of await readdir(root)) {
+      const file = Bun.file(join(root, dir, `${id}.jsonl`));
+      if (!(await file.exists())) continue;
+      const text = await file.text();
+      await mkdir(dirname(dest), { recursive: true });
+      await Bun.write(dest, text);
+      await Bun.write(dest.replace(/\.jsonl$/, ".redacted.jsonl"), redact(text));
+      return { id, file: dest };
+    }
+  } catch {}
+  return undefined;
+}
+
+/** Puts a saved session back where claude (running in `worktree`) looks for it. */
+async function restoreSession(sandbox: Sandbox, worktree: string, session: Session): Promise<void> {
+  const root = sandbox.projectsDir;
+  if (!root) throw new Error("sandbox has no session store");
+  const dir = join(root, worktree.replace(/[^a-zA-Z0-9]/g, "-"));
+  const target = join(dir, `${session.id}.jsonl`);
+  if (await Bun.file(target).exists()) return;
+  await mkdir(dir, { recursive: true });
+  await Bun.write(target, Bun.file(session.file));
+}
+
+/**
+ * Runs one agent command. With `prev`, first restores that session and resumes it with `resumePrompt`;
+ * if that can't be done or the resumed run fails, says so and runs `prompt` in a fresh session instead.
+ * The session the final run used is saved to `dest`.
+ */
+async function agentStep(o: {
+  agent: Agent;
+  sandbox: Sandbox;
+  mode: AgentMode;
+  prompt: string;
+  resumePrompt?: string;
+  prev?: Session | undefined;
+  ctx: Parameters<Sandbox["exec"]>[1];
+  target: Pick<EventTarget, "onEvent" | "task" | "round" | "role">;
+  dest: string;
+}): Promise<{ code: number; stdout: string; session?: Session }> {
+  let res: { code: number; stdout: string } | undefined;
+  if (o.prev) {
+    const fallback = (why: string) =>
+      emit(o.target.onEvent, { type: "note", ...(o.target.task !== undefined ? { task: o.target.task } : {}), ...(o.target.round !== undefined ? { round: o.target.round } : {}), ...(o.target.role ? { role: o.target.role } : {}), text: `could not resume session ${o.prev!.id} (${why}); starting a fresh session` });
+    try {
+      await restoreSession(o.sandbox, o.ctx.worktree, o.prev);
+      res = await o.sandbox.exec(o.agent.command(o.resumePrompt ?? o.prompt, o.mode, { resume: o.prev.id }), o.ctx);
+      if (res.code !== 0) {
+        fallback(`exit ${res.code}`);
+        res = undefined;
+      }
+    } catch (e) {
+      fallback(redact(e instanceof Error ? e.message : String(e)));
+    }
+  }
+  res ??= await o.sandbox.exec(o.agent.command(o.prompt, o.mode), o.ctx);
+  const id = o.agent.sessionId?.(res.stdout);
+  const session = id ? await captureSession(o.sandbox, id, o.dest) : undefined;
+  return { ...res, ...(session ? { session } : {}) };
+}
+
+/** Keeps sessions in `dir`, or in a temp dir that `done()` removes. */
+async function sessionStore(dir?: string): Promise<{ dir: string; done: () => Promise<void> }> {
+  if (dir) return { dir, done: async () => {} };
+  const tmp = await mkdtemp(join(tmpdir(), "bunker-sessions-"));
+  return { dir: tmp, done: () => rm(tmp, { recursive: true, force: true }) };
+}
+
 interface AgentOutcome {
   commits: Commit[];
   iterations: Iteration[];
@@ -396,32 +518,41 @@ async function runAgent(
   base: string,
   gitCommonDir: string,
   wt: Worktree,
-  { prompt, agent, sandbox, maxIterations = 1, completionSignal = DEFAULT_SIGNAL, onEvent }: Omit<RunOptions, "cwd">,
+  { prompt, agent, sandbox, maxIterations = 1, completionSignal = DEFAULT_SIGNAL, onEvent, resume = true, sessionsDir }: Omit<RunOptions, "cwd">,
   prefix?: string,
   task?: number,
 ): Promise<AgentOutcome> {
   const signals = [completionSignal].flat();
   const iterations: Iteration[] = [];
   let commits: Commit[] = [];
+  const store = await sessionStore(sessionsDir);
+  let prev: Session | undefined;
   try {
     for (let i = 0; i < maxIterations; i++) {
       const target = { onEvent, task, round: i + 1, role: "implementer" as const };
       emitStage(target, "implement");
       const onLine = lineHook(agent, target);
-      const { code, stdout } = await sandbox.exec(agent.command(prompt), { worktree: wt.path, gitCommonDir, ...(prefix ? { prefix } : {}), ...(onLine ? { onLine } : {}) });
+      const step = await agentStep({
+        agent, sandbox, mode: "write", prompt, prev: resume ? prev : undefined, target,
+        ctx: { worktree: wt.path, gitCommonDir, ...(prefix ? { prefix } : {}), ...(onLine ? { onLine } : {}) },
+        dest: join(store.dir, `implementer-${i + 1}.jsonl`),
+      });
+      const { code, stdout } = step;
+      prev = step.session;
       const { text, usage } = interpret(agent, stdout);
       if (code !== 0) {
         throw new AgentFailure(`agent exited with ${code}; work kept on ${wt.branch}`, sumUsage([...iterations.map((i) => i.usage), usage]));
       }
       const total = await commitsBetween(cwd, base, wt.branch);
-      iterations.push({ exitCode: code, commits: total.slice(commits.length), ...(usage ? { usage } : {}) });
+      iterations.push({ exitCode: code, commits: total.slice(commits.length), ...(step.session ? { sessionId: step.session.id } : {}), ...(usage ? { usage } : {}) });
       commits = total;
       const matched = signals.find((s) => text.includes(s));
       if (matched) return { commits, iterations, completionSignal: matched, ...totalUsage(iterations) };
     }
     return { commits, iterations, ...totalUsage(iterations) };
   } finally {
-    await $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet();
+    await store.done();
+    await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
   }
 }
 
@@ -464,6 +595,8 @@ export interface RunAllOptions {
   maxIterations?: number;
   completionSignal?: string | string[];
   onEvent?: OnEvent;
+  /** As in run(). */
+  resume?: boolean;
 }
 
 export interface TaskResult {
@@ -533,9 +666,15 @@ export interface ReviewOptions {
   onEvent?: OnEvent;
   /** Every raw stdout line of a streaming agent, redacted. */
   onRaw?: (line: string) => void;
+  /** Resume the implementer's session across rounds (reviewers always start fresh). Defaults to true. */
+  resume?: boolean;
+  /** Host directory to keep agent session files in (`<role>-<round>.jsonl`). Defaults to a temporary one. */
+  sessionsDir?: string;
 }
 
 export interface ReviewRound {
+  /** The implementer's agent session this round, if the agent reports one. */
+  sessionId?: string;
   /** Commits the implementer added this round. */
   commits: Commit[];
   approved: boolean;
@@ -589,6 +728,8 @@ export async function review({
   setup,
   onEvent,
   onRaw,
+  resume = true,
+  sessionsDir,
 }: ReviewOptions): Promise<ReviewResult> {
   const { base, gitCommonDir } = await repoInfo(cwd);
   const wt = await addWorktree(cwd, base);
@@ -598,6 +739,8 @@ export async function review({
   const usages: (Usage | undefined)[] = [];
   let status: ReviewResult["status"] = "rejected";
   let error: string | undefined;
+  const store = await sessionStore(sessionsDir);
+  let prev: Session | undefined;
   try {
     emitStage({ onEvent }, "setup");
     const prep = await runSetup(sandbox, ctx, setup);
@@ -608,7 +751,14 @@ export async function review({
       const implTarget = { onEvent, onRaw, round: i + 1, role: "implementer" as const };
       emitStage(implTarget, "implement");
       const implHook = lineHook(agent, implTarget);
-      const impl = await sandbox.exec(agent.command(task, "write"), implHook ? { ...ctx, onLine: implHook } : ctx);
+      const impl = await agentStep({
+        agent, sandbox, mode: "write", prompt: task, target: implTarget,
+        ...(feedback !== undefined ? { resumePrompt: `A reviewer requested changes:\n${feedback}` } : {}),
+        prev: resume ? prev : undefined,
+        ctx: implHook ? { ...ctx, onLine: implHook } : ctx,
+        dest: join(store.dir, `implementer-${i + 1}.jsonl`),
+      });
+      prev = impl.session;
       const implOut = interpret(agent, impl.stdout);
       usages.push(implOut.usage);
       if (impl.code !== 0) throw new Error(`agent exited with ${impl.code}; work kept on ${wt.branch}`);
@@ -621,7 +771,12 @@ export async function review({
       const revTarget = { onEvent, onRaw, round: i + 1, role: "reviewer" as const };
       emitStage(revTarget, "review");
       const revHook = lineHook(reviewer, revTarget);
-      const rev = await sandbox.exec(reviewer.command(reviewerPrompt(prompt, diff, approveSignal, reviewerInstruction), "review"), revHook ? { ...ctx, onLine: revHook } : ctx);
+      // Reviewers never resume: each review is independent.
+      const rev = await agentStep({
+        agent: reviewer, sandbox, mode: "review", prompt: reviewerPrompt(prompt, diff, approveSignal, reviewerInstruction), target: revTarget,
+        ctx: revHook ? { ...ctx, onLine: revHook } : ctx,
+        dest: join(store.dir, `reviewer-${i + 1}.jsonl`),
+      });
       // Only the implementer's commits survive, whatever the reviewer did.
       await $`git -C ${wt.path} reset -q --hard ${head}`.quiet();
       await $`git -C ${wt.path} clean -qfd`.quiet();
@@ -631,7 +786,7 @@ export async function review({
 
       const approved = revOut.text.includes(approveSignal);
       const usage = sumUsage([implOut.usage, revOut.usage]);
-      rounds.push({ commits: added, approved, feedback: revOut.text, output: implOut.text, ...(usage ? { usage } : {}) });
+      rounds.push({ ...(impl.session ? { sessionId: impl.session.id } : {}), commits: added, approved, feedback: revOut.text, output: implOut.text, ...(usage ? { usage } : {}) });
       if (approved) {
         status = "approved";
         break;
@@ -641,7 +796,8 @@ export async function review({
     status = "failed";
     error = redact(e instanceof Error ? e.message : String(e));
   } finally {
-    await $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet();
+    await store.done();
+    await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
   }
   if (status === "approved") {
     error = await mergeBack(cwd, wt.branch, commits);

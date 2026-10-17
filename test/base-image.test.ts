@@ -1,8 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, test, setDefaultTimeout } from "bun:test";
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBaseImage } from "../src/index.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 test("buildBaseImage pipes the embedded Dockerfile to `docker build -` on stdin", async () => {
   const dir = await mkdtemp(join(tmpdir(), "bunker-fakedocker-"));

@@ -1,5 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { redact } from "../src/redact.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 const VARS = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "BUNKER_GH_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const orig = Object.fromEntries(VARS.map((k) => [k, process.env[k]]));

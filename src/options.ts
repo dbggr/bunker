@@ -9,6 +9,7 @@ export const options = {
   task: { type: "string", multiple: true },
   "max-iterations": { type: "string" },
   review: { type: "boolean", default: false },
+  "no-resume": { type: "boolean", default: false },
   "max-rounds": { type: "string" },
   "reviewer-model": { type: "string" },
   issue: { type: "string" },
