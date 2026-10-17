@@ -62,7 +62,7 @@ async function setup(issues: [number, string, string][]) {
     join(bin, "gh"),
     `#!/bin/sh
 echo "$*" >> "${root}/gh.log"
-if [ "$1" = "api" ]; then case "$*" in *"/events"*) [ -f "${root}/events-fail" ] && { echo "api down" >&2; exit 1; }; echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
+if [ "$1" = "api" ]; then case "$*" in *created_at*) n=$(echo "$*" | sed 's|.*issues/\\([0-9]*\\)/events.*|\\1|'); [ -f "${root}/labeled-at-$n" ] && cat "${root}/labeled-at-$n"; exit 0;; *"/events"*) [ -f "${root}/events-fail" ] && { echo "api down" >&2; exit 1; }; echo owner; exit 0;; *"/permission"*) if [ -f "${root}/perm" ]; then cat "${root}/perm"; else echo admin; fi; exit 0;; esac; fi
 if [ "$1 $2" = "issue list" ]; then
   printf '['; sep=''
   hide=0; case "$*" in *"--label bunker --state"*) [ -f "${root}/hide-2" ] && hide=$(cat "${root}/hide-2");; esac
@@ -371,10 +371,56 @@ describe("runWatch() next pass", () => {
     const s = await runWatch({ ...long, cwd: repo, agent: fakeAgent(), forMs: 1500, log: (l) => lines.push(l) });
     expect(s.merged).toBe(0);
     expect(s.failed).toBe(0);
-    const calls = (await Bun.file(join(root, "gh.log")).text()).split("\n").filter((l) => /issues\/1\/events/.test(l));
+    const calls = (await Bun.file(join(root, "gh.log")).text()).split("\n").filter((l) => /issues\/1\/events/.test(l) && !/created_at/.test(l));
     expect(calls).toHaveLength(1);
     expect(lines.filter((l) => /next pass now/.test(l))).toHaveLength(0); // countWaiting no longer counts it
     expect(lines.find((l) => /pass 1 /.test(l))).toMatch(/next pass in 10 min/);
+  });
+});
+
+describe("runWatch() relabel of a failed issue", () => {
+  /** Runs until pass 1 ends (issue 1 fails), then applies `after`, and runs until `stopAt` passes. */
+  async function relabelRun(labeledAt: string | undefined, perm?: string) {
+    const { repo, root } = await setup(three.slice(0, 1));
+    const failing = ["First"];
+    const prompts: string[] = [];
+    const lines: string[] = [];
+    const ctl = new AbortController();
+    const s = await runWatch({
+      ...base, cwd: repo, agent: fakeAgent({ failing, prompts }), signal: ctl.signal,
+      log: (l) => {
+        lines.push(l);
+        if (/pass 1 /.test(l)) {
+          failing.length = 0;
+          if (labeledAt) Bun.write(join(root, "labeled-at-1"), labeledAt + "\n");
+          if (perm) Bun.write(join(root, "perm"), perm);
+          Bun.write(join(root, "q", "1.json"), JSON.stringify({ number: 1, title: "First", createdAt: "2026-01-01T00:00:00Z" }));
+        }
+        if (/pass 5 /.test(l)) ctl.abort();
+      },
+    });
+    return { s, prompts, lines, root };
+  }
+
+  test("relabelled after the failure → retried in the same watcher", async () => {
+    const { s, lines } = await relabelRun("2999-01-01T00:00:00Z");
+    expect(lines).toContain("bunker: #1 relabelled; retrying");
+    expect(s.merged).toBe(1);
+    expect(s.failed).toBe(1);
+  });
+
+  test("label still present from before the failure (failed relabel) → still skipped", async () => {
+    const { s, prompts, lines } = await relabelRun("2020-01-01T00:00:00Z");
+    expect(lines.some((l) => /relabelled/.test(l))).toBe(false);
+    expect(prompts).toHaveLength(1);
+    expect(s.merged).toBe(0);
+  });
+
+  test("relabel by a non-maintainer → refused as before", async () => {
+    const { s, prompts, root } = await relabelRun("2999-01-01T00:00:00Z", "read");
+    expect(prompts).toHaveLength(1);
+    expect(s.merged).toBe(0);
+    expect(await Bun.file(join(root, "comments.log")).text()).toMatch(/only maintainers can queue bunker work/);
   });
 });
 

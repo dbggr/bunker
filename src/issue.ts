@@ -791,10 +791,10 @@ async function listQueued(cwd: string, env: Env): Promise<Queued[]> {
 }
 
 /** Open `bunker` issues that could start now: not in `skip`, not waiting on an open `Blocked by #N` issue. */
-export async function countWaiting(cwd: string, env: Env, skip: (issue: number) => boolean = () => false): Promise<number> {
+export async function countWaiting(cwd: string, env: Env, skip: (issue: number) => boolean | Promise<boolean> = () => false): Promise<number> {
   let n = 0;
   for (const q of await listQueued(cwd, env)) {
-    if (skip(q.number)) continue;
+    if (await skip(q.number)) continue;
     const view = await $`gh issue view ${q.number} --json state,labels,body,comments`.cwd(cwd).env(env).nothrow().quiet();
     if (view.exitCode !== 0) continue;
     let live: Pick<IssueInfo, "state" | "labels" | "body" | "comments">;
@@ -827,7 +827,7 @@ export interface QueueOptions extends Omit<IssueOptions, "issue"> {
   /** Checked before each issue; true ends the pass without starting another. */
   shouldStop?: () => boolean;
   /** Issues for which this returns true are not started. */
-  skip?: (issue: number) => boolean;
+  skip?: (issue: number) => boolean | Promise<boolean>;
   /** Re-list between issues so a newly labelled bug or `priority:high` issue runs next. For long-lived callers (`--watch`). */
   relist?: boolean;
   /** Called after each issue run (not before the next one starts when `parallel` > 1). */
@@ -965,7 +965,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
     if (stop || counted >= limit || shouldStop?.()) break;
     const q = await next();
     if (!q) break;
-    if (skip?.(q.number) || active.has(q.number)) continue;
+    if (active.has(q.number) || (await skip?.(q.number))) continue;
     // The list lags label changes by seconds, so confirm the live state before working it.
     const view = await $`gh issue view ${q.number} --json state,labels,body,comments`.cwd(cwd).env(env).nothrow().quiet();
     if (view.exitCode !== 0) {
