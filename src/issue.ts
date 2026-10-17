@@ -55,7 +55,7 @@ export interface IssueOptions {
 }
 
 export interface IssueResult {
-  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked";
+  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked" | "bad-output";
   /** With status `blocked`: the `discovered` issue filed for what this one waits on. */
   blockedBy?: { number: number; title: string };
   branch: string;
@@ -80,10 +80,34 @@ const MAX_SLUG = 40;
 const VERIFY_TAIL = 2000;
 
 const ISSUE_CONVENTION =
-  "For problems you find outside this task's scope, do not fix them; instead print " +
-  '<issue title="short title">one-paragraph body</issue> for each one. ' +
-  "If this issue cannot be done until something else is done, do not work around it: instead print " +
-  '<blocked-by title="short title">why it blocks, plus acceptance criteria</blocked-by> and stop.';
+  "For problems you find outside this task's scope, do not fix them; instead report them. " +
+  "If this issue cannot be done until something else is done, do not work around it: report what blocks it and stop. " +
+  'Report by ending your answer with <report>{"issues": [{"title": "short title", "body": "one-paragraph body"}], ' +
+  '"blocked_by": [{"title": "short title", "body": "why it blocks, plus acceptance criteria"}]}</report> (valid JSON; both lists optional, omit the whole block if there is nothing to report; only the last <report> counts).';
+
+const REVIEWER_CONVENTION =
+  "Out-of-scope problems you find go in the verdict's \"issues\" (do not ask for them to be fixed). " +
+  'If this issue cannot be done until something else is done, put that in "blocked_by".';
+
+/** Follow-ups from the agents' structured output; the old tag scan applies only to a text whose structured block is absent or invalid. */
+function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: string; body: string }[]; blocker?: { title: string; body: string } } {
+  const real = (f: { title: string }) => !isPlaceholder(f.title.trim());
+  const seen = new Map<string, string>();
+  const blocked: { title: string; body: string }[] = [];
+  for (const r of rounds) {
+    const sources = [
+      { structured: r.report, text: r.output },
+      { structured: r.verdict, text: r.feedback },
+    ];
+    for (const { structured, text } of sources) {
+      const issues = structured ? structured.issues : parseIssueBlocks(text);
+      const blocks = structured ? structured.blocked_by : [parseBlockedBy(text)].filter((b) => b !== undefined);
+      for (const i of issues) if (real(i) && !seen.has(i.title.trim())) seen.set(i.title.trim(), i.body.trim());
+      for (const b of blocks) if (real(b)) blocked.push({ title: b.title.trim(), body: b.body.trim() });
+    }
+  }
+  return { issues: [...seen].map(([title, body]) => ({ title, body })), ...(blocked[0] ? { blocker: blocked[0] } : {}) };
+}
 
 /**
  * `text` with fenced code and inline code spans blanked out (same length, so offsets line up with the original):
@@ -389,7 +413,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     "Use Conventional Commits for your commit messages, write tests first, and make the repo's tests pass.\n\n" +
     ISSUE_CONVENTION;
   log("raw agent events (stream-json lines follow, interleaved with the sections below)");
-  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), setup, reviewerInstruction: ISSUE_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
+  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), setup, reviewerInstruction: REVIEWER_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
   spent.usage = result.usage;
 
   for (const [i, r] of result.rounds.entries()) {
@@ -399,7 +423,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   if (result.error) log("review error", result.error);
 
   // Follow-ups the agents found: filed for human triage, never queued.
-  const blocks = parseIssueBlocks(result.rounds.flatMap((r) => [r.output, r.feedback]).join("\n"));
+  const { issues: blocks, blocker } = collectFollowUps(result.rounds);
   for (const b of blocks) {
     const body = `${b.body}\n\nFound while working on #${number}.`;
     const created = await $`gh issue create --label discovered --title ${b.title} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
@@ -411,7 +435,6 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     filed.push({ number: Number.isInteger(n) ? n : 0, title: b.title });
   }
   // The issue can't be done yet: file what it waits on, park it, and leave nothing behind.
-  const blocker = parseBlockedBy(result.rounds.flatMap((r) => [r.output, r.feedback]).join("\n"));
   if (blocker) {
     const created = await $`gh issue create --label discovered --title ${blocker.title} --body ${`${blocker.body}\n\nBlocks #${number}.`}`.cwd(cwd).env(env).nothrow().quiet();
     const m = created.exitCode === 0 ? /\/issues\/(\d+)/.exec(created.stdout.toString()) : null;

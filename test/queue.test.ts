@@ -162,8 +162,8 @@ describe("filing discovered issues", () => {
     expect(log.match(/--label\ndiscovered/g)?.length).toBe(2);
     expect(log).not.toMatch(/bunker/);
     expect(log).toContain("first\n\nFound while working on #7.");
-    expect(prompts.some((p) => p.startsWith("REVIEW:") && p.includes("<issue title="))).toBe(true);
-    expect(prompts[0]).toContain("<issue title=");
+    expect(prompts.some((p) => p.startsWith("REVIEW:") && p.includes("<verdict>"))).toBe(true);
+    expect(prompts[0]).toContain("<report>");
   });
 });
 
@@ -211,7 +211,7 @@ describe("runQueue()", () => {
 
   test("with merge: stops at the first non-merged outcome", async () => {
     const { repo } = await setup(issues, "ff");
-    const rs = await runQueue({ cwd: repo, agent: fakeAgent("nope"), sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10 });
+    const rs = await runQueue({ cwd: repo, agent: fakeAgent('<verdict>{"approved":false,"required_changes":["nope"]}</verdict>'), sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "rejected"]]);
   });
 
@@ -411,5 +411,28 @@ describe("blocked issues", () => {
     await Bun.write(join(root, "blocked-list.json"), JSON.stringify([{ number: 1, title: "First", createdAt: "2026-01-01T00:00:00Z" }]));
     await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), listRetryMs: 10, limit: 1 });
     expect(await Bun.file(join(root, "edits.log")).exists()).toBe(false);
+  });
+});
+
+describe("structured follow-ups", () => {
+  test("verdict and report issues are filed with bodies intact; quoted example ignored", async () => {
+    const { repo, createLog } = await setup([[7, "Add feature", "2026-01-01T00:00:00Z"]]);
+    const verdict = `e.g. <verdict>{"approved":false,"issues":[{"title":"Quoted","body":"no"}]}</verdict>\n<verdict>{"approved":true,"issues":[{"title":"Rev found","body":"see \`rev.ts\` and \`x\`"}]}</verdict>`;
+    const report = `<report>{"issues":[{"title":"Impl found","body":"use \`--flag\`"}]}</report>`;
+    const r = await runIssue({ cwd: repo, issue: 7, sandbox: noSandbox(), agent: fakeAgent(verdict, report) });
+    expect(r.status).toBe("pr-opened");
+    expect(r.filed.map((f) => f.title)).toEqual(["Impl found", "Rev found"]);
+    const log = await Bun.file(createLog).text();
+    expect(log).toContain("use `--flag`\n\nFound while working on #7.");
+    expect(log).toContain("see `rev.ts` and `x`");
+    expect(log).not.toContain("Quoted");
+  });
+
+  test("a structured blocked_by parks the issue", async () => {
+    const { repo } = await setup([[7, "Add feature", "2026-01-01T00:00:00Z"]]);
+    const report = `<report>{"blocked_by":[{"title":"Need the thing","body":"Accept: \`thing\` exists."}]}</report>`;
+    const r = await runIssue({ cwd: repo, issue: 7, sandbox: noSandbox(), agent: fakeAgent(APPROVE, report) });
+    expect(r.status).toBe("blocked");
+    expect(r.blockedBy?.title).toBe("Need the thing");
   });
 });

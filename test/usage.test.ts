@@ -64,12 +64,12 @@ describe("usage totals", () => {
         const out = json("impl", 1, 100);
         return `N=$(git rev-list --count HEAD); echo $N > f$N.txt && git add . && git commit -qm "impl $N"; echo '${out}'`;
       }
-      const out = ++reviews === 1 ? json("fix it", 0.5, 50) : json("<review>APPROVE</review>", 0.5, 50);
+      const out = ++reviews === 1 ? json('<verdict>{"approved":false,"required_changes":["fix it"]}</verdict>', 0.5, 50) : json("<review>APPROVE</review>", 0.5, 50);
       return `echo '${out}'`;
     });
     const r = await review({ cwd: repo, prompt: "do it", agent, sandbox: noSandbox() });
     expect(r.status).toBe("approved");
-    expect(r.rounds[0]!.feedback).toBe("fix it");
+    expect(r.rounds[0]!.feedback).toContain("fix it");
     expect(r.usage?.costUsd).toBeCloseTo(3);
     expect(r.usage?.durationMs).toBe(300);
   });
