@@ -281,6 +281,13 @@ describe("runWatch()", () => {
     expect(s.merged).toBe(1);
   });
 
+  test("when --for expires during a pass, that pass's summary is still logged", async () => {
+    const { repo } = await setup(three);
+    const lines: string[] = [];
+    await runWatch({ ...base, cwd: repo, agent: fakeAgent({ slow: 1 }), forMs: 300, log: (l) => lines.push(l) });
+    expect(lines.some((l) => /pass 1 · 1 merged · stopping · /.test(l))).toBe(true);
+  });
+
   test("a live lock refuses a second watcher; a stale lock is taken over", async () => {
     const { repo } = await setup([]);
     await Bun.write(join(repo, ".bunker", "watch.lock"), String(process.pid));
