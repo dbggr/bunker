@@ -154,7 +154,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     }
   };
 
-  /** Issues this watcher already gave up on; a failed relabel must not let one be retried. */
+  /** Issues this watcher gave up on (a failed relabel must not let one be retried) or found already in progress (an open PR); skipped for the rest of the run. */
   const handled = new Set<number>();
   let labelReady = false;
   const markFailed = async (e: QueueEntry) => {
@@ -214,7 +214,9 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
           } else if (e.status === "merged") {
             merged++;
             summary.merged++;
-          } else if (e.status !== "blocked" && e.status !== "already-in-progress") {
+          } else if (e.status === "already-in-progress") {
+            handled.add(e.issue);
+          } else if (e.status !== "blocked") {
             summary.failed++;
             await markFailed(e);
           }

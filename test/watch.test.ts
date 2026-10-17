@@ -74,6 +74,7 @@ if [ "$1 $2" = "issue view" ]; then cat "${root}/issue-$3.json"; exit 0; fi
 if [ "$1 $2" = "issue edit" ] && [ -f "${root}/edit-fails" ]; then echo "network down" >&2; exit 1; fi
 if [ "$1 $2" = "issue edit" ]; then rm -f "${root}/q/$3.json"; exit 0; fi
 if [ "$1 $2" = "issue comment" ]; then shift 3; echo "COMMENT: $*" >> "${root}/comments.log"; exit 0; fi
+if [ "$1 $2" = "pr list" ] && [ -f "${root}/prlist.json" ]; then cat "${root}/prlist.json"; exit 0; fi
 if [ "$1 $2" = "label create" ]; then exit 0; fi
 if [ "$1 $2" = "issue create" ]; then echo "https://github.com/o/r/issues/100"; exit 0; fi
 if [ "$1 $2" = "pr create" ]; then echo "https://github.com/o/r/pull/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"; exit 0; fi
@@ -339,6 +340,16 @@ describe("runWatch() next pass", () => {
     const s = await runWatch({ ...long, cwd: repo, agent: fakeAgent(), forMs: 600, log: (l) => lines.push(l) });
     expect(s.passes).toBe(1);
     expect(lines.find((l) => /pass 1 /.test(l))).toMatch(/next pass in 10 min/);
+  });
+
+  test("an already-in-progress issue is not re-attempted on later passes", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    await $`git -C ${repo} push -q origin main:refs/heads/feature/1-first`;
+    await Bun.write(join(root, "prlist.json"), JSON.stringify([{ url: "https://github.com/o/r/pull/55" }]));
+    const ctl = new AbortController();
+    await runWatch({ ...base, cwd: repo, agent: fakeAgent(), signal: ctl.signal, log: (l) => { if (/pass 4 /.test(l)) ctl.abort(); } });
+    const calls = (await Bun.file(join(root, "gh.log")).text()).split("\n").filter((l) => l.startsWith("pr list"));
+    expect(calls).toHaveLength(1);
   });
 
   test("a queue holding only blocked issues sleeps and does not spin", async () => {
