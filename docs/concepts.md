@@ -17,6 +17,15 @@ Images come in two layers:
 
 An implementer agent works from the issue (title, body and trusted comments). A reviewer agent then sees the full diff and either approves or lists required changes. Anything the reviewer changes is discarded. On changes requested, the implementer runs again with the feedback. This repeats for up to `--max-rounds` rounds (default 2). Not approved: nothing is pushed. The implementer resumes its own Claude session each round (the feedback is the new prompt) and across `--max-iterations`; reviewers always start fresh, and `--no-resume` turns it off. Session files are kept in `.bunker/sessions/<issue>/` (gitignored; `*.redacted.jsonl` copies for sharing). If a resume fails, bunker falls back to a fresh session.
 
+## Prompt templates
+
+The prompt for an issue comes from a template. A repo overrides the built-in one with `.bunker/prompts/issue.md` (read from the worktree, so it is whatever the base commit has). Two things are expanded, in one pass over the template:
+
+- `{{KEY}}` is replaced by a value. Built-ins: `ISSUE_NUMBER`, `ISSUE_TITLE`, `BRANCH`, `REPO`, `BASE`, plus `ISSUE` (the fenced issue title and body), `COMMENTS` (trusted comments) and `CONVENTION` (the follow-up reporting instructions). An unknown key is an error and fails the run.
+- `` !`cmd` `` is replaced by the output of `cmd`, run with bash on the host, in the worktree, with a 30 second timeout. It gets the isolated env: no GitHub or Claude tokens. A command that fails or times out fails the run.
+
+Only the template is ever expanded. Issue text and comments are substituted as values after the template is scanned and are never re-expanded, and command output is not re-expanded either, so `{{X}}` or `` !`id` `` in an issue stays literal. Commands run only from repo-owned prompt files, never from issue text or agent output. Treat `.bunker/prompts/` like `.bunker/setup`: it runs code on your host.
+
 ## Verify in the sandbox
 
 After approval, `.bunker/verify` (or `--verify "<cmd>"`) runs in the worktree inside the sandbox, after `.bunker/setup`. A failure stops the run before anything is pushed. `--verify-on-host` opts out; see [security.md](security.md).
