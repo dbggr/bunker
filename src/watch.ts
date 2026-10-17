@@ -11,7 +11,7 @@ import { createStatusRecorder } from "./status.ts";
 import pkg from "../package.json" with { type: "json" };
 import { runAudit } from "./audit.ts";
 import { runTriage } from "./triage.ts";
-import type { Agent } from "./index.ts";
+import type { Agent } from "./agents/agent.ts";
 import { countWaiting, runQueue, type QueueEntry, type QueueOptions } from "./issue.ts";
 import { latestBunkerLabeledAt } from "./labeler.ts";
 import { noNotify, type Notify } from "./core/notify.ts";
