@@ -25,6 +25,8 @@ const HOST = "127.0.0.1";
 export const DEFAULT_PORT = 4321;
 /** Most events the hub remembers per repo for late-joining pages. */
 export const HISTORY_LIMIT = 2000;
+/** Most distinct repos the hub keeps history for; the least recently active is evicted first. */
+export const REPO_LIMIT = 100;
 export const TOKEN_PATH = join(homedir(), ".config", "bunker", "ui.token");
 
 /** Redacts every string field of an event. */
@@ -77,7 +79,7 @@ const proof = (token: string, nonce: string) => createHmac("sha256", token).upda
  * The shared live view. Always binds to loopback; there is no option to change that.
  * The page and socket are read-only; the one write is POST /publish, which needs the token.
  */
-export function startHub({ port = DEFAULT_PORT, token, historyLimit = HISTORY_LIMIT }: { port?: number; token: string; historyLimit?: number }): Hub {
+export function startHub({ port = DEFAULT_PORT, token, historyLimit = HISTORY_LIMIT, repoLimit = REPO_LIMIT }: { port?: number; token: string; historyLimit?: number; repoLimit?: number }): Hub {
   // Replayed to late clients; capped per repo so one busy repo can't evict the rest.
   const history = new Map<string, { seq: number; msg: string }[]>();
   let seq = 0;
@@ -108,7 +110,10 @@ export function startHub({ port = DEFAULT_PORT, token, historyLimit = HISTORY_LI
         const repo = redact(body.repo);
         const msg = JSON.stringify({ repo, event: clean(body.event) });
         const list = history.get(repo) ?? [];
+        // Re-insert so Map order runs from least to most recently active.
+        history.delete(repo);
         history.set(repo, list);
+        while (history.size > repoLimit) history.delete(history.keys().next().value!);
         list.push({ seq: seq++, msg });
         if (list.length > historyLimit) list.splice(0, list.length - historyLimit);
         server.publish("events", msg);
