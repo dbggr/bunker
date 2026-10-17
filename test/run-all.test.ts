@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { output } from "../src/output.ts";
 import { noSandbox, runAll, type Agent } from "../src/index.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 const dirs: string[] = [];
 async function tempDir(): Promise<string> {
@@ -132,5 +134,21 @@ describe("runAll() live output", () => {
     });
     const lines = written.join("").split("\n").filter(Boolean).sort();
     expect(lines).toEqual(["[0] one", "[0] two", "[1] tail"]);
+  });
+
+  test("a task's last line without a newline still ends its line, so another task's output doesn't run on", async () => {
+    const repo = await makeRepo();
+    const marker = join(await tempDir(), "tail-printed");
+    const written: string[] = [];
+    output.verbose = true;
+    output.write = (chunk) => written.push(chunk);
+    await runAll({
+      cwd: repo,
+      agent: shellAgent,
+      sandbox: noSandbox(),
+      // Task 0 prints only after task 1 has printed its unterminated line and exited.
+      tasks: [{ prompt: `while [ ! -f "${marker}" ]; do sleep 0.01; done; sleep 0.3; echo one` }, { prompt: `printf tail; touch "${marker}"` }],
+    });
+    expect(written.join("")).toBe("[1] tail\n[0] one\n");
   });
 });

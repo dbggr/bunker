@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeCode, noSandbox, review, run, type Agent, type Sandbox } from "../src/index.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 const dirs: string[] = [];
 const realHome = process.env.HOME;

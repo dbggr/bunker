@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { claudeCode, noSandbox, review, type Agent, type BunkerEvent } from "../src/index.ts";
 import { createProgress, findStreamResult, hyperlink, parseClaudeStreamLine } from "../src/events.ts";
 import { runIssue } from "../src/issue.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 const assistant = (...content: object[]) => JSON.stringify({ type: "assistant", message: { content } });
 const resultLine = (result: string, cost: number, ms: number) =>
