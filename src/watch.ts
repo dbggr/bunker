@@ -217,7 +217,10 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
         },
       });
       summary.passes++;
-      if (stopped()) break;
+      if (stopped()) {
+        log(`bunker: pass ${summary.passes} · ${merged} merged · stopping · ${formatSpend(spendFile, caps)}`);
+        break;
+      }
       if (paused) {
         const wait = pausedUntil !== undefined ? Math.max(0, pausedUntil - Date.now()) : intervalMs;
         const until = new Date(Date.now() + wait).toISOString();
