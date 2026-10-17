@@ -229,6 +229,19 @@ describe("bunker clean", () => {
     }
   });
 
+  test("skips an issue worktree a running process is using", async () => {
+    const { repo } = await setup();
+    const w = await issueWorktree(repo, 7, "closed");
+    const p = Bun.spawn(["sleep", "30"], { cwd: w });
+    try {
+      const r = await run(repo, { yes: true });
+      expect(existsSync(w)).toBe(true);
+      expect(r.out).toContain("in use");
+    } finally {
+      p.kill();
+    }
+  });
+
   test("keeps the worktree and branch of a run paused on the usage limit", async () => {
     const { repo } = await setup();
     const a = await leftover(repo, "aaaa0001");
