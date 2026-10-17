@@ -119,7 +119,7 @@ if (positionals.length === 1 && positionals[0] === "ui") {
 
 const prompt = positionals.join(" ");
 const tasks = values.task ?? [];
-let watchOpts: { intervalMs: number; maxCostUsd: number; forMs?: number } | undefined;
+let watchOpts: { intervalMs: number; maxCostUsd: number; forMs?: number; auditEveryDays?: number } | undefined;
 if (values.watch) {
   if (prompt || tasks.length || values.review || values.issue !== undefined || values.queue || values.audit || values.limit !== undefined) {
     console.error("bunker: --watch can't be combined with a prompt, --task, --review, --issue, --queue, --audit or --limit");
@@ -135,6 +135,14 @@ if (values.watch) {
     console.error("bunker: --max-cost must be a positive number of US dollars");
     process.exit(2);
   }
+  let auditEveryDays: number | undefined;
+  if (values["audit-every"] !== undefined) {
+    auditEveryDays = Number(values["audit-every"]);
+    if (!(auditEveryDays > 0) || !Number.isFinite(auditEveryDays)) {
+      console.error("bunker: --audit-every must be a positive number of days");
+      process.exit(2);
+    }
+  }
   let forMs: number | undefined;
   if (values.for !== undefined) {
     forMs = parseDuration(values.for);
@@ -147,11 +155,11 @@ if (values.watch) {
     console.error("bunker: --watch needs a verify command: pass --verify \"<cmd>\" or add a .bunker/verify file");
     process.exit(2);
   }
-  watchOpts = { intervalMs: intervalMin * 60_000, maxCostUsd, ...(forMs === undefined ? {} : { forMs }) };
+  watchOpts = { intervalMs: intervalMin * 60_000, maxCostUsd, ...(forMs === undefined ? {} : { forMs }), ...(auditEveryDays === undefined ? {} : { auditEveryDays }) };
   values.queue = true;
   values.merge = true;
-} else if (values.interval !== undefined || values.for !== undefined || values["max-cost"] !== undefined) {
-  console.error("bunker: --interval, --for and --max-cost only apply to --watch");
+} else if (values.interval !== undefined || values.for !== undefined || values["max-cost"] !== undefined || values["audit-every"] !== undefined) {
+  console.error("bunker: --interval, --for, --max-cost and --audit-every only apply to --watch");
   process.exit(2);
 }
 if (values.audit) {
@@ -163,8 +171,8 @@ if (values.audit) {
     console.error("bunker: --verify, --verify-on-host and --merge don't apply to --audit");
     process.exit(2);
   }
-} else if (values["max-issues"] !== undefined || values.focus !== undefined) {
-  console.error("bunker: --max-issues and --focus only apply to --audit");
+} else if ((values["max-issues"] !== undefined && !values.watch) || values.focus !== undefined) {
+  console.error("bunker: --max-issues only applies to --audit (or --watch --audit-every) and --focus only to --audit");
   process.exit(2);
 }
 const maxIssues = values["max-issues"] === undefined ? 5 : Number(values["max-issues"]);
@@ -352,6 +360,7 @@ if (values.audit) {
   }
   console.log();
   for (const t of result.skipped) console.log(`bunker: skipped (already open): ${t}`);
+  for (const f of result.notFiled) console.log(`bunker: not filed (${f.severity ?? "medium"}): ${f.title}`);
   if (!result.filed.length) console.log("bunker: no issues filed");
   for (const f of result.filed) console.log(`filed #${f.number}: ${f.title}`);
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
@@ -367,7 +376,7 @@ if (values.audit) {
     });
   }
   try {
-    await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, ...timeouts, parallel, allowLabelers, signal: ctl.signal, pull: !values["no-pull"], ...watchOpts });
+    await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, ...timeouts, parallel, allowLabelers, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();

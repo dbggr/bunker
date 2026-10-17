@@ -1,3 +1,4 @@
+import { SEVERITY_HELP, pickFollowUps, type Severity } from "./structured.ts";
 import { enforceLabeler } from "./labeler.ts";
 import { describeQueue, orderQueue, PRIORITY_LABELS, type Queued } from "./priority.ts";
 import { $ } from "bun";
@@ -88,12 +89,14 @@ export interface IssueResult {
 const CONVENTIONAL_PREFIX = /^\s*(feat|fix|chore|docs|refactor|test|perf|build|ci|style|revert)(\([^)]*\))?!?:\s*/i;
 const MAX_SLUG = 40;
 const VERIFY_TAIL = 2000;
+/** Follow-ups filed per issue run. */
+const MAX_FOLLOW_UPS = 1;
 
 const ISSUE_CONVENTION =
   "For problems you find outside this task's scope, do not fix them; instead report them. " +
   "If this issue cannot be done until something else is done, do not work around it: report what blocks it and stop. " +
-  'Report by ending your answer with <report>{"issues": [{"title": "short title", "body": "one-paragraph body", "bug": true if it is a defect}], ' +
-  "Never set a priority; a human does that when triaging. " +
+  'Report by ending your answer with <report>{"issues": [{"title": "short title", "body": "one-paragraph body", "bug": true if it is a defect, "severity": "high|medium|low"}], ' +
+  "Never set a priority; a human does that when triaging. " + SEVERITY_HELP + " At most one follow-up is filed per run, the most severe; the rest are only listed, so report only what matters. " +
   '"blocked_by": [{"title": "short title", "body": "why it blocks, plus acceptance criteria"}]}</report> (valid JSON; both lists optional, omit the whole block if there is nothing to report; only the last <report> counts).';
 
 const REVIEWER_CONVENTION =
@@ -101,9 +104,9 @@ const REVIEWER_CONVENTION =
   'If this issue cannot be done until something else is done, put that in "blocked_by".';
 
 /** Follow-ups from the agents' structured output; the old tag scan applies only to a text whose structured block is absent or invalid. */
-function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: string; body: string; bug?: boolean }[]; blocker?: { title: string; body: string } } {
+function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: string; body: string; bug?: boolean; severity?: Severity }[]; blocker?: { title: string; body: string } } {
   const real = (f: { title: string }) => !isPlaceholder(f.title.trim());
-  const seen = new Map<string, { body: string; bug: boolean }>();
+  const seen = new Map<string, { body: string; bug: boolean; severity?: Severity }>();
   const blocked: { title: string; body: string }[] = [];
   for (const r of rounds) {
     const sources = [
@@ -115,11 +118,11 @@ function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: st
       const scan = !structured && !(text === r.output && r.reportError);
       const issues = structured ? structured.issues : scan ? parseIssueBlocks(text) : [];
       const blocks = structured ? structured.blocked_by : scan ? [parseBlockedBy(text)].filter((b) => b !== undefined) : [];
-      for (const i of issues) if (real(i) && !seen.has(i.title.trim())) seen.set(i.title.trim(), { body: i.body.trim(), bug: "bug" in i && i.bug === true });
+      for (const i of issues) if (real(i) && !seen.has(i.title.trim())) seen.set(i.title.trim(), { body: i.body.trim(), bug: "bug" in i && i.bug === true, ...(((i as { severity?: Severity }).severity) ? { severity: (i as { severity?: Severity }).severity } : {}) });
       for (const b of blocks) if (real(b)) blocked.push({ title: b.title.trim(), body: b.body.trim() });
     }
   }
-  return { issues: [...seen].map(([title, f]) => ({ title, body: f.body, ...(f.bug ? { bug: true } : {}) })), ...(blocked[0] ? { blocker: blocked[0] } : {}) };
+  return { issues: [...seen].map(([title, f]) => ({ title, body: f.body, ...(f.bug ? { bug: true } : {}), ...(f.severity ? { severity: f.severity } : {}) })), ...(blocked[0] ? { blocker: blocked[0] } : {}) };
 }
 
 /**
@@ -206,6 +209,8 @@ function reviewLines(result: ReviewResult, agent: Agent, reviewer: Agent): strin
     .map((r, i) => `Round ${i + 1}: ${r.commits.length} commit(s), ${r.approved ? "approved" : "changes requested"} (implementer: ${prModel(agent)}, reviewer: ${prModel(reviewer)})`)
     .join("\n");
 }
+
+const notFiledLines = (items: { title: string; severity?: string }[]) => items.map((f) => `- ${f.title} (${f.severity ?? "medium"})`).join("\n");
 
 const BLOCKED_LABEL = "bunker-blocked";
 
@@ -596,13 +601,24 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
 
   // Follow-ups the agents found: filed for human triage, never queued.
   const { issues: blocks, blocker } = collectFollowUps(result.rounds);
-  for (const b of blocks) {
+  // At most one per run, high/medium only; the rest are listed in the log and the PR body.
+  const { file: toFile, notFiled } = pickFollowUps(blocks, MAX_FOLLOW_UPS);
+  if (notFiled.length) log("follow-ups not filed", notFiledLines(notFiled));
+  for (const b of toFile) {
     const body = `${b.body}\n\nFound while working on #${number}.`;
-    let created = await $`gh issue create --label discovered ${b.bug ? ["--label", "bug"] : []} --title ${b.title} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
-    // A repo without a `bug` label rejects the call; file it unlabelled rather than drop the follow-up.
-    if (created.exitCode !== 0 && b.bug) {
-      log(`gh issue create with the bug label failed, retrying without it: ${b.title}`, created.stderr.toString());
-      created = await $`gh issue create --label discovered --title ${b.title} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
+    const severity = `severity:${b.severity ?? "medium"}`;
+    // A repo missing the `severity:*` or `bug` label rejects the call; drop the extra labels one at a time rather than lose the follow-up.
+    const attempts = [
+      ["--label", severity, ...(b.bug ? ["--label", "bug"] : [])],
+      ...(b.bug ? [["--label", severity]] : []),
+      ...(b.bug ? [["--label", "bug"]] : []),
+      [],
+    ];
+    let created = await $`gh issue create --label discovered ${attempts[0]!} --title ${b.title} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
+    for (const labels of attempts.slice(1)) {
+      if (created.exitCode === 0) break;
+      log(`gh issue create with extra labels failed, retrying with fewer: ${b.title}`, created.stderr.toString());
+      created = await $`gh issue create --label discovered ${labels} --title ${b.title} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
     }
     if (created.exitCode !== 0) {
       log(`gh issue create failed: ${b.title}`, created.stderr.toString());
@@ -718,7 +734,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     const push = await $`git ${gitCfg} -C ${worktree} push -q ${token ? [] : ['-u']} ${remoteSha ? [`--force-with-lease=${branch}:${remoteSha}`] : []} ${remote} ${branch}`.env(env).nothrow().quiet();
     if (push.exitCode !== 0) return fail("failed", { review: result, error: `git push failed:\n${push.stderr}` });
 
-    const body = [`Closes #${number}`, reviewLines(result, agent, reviewer ?? agent), ...(verify ? [`Verify: \`${verify}\` passed (${verifySource})`] : [])].join("\n\n");
+    const body = [`Closes #${number}`, reviewLines(result, agent, reviewer ?? agent), ...(verify ? [`Verify: \`${verify}\` passed (${verifySource})`] : []), ...(notFiled.length ? [`Follow-ups not filed (at most one high/medium per run):\n${notFiledLines(notFiled)}`] : [])].join("\n\n");
     const pr = await $`gh pr create --head ${branch} --title ${issue.title} --body ${body}`.cwd(worktree).env(env).nothrow().quiet();
     if (pr.exitCode !== 0) return fail("failed", { review: result, error: `gh pr create failed:\n${pr.stderr}` });
     const prUrl = pr.stdout.toString().trim().split("\n").at(-1);

@@ -76,11 +76,12 @@ Single prompt and --task:
   --interval <min>           minutes to sleep when no work is waiting (default 10)
   --for <duration>           stop starting new issues after this long, e.g. 5h, 90m, 2h30m (default: until Ctrl-C)
   --max-cost <usd>           spend cap per rolling 24 h, kept in .bunker/watch-spend.json (default 20)
+  --audit-every <days>       also run --audit at most once per this many days, kept in .bunker/watch-state.json (default off; 30 is a good value)
   Failed issues get \`bunker-failed\` instead of \`bunker\` and are never retried automatically.
 
 --audit:
   --audit                    read-only agent run that files issues
-  --max-issues <n>           max issues to file (default 5)
+  --max-issues <n>           max issues to file (default 5); only high/medium severity are filed, as \`discovered\` + \`severity:*\`
   --focus "<text>"           steer the audit toward a topic
   --setup "<cmd>"            run in the worktree before the agent
 

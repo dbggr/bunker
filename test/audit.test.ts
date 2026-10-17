@@ -60,9 +60,9 @@ exit 1
   return { repo, createLog: join(root, "create.log") };
 }
 
-const issue = (t: string) => ({ title: t, body: `Do ${t}.\n- [ ] done` });
+const issue = (t: string, severity = "medium") => ({ title: t, body: `Do ${t}.\n- [ ] done`, severity });
 const block = (t: string) => `<audit>${JSON.stringify({ issues: [issue(t)] })}</audit>`;
-const blocks = (...ts: string[]) => `<audit>${JSON.stringify({ issues: ts.map(issue) })}</audit>`;
+const blocks = (...ts: string[]) => `<audit>${JSON.stringify({ issues: ts.map((t) => issue(t)) })}</audit>`;
 
 // Prints `output`, records the prompt/mode and its worktree, and makes a commit (which must not survive).
 function fakeAgent(output: string, seen: { prompt?: string; mode?: string; cwd?: string } = {}): Agent {
@@ -74,6 +74,21 @@ function fakeAgent(output: string, seen: { prompt?: string; mode?: string; cwd?:
     },
   };
 }
+
+describe("runAudit() severity", () => {
+  test("files only high/medium, highest first, within --max-issues; low is reported as not filed", async () => {
+    const { repo, createLog } = await setup();
+    process.env.AUDIT_PWD = join(repo, "..", "pwd");
+    const out = `<audit>${JSON.stringify({ issues: [issue("Nit", "low"), issue("Med one", "medium"), issue("Sec hole", "high"), issue("Med two", "medium")] })}</audit>`;
+    const r = await runAudit({ cwd: repo, agent: fakeAgent(out), sandbox: noSandbox(), maxIssues: 2 });
+    expect(r.filed.map((f) => f.title)).toEqual(["Sec hole", "Med one"]);
+    expect(r.notFiled.map((f) => f.title)).toEqual(["Med two", "Nit"]);
+    const log = await Bun.file(createLog).text();
+    expect(log).toContain("severity:high");
+    expect(log).toContain("severity:medium");
+    expect(log).not.toMatch(/priority:|bunker$/m);
+  });
+});
 
 describe("runAudit() timeouts", () => {
   const hang = (cmd: string): Agent => ({ command: () => ["sh", "-c", cmd] });
@@ -113,7 +128,7 @@ describe("runAudit()", () => {
     ]);
     expect(r.skipped).toEqual(["existing THING"]);
     const args = (await Bun.file(createLog).text()).split("\n");
-    expect(args.filter((a) => a === "--label")).toHaveLength(2);
+    expect(args.filter((a) => a === "--label")).toHaveLength(4);
     expect(args.filter((a) => a === "discovered")).toHaveLength(2);
     expect(args).not.toContain("bunker");
     expect(seen.mode).toBe("review");

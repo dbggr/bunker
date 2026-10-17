@@ -4,6 +4,8 @@ import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { safePull } from "./pull.ts";
 import { redact } from "./redact.ts";
+import { runAudit } from "./audit.ts";
+import type { Agent } from "./index.ts";
 import { countWaiting, runQueue, type QueueEntry, type QueueOptions } from "./issue.ts";
 
 export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult"> {
@@ -17,6 +19,12 @@ export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "ke
   signal?: AbortSignal;
   /** `git pull --ff-only` the checkout before each pass (when clean, on the default branch). */
   pull?: boolean;
+  /** Run `--audit` at most once per this many days (state in `.bunker/watch-state.json`). Off by default. */
+  auditEveryDays?: number;
+  /** Agent for the periodic audit. Defaults to `agent`. */
+  auditor?: Agent;
+  /** Cap on issues the periodic audit files. Defaults to 5. */
+  maxIssues?: number;
   /** One line per event. Defaults to console.log. */
   log?: (line: string) => void;
 }
@@ -90,7 +98,7 @@ function acquireLock(file: string): () => void {
  * Works the `bunker` queue with auto-merge, pass after pass, until aborted or `forMs` is up.
  * Any outcome other than `merged` relabels the issue `bunker-failed` so it is never retried by itself.
  */
-export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forMs, signal, pull = false, log = console.log, ...opts }: WatchOptions): Promise<WatchSummary> {
+export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forMs, signal, pull = false, auditEveryDays, auditor, maxIssues, log = console.log, ...opts }: WatchOptions): Promise<WatchSummary> {
   const cwd = opts.cwd ?? process.cwd();
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
@@ -98,7 +106,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
   mkdirSync(dir, { recursive: true });
   const exclude = join(gitCommonDir, "info", "exclude");
   const excluded = (await Bun.file(exclude).exists()) ? await Bun.file(exclude).text() : "";
-  const missing = ["/.bunker/watch.lock", "/.bunker/watch-spend.json"].filter((p) => !excluded.split("\n").includes(p));
+  const missing = ["/.bunker/watch.lock", "/.bunker/watch-spend.json", "/.bunker/watch-state.json"].filter((p) => !excluded.split("\n").includes(p));
   if (missing.length) await appendFile(exclude, `${excluded && !excluded.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
   const release = acquireLock(join(dir, "watch.lock"));
 
@@ -133,6 +141,32 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
   const addSpend = (usd: number) => {
     const entries = readSpend(spendFile).filter((e) => e.at > Date.now() - DAY_MS);
     writeFileSync(spendFile, JSON.stringify([...entries, { at: Date.now(), usd }]));
+  };
+
+  const stateFile = join(dir, "watch-state.json");
+  const readState = (): { lastAuditAt?: number } => {
+    try {
+      const raw = JSON.parse(readFileSync(stateFile, "utf8"));
+      return raw && typeof raw.lastAuditAt === "number" ? { lastAuditAt: raw.lastAuditAt } : {};
+    } catch {
+      return {};
+    }
+  };
+  const auditDue = () => auditEveryDays !== undefined && Date.now() - (readState().lastAuditAt ?? -Infinity) >= auditEveryDays * DAY_MS;
+  /** The periodic audit. Recorded as done even when it fails, so a broken audit retries next period, not every pass. */
+  const audit = async () => {
+    writeFileSync(stateFile, JSON.stringify({ ...readState(), lastAuditAt: Date.now() }));
+    log("bunker: running the periodic audit");
+    try {
+      const r = await runAudit({ agent: auditor ?? opts.agent, sandbox: opts.sandbox, cwd, setup: opts.setup, ...(maxIssues === undefined ? {} : { maxIssues }), idleTimeoutMs: opts.idleTimeoutMs, completionTimeoutMs: opts.completionTimeoutMs, stepTimeoutMs: opts.stepTimeoutMs });
+      if (r.usage?.costUsd) {
+        addSpend(r.usage.costUsd);
+        summary.spentUsd += r.usage.costUsd;
+      }
+      log(`bunker: audit filed ${r.filed.length} issue(s)${r.notFiled.length ? `, ${r.notFiled.length} not filed` : ""}`);
+    } catch (e) {
+      log(`bunker: audit failed: ${e instanceof Error ? e.message : e}`);
+    }
   };
 
   /** Issues this watcher already gave up on; a failed relabel must not let one be retried. */
@@ -172,6 +206,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
         const r = await safePull(cwd);
         if (!r.pulled) log(r.message);
       }
+      if (auditDue() && !stopped()) await audit();
       let merged = 0;
       let pausedUntil: number | undefined;
       let paused = 0;

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { redact } from "./redact.ts";
 import { committedCopies, copyIntoWorktree, copyPatterns, copyRejection } from "./copy.ts";
-import { extractOutput, reportOutput, verdictOutput, type Report, type Verdict } from "./structured.ts";
+import { SEVERITY_HELP, extractOutput, reportOutput, verdictOutput, type Report, type Verdict } from "./structured.ts";
 import { output, tailLines } from "./output.ts";
 import { emit, findSessionId, findUsageLimit, findStreamResult, parseClaudeStreamLine, type OnEvent, type Stage, type StreamEvent } from "./events.ts";
 export type { BunkerEvent, OnEvent } from "./events.ts";
@@ -919,8 +919,8 @@ export interface ReviewResult {
 const DEFAULT_APPROVE = "<review>APPROVE</review>";
 
 const VERDICT_FORMAT =
-  'end your answer with <verdict>{"approved": true|false, "required_changes": ["…"], "issues": [{"title": "…", "body": "…"}], "blocked_by": [{"title": "…", "body": "…"}]}</verdict>: ' +
-  "valid JSON, `approved` true only if the change is acceptable, `required_changes` what must change otherwise. " +
+  'end your answer with <verdict>{"approved": true|false, "required_changes": ["…"], "issues": [{"title": "…", "body": "…", "severity": "high|medium|low"}], "blocked_by": [{"title": "…", "body": "…"}]}</verdict>: ' +
+  SEVERITY_HELP + " Valid JSON,`approved` true only if the change is acceptable, `required_changes` what must change otherwise. " +
   "Only the last <verdict> in your answer counts.";
 
 class BadOutput extends Error {}
