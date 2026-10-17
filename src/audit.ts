@@ -1,10 +1,10 @@
 import { $ } from "bun";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runSetup, sumUsage, type Agent, type Sandbox, type Usage } from "./index.ts";
+import { IdleTimeout, agentLimits, runSetup, sumUsage, timeoutMessage, type Timeouts, type Agent, type Sandbox, type Usage } from "./index.ts";
 import { auditOutput, extractOutput } from "./structured.ts";
 
-export interface AuditOptions {
+export interface AuditOptions extends Timeouts {
   agent: Agent;
   sandbox: Sandbox;
   /** The target repo's main checkout. Defaults to process.cwd(). */
@@ -49,7 +49,7 @@ export function auditPrompt(maxIssues: number, focus?: string): string {
  * issues in its final `<audit>` JSON block (re-asked when invalid) are filed as `discovered` (never `bunker`), minus
  * titles that match an open issue. The worktree is always removed.
  */
-export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, focus, setup, maxRetries = 2 }: AuditOptions): Promise<AuditResult> {
+export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, focus, setup, maxRetries = 2, ...timeouts }: AuditOptions): Promise<AuditResult> {
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
   const gitCfg = token ? ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"] : [];
@@ -83,13 +83,15 @@ export async function runAudit({ agent, sandbox, cwd = process.cwd(), maxIssues 
   let usage: Usage | undefined;
   try {
     const ctx = { worktree, gitCommonDir };
-    const prep = await runSetup(sandbox, ctx, setup);
+    const prep = await runSetup(sandbox, ctx, setup, timeouts);
+    if (prep?.timedOut) throw new IdleTimeout(timeoutMessage("setup", prep.timedOut, timeouts));
     if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${prep.stdout.slice(-2000)}`);
     const base = auditPrompt(maxIssues, focus);
     const usages: (Usage | undefined)[] = [];
     let prompt = base;
     for (let k = 0; ; k++) {
-      const res = await sandbox.exec(agent.command(prompt, "review"), ctx);
+      const res = await sandbox.exec(agent.command(prompt, "review"), { ...ctx, limits: agentLimits(timeouts, ["</audit>"]) });
+      if (res.timedOut) throw new IdleTimeout(timeoutMessage("audit agent", res.timedOut, timeouts));
       if (res.code !== 0) throw new Error(`agent exited with ${res.code}`);
       const parsed = agent.parse?.(res.stdout);
       usages.push(parsed?.usage);

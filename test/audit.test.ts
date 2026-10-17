@@ -75,6 +75,30 @@ function fakeAgent(output: string, seen: { prompt?: string; mode?: string; cwd?:
   };
 }
 
+describe("runAudit() timeouts", () => {
+  const hang = (cmd: string): Agent => ({ command: () => ["sh", "-c", cmd] });
+
+  test("an audit agent with no output is killed after the idle timeout", async () => {
+    const { repo, createLog } = await setup();
+    const t0 = Date.now();
+    await expect(runAudit({ cwd: repo, agent: hang("sleep 30"), sandbox: noSandbox(), idleTimeoutMs: 300 })).rejects.toThrow(/idle timeout/);
+    expect(Date.now() - t0).toBeLessThan(15_000);
+    expect(existsSync(createLog)).toBe(false);
+  });
+
+  test("a hung setup is killed after the step timeout", async () => {
+    const { repo } = await setup();
+    await expect(runAudit({ cwd: repo, agent: hang("true"), sandbox: noSandbox(), setup: "sleep 30", stepTimeoutMs: 300 })).rejects.toThrow(/step timeout/);
+  });
+
+  test("an agent that prints its audit but lingers is killed and still counts", async () => {
+    const { repo } = await setup();
+    const out = `<audit>{"issues": []}</audit>`;
+    const r = await runAudit({ cwd: repo, agent: hang(`echo '${out}'; sleep 30`), sandbox: noSandbox(), completionTimeoutMs: 300 });
+    expect(r.filed).toEqual([]);
+  });
+});
+
 describe("runAudit()", () => {
   test("files blocks as discovered only, capped, skipping open duplicates; worktree removed", async () => {
     const { repo, createLog } = await setup(["Existing thing"]);

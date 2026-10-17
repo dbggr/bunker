@@ -116,7 +116,7 @@ export const DEFAULT_STEP_MS = 30 * 60_000;
 export class IdleTimeout extends Error {}
 
 /** The limits for an agent step; it counts as finished once it prints a stream `result` event or one of `signals`. */
-function agentLimits(t: Timeouts, signals: string[]): ExecLimits {
+export function agentLimits(t: Timeouts, signals: string[]): ExecLimits {
   return {
     idleMs: t.idleTimeoutMs ?? DEFAULT_IDLE_MS,
     graceMs: t.completionTimeoutMs ?? DEFAULT_COMPLETION_MS,
