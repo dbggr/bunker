@@ -1,7 +1,7 @@
 import { $ } from "bun";
 import { loadRepoConfig } from "./config.ts";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { redact } from "./redact.ts";
@@ -719,9 +719,10 @@ async function captureSession(sandbox: Sandbox, id: string, dest: string): Promi
       const file = Bun.file(join(root, dir, `${id}.jsonl`));
       if (!(await file.exists())) continue;
       const text = await file.text();
-      await mkdir(dirname(dest), { recursive: true });
-      await Bun.write(dest, text);
-      await Bun.write(dest.replace(/\.jsonl$/, ".redacted.jsonl"), redact(text));
+      await mkdir(dirname(dest), { recursive: true, mode: 0o700 });
+      // Transcripts can hold secrets the agent saw: owner-only.
+      await writeFile(dest, text, { mode: 0o600 });
+      await writeFile(dest.replace(/\.jsonl$/, ".redacted.jsonl"), redact(text), { mode: 0o600 });
       return { id, file: dest };
     }
   } catch {}

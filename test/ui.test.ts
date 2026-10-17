@@ -13,9 +13,11 @@ afterEach(async () => {
 });
 
 const TOKEN = "t".repeat(32);
-const connect = (url: string) =>
+const connect = (viewUrl: string) =>
   new Promise<{ ws: WebSocket; messages: any[] }>((resolve, reject) => {
-    const ws = new WebSocket(url.replace("http", "ws") + "/events");
+    const u = new URL(viewUrl.replace("http", "ws"));
+    u.pathname = "/events";
+    const ws = new WebSocket(u.href);
     const messages: any[] = [];
     ws.onmessage = (m) => messages.push(JSON.parse(String(m.data)));
     ws.onopen = () => resolve({ ws, messages });
@@ -28,12 +30,32 @@ const until = async (f: () => boolean) => {
 const publish = (url: string, body: unknown, token?: string) =>
   fetch(url + "/publish", { method: "POST", body: JSON.stringify(body), headers: token ? { authorization: `Bearer ${token}` } : {} });
 
+describe("startHub() access control", () => {
+  test("the page and socket need the view key; /health does not", async () => {
+    hub = startHub({ port: 0, token: TOKEN });
+    expect((await fetch(hub.url + "/")).status).toBe(401);
+    expect((await fetch(hub.url + "/?k=wrong")).status).toBe(401);
+    expect((await fetch(hub.url + "/health?nonce=x")).status).toBe(200);
+    expect(hub.viewUrl).not.toContain(TOKEN);
+    await expect(connect(hub.url)).rejects.toThrow();
+  });
+
+  test("/health signs the port and a fixed context, not just the nonce", async () => {
+    hub = startHub({ port: 0, token: TOKEN });
+    const nonce = "abc";
+    const body = await (await fetch(hub.url + "/health?nonce=" + nonce)).text();
+    const { createHmac } = await import("node:crypto");
+    expect(body).toBe(createHmac("sha256", TOKEN).update(`bunker-hub:health:${hub.server.port}:${nonce}`).digest("hex"));
+    expect(body).not.toBe(createHmac("sha256", TOKEN).update(`bunker-hub:${nonce}`).digest("hex"));
+  });
+});
+
 describe("startHub()", () => {
   test("loopback only, serves a tabbed page", async () => {
     hub = startHub({ port: 0, token: TOKEN });
     expect(hub.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(hub.server.hostname).toBe("127.0.0.1");
-    const res = await fetch(hub.url + "/");
+    const res = await fetch(hub.viewUrl);
     expect(res.status).toBe(200);
     const html = await res.text();
     for (const s of ["WebSocket", "waiting for merge", "location.hash", "tabs"]) expect(html).toContain(s);
@@ -47,13 +69,13 @@ describe("startHub()", () => {
 
   test("two repos' events reach one client, tagged and redacted; late clients get history", async () => {
     hub = startHub({ port: 0, token: TOKEN });
-    const early = await connect(hub.url);
+    const early = await connect(hub.viewUrl);
     expect((await publish(hub.url, { repo: "a/one", event: { type: "text", issue: 1, text: "key sk-ant-secret123 x", at: 1 } }, TOKEN)).status).toBe(204);
     expect((await publish(hub.url, { repo: "b/two", event: { type: "stage", issue: 2, name: "implement", at: 2 } }, TOKEN)).status).toBe(204);
     await until(() => early.messages.length === 2);
     expect(early.messages.map((m) => m.repo)).toEqual(["a/one", "b/two"]);
     expect(early.messages[0].event.text).toBe("key [REDACTED] x");
-    const late = await connect(hub.url);
+    const late = await connect(hub.viewUrl);
     await until(() => late.messages.length === 2);
     early.ws.close();
     late.ws.close();
@@ -65,7 +87,7 @@ describe("startHub()", () => {
       await publish(hub.url, { repo: "a/one", event: { type: "stage", issue: 1, name: `s${i}`, at: i } }, TOKEN);
       if (i === 2) await publish(hub.url, { repo: "b/two", event: { type: "stage", issue: 2, name: "only", at: 10 } }, TOKEN);
     }
-    const late = await connect(hub.url);
+    const late = await connect(hub.viewUrl);
     await until(() => late.messages.length === 4);
     await Bun.sleep(50);
     expect(late.messages.map((m) => m.event.name)).toEqual(["only", "s3", "s4", "s5"]);
@@ -79,7 +101,7 @@ describe("startHub()", () => {
     await publish(hub.url, { repo: "b/two", event: ev("b1") }, TOKEN);
     await publish(hub.url, { repo: "a/one", event: ev("a2") }, TOKEN);
     await publish(hub.url, { repo: "c/three", event: ev("c1") }, TOKEN);
-    const late = await connect(hub.url);
+    const late = await connect(hub.viewUrl);
     await until(() => late.messages.length === 3);
     await Bun.sleep(50);
     expect(late.messages.map((m) => m.event.name)).toEqual(["a1", "a2", "c1"]);
@@ -88,7 +110,7 @@ describe("startHub()", () => {
 
   test("publish without or with a wrong token is rejected and not broadcast", async () => {
     hub = startHub({ port: 0, token: TOKEN });
-    const c = await connect(hub.url);
+    const c = await connect(hub.viewUrl);
     const body = { repo: "a/one", event: { type: "text", text: "hi", at: 1 } };
     expect((await publish(hub.url, body)).status).toBe(401);
     expect((await publish(hub.url, body, "wrong")).status).toBe(401);
@@ -108,13 +130,13 @@ describe("startHub()", () => {
     hub = startHub({ port: 0, token: TOKEN });
     for (const method of ["POST", "PUT", "DELETE"]) expect((await fetch(hub.url + "/", { method })).status).toBe(405);
     expect((await fetch(hub.url + "/publish")).status).toBe(405);
-    expect((await fetch(hub.url + "/nope")).status).toBe(404);
+    expect((await fetch(hub.viewUrl.replace("/?", "/nope?"))).status).toBe(404);
   });
 
   test("a client's socket messages change nothing", async () => {
     hub = startHub({ port: 0, token: TOKEN });
-    const a = await connect(hub.url);
-    const b = await connect(hub.url);
+    const a = await connect(hub.viewUrl);
+    const b = await connect(hub.viewUrl);
     a.ws.send(JSON.stringify({ repo: "x/y", event: { type: "text", at: 1 } }));
     await Bun.sleep(100);
     expect(b.messages).toEqual([]);
@@ -142,7 +164,7 @@ describe("startHub()", () => {
 describe("connectHub()", () => {
   test("publishes a run's events, in order, to a reachable hub", async () => {
     hub = startHub({ port: 0, token: TOKEN });
-    const c = await connect(hub.url);
+    const c = await connect(hub.viewUrl);
     const pub = await connectHub({ port: hub.server.port!, repo: "a/one", token: TOKEN });
     expect(pub).toBeDefined();
     for (let i = 1; i <= 5; i++) pub!.onEvent({ type: "text", issue: 1, text: String(i), at: i });
@@ -154,7 +176,7 @@ describe("connectHub()", () => {
 
   test("flush delivers queued closing events (awaited before every process.exit in the CLI)", async () => {
     hub = startHub({ port: 0, token: TOKEN });
-    const c = await connect(hub.url);
+    const c = await connect(hub.viewUrl);
     const pub = await connectHub({ port: hub.server.port!, repo: "a/one", token: TOKEN });
     pub!.onEvent({ type: "text", text: "failed", at: 1 });
     await pub!.flush();

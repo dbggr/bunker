@@ -10,6 +10,8 @@ import page from "./ui.html" with { type: "text" };
 export interface Hub {
   /** e.g. http://127.0.0.1:4321 */
   url: string;
+  /** `url` plus the access key the page and socket need, e.g. http://127.0.0.1:4321/?k=... */
+  viewUrl: string;
   server: Server<unknown>;
   stop: () => Promise<void>;
 }
@@ -73,7 +75,14 @@ const same = (a: string, b: string) => {
   return x.length === y.length && timingSafeEqual(x, y);
 };
 
-const proof = (token: string, nonce: string) => createHmac("sha256", token).update(`bunker-hub:${nonce}`).digest("hex");
+/** Signed input is bound to the port and a fixed context, so a hub can't be used as a signing oracle for other purposes. */
+const proof = (token: string, port: number, nonce: string) => createHmac("sha256", token).update(`bunker-hub:health:${port}:${nonce}`).digest("hex");
+
+/** Key the page and socket require to read events; derived from the token, so it differs per token and port. */
+const viewKey = (token: string, port: number) => createHmac("sha256", token).update(`bunker-hub:view:${port}`).digest("hex");
+
+/** The URL to open the live view of the hub on `port`. */
+export const viewUrlFor = (port: number, token: string) => `http://${HOST}:${port}/?k=${viewKey(token, port)}`;
 
 /**
  * The shared live view. Always binds to loopback; there is no option to change that.
@@ -120,9 +129,11 @@ export function startHub({ port = DEFAULT_PORT, token, historyLimit = HISTORY_LI
         return new Response(null, { status: 204 });
       }
       if (req.method !== "GET") return new Response("read-only", { status: 405 });
-      if (url.pathname === "/") return new Response(page as unknown as string, { headers: { "content-type": "text/html; charset=utf-8" } });
       // Challenge-response: proves we hold the token without revealing it.
-      if (url.pathname === "/health") return new Response(proof(token, url.searchParams.get("nonce") ?? ""));
+      if (url.pathname === "/health") return new Response(proof(token, srv.port!, url.searchParams.get("nonce") ?? ""));
+      // Reading events needs the view key, so other local users on a shared host can't watch.
+      if (!same(url.searchParams.get("k") ?? "", viewKey(token, srv.port!))) return new Response("unauthorized", { status: 401 });
+      if (url.pathname === "/") return new Response(page as unknown as string, { headers: { "content-type": "text/html; charset=utf-8" } });
       if (url.pathname === "/events" && srv.upgrade(req)) return undefined;
       return new Response("not found", { status: 404 });
     },
@@ -137,6 +148,7 @@ export function startHub({ port = DEFAULT_PORT, token, historyLimit = HISTORY_LI
   });
   return {
     url: `http://${HOST}:${server.port}`,
+    viewUrl: viewUrlFor(server.port!, token),
     server,
     stop: async () => void (await server.stop(true)),
   };
@@ -147,7 +159,7 @@ export async function hubReachable(port: number, token: string): Promise<boolean
   try {
     const nonce = randomBytes(16).toString("hex");
     const res = await fetch(`http://${HOST}:${port}/health?nonce=${nonce}`, { signal: AbortSignal.timeout(1000) });
-    return same(await res.text(), proof(token, nonce));
+    return same(await res.text(), proof(token, port, nonce));
   } catch {
     return false;
   }

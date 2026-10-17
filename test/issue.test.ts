@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
+import { readdirSync, statSync } from "node:fs";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -103,6 +104,9 @@ async function setup(issue: object, mergeMode: "ff" | "drop" | "fail" | "none" |
   const { authorAssociation, ...viewable } = issue as { authorAssociation?: string };
   // `gh issue view --json` has no authorAssociation field for issues; reject it like the real gh does.
   await Bun.write(join(root, "issue.json"), JSON.stringify(viewable));
+  await Bun.write(join(root, "perm-bob"), "maintain");
+  await Bun.write(join(root, "perm-alice"), "admin");
+  await Bun.write(join(root, "perm-triager"), "triage");
   await Bun.write(join(root, "assoc.txt"), authorAssociation === "APIFAIL" ? "" : (authorAssociation ?? ""));
   if (authorAssociation === "APIFAIL") await Bun.write(join(root, "assoc.fail"), "");
   await Bun.write(
@@ -160,6 +164,7 @@ if [ "$1 $2" = "api repos/{owner}/{repo}/issues/7" ]; then
   cat "${root}/assoc.txt"; exit 0
 fi
 if [ "$1" = "api" ]; then
+  case "$*" in *"/permission"*) l="$*"; l=\${l#*collaborators/}; l=\${l%%/*}; if [ -f "${root}/perm-$l" ]; then cat "${root}/perm-$l"; exit 0; fi; echo "HTTP 404" >&2; exit 1;; esac
   echo "$*" >> "${root}/api.log"
   exit 0
 fi
@@ -332,6 +337,29 @@ describe("runIssue()", () => {
     expect(m).not.toBeNull();
     expect(m![2]).toBe(body);
     expect(m![1]!.length).toBeGreaterThan(3);
+  });
+
+  test("a collaborator with read/triage permission is not trusted; admin/maintain is", async () => {
+    const { repo } = await setup(issue({
+      comments: [
+        { author: { login: "triager" }, authorAssociation: "COLLABORATOR", body: "Triage note.", createdAt: "2026-01-01T00:00:00Z" },
+        { author: { login: "bob" }, authorAssociation: "COLLABORATOR", body: "Maintainer note.", createdAt: "2026-01-02T00:00:00Z" },
+        { author: { login: "nolookup" }, authorAssociation: "MEMBER", body: "Failed lookup note.", createdAt: "2026-01-03T00:00:00Z" },
+      ],
+    }));
+    const prompts: string[] = [];
+    await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE, prompts), sandbox: noSandbox() });
+    expect(prompts[0]).toContain("Maintainer note.");
+    expect(prompts[0]).not.toContain("Triage note.");
+    expect(prompts[0]).not.toContain("Failed lookup note.");
+  });
+
+  test("run logs are owner-only", async () => {
+    const { repo } = await setup(issue());
+    await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE, []), sandbox: noSandbox() });
+    const dir = join(repo, ".bunker", "runs");
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    for (const f of readdirSync(dir)) expect(statSync(join(dir, f)).mode & 0o777).toBe(0o600);
   });
 
   test("omits comments from users who are not owner, member or collaborator", async () => {
