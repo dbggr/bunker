@@ -52,7 +52,8 @@ Single prompt and --task:
                              (no PR, doesn't count toward --limit); it returns to `bunker` once the blockers close
   --allow-labeler <login>    (--issue, --queue, --watch; repeatable) also accept the `bunker` label from this GitHub user. By
                              default only repo admins and maintainers may queue work: otherwise the issue is skipped, the label
-                             removed and a comment left. Also: allow-labelers = ["login"] in ~/.config/bunker/config.toml.
+                             removed and a comment left. An issue never labeled `bunker` is refused too (no label
+                             event to check): add the label first. Also: allow-labelers = ["login"] in ~/.config/bunker/config.toml.
                              If the permission lookup fails the issue is skipped (fail closed)
   --limit <n>                (--queue) max issues per run (default 5; blocked issues don't count)
   --parallel <n>             (--queue --merge, --watch) work up to n issues at once, one worktree + container each (default 1).
