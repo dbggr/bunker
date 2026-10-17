@@ -1,4 +1,5 @@
 import { $, Glob } from "bun";
+import { existsSync } from "node:fs";
 import { cp, mkdir, realpath, readdir, stat, appendFile, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { loadRepoConfig } from "./config.ts";
@@ -30,8 +31,29 @@ async function walk(root: string, rel: string): Promise<string[]> {
 const escapeIgnore = (p: string) => "/" + p.replace(/^[ #!]|[*?[\]\\]/g, (c) => "\\" + c);
 
 /**
+ * Adds ignore `lines` for `dest` only. info/exclude lives in the common git dir and would leak into every
+ * worktree, so a per-worktree `core.excludesFile` (seeded with the one it replaces) is used instead.
+ */
+async function excludeInWorktree(dest: string, lines: string[]): Promise<void> {
+  const gitDir = resolve(dest, (await $`git -C ${dest} rev-parse --git-dir`.text()).trim());
+  const exclude = join(gitDir, "bunker-exclude");
+  if (!existsSync(exclude)) {
+    const prev = (await $`git -C ${dest} config --type=path --get core.excludesFile`.nothrow().quiet().text()).trim();
+    const xdg = process.env.XDG_CONFIG_HOME || join(process.env.HOME ?? "", ".config");
+    const seed = await readFile(prev || join(xdg, "git", "ignore"), "utf8").catch(() => "");
+    await mkdir(gitDir, { recursive: true });
+    await Bun.write(exclude, seed && !seed.endsWith("\n") ? seed + "\n" : seed);
+    await $`git -C ${dest} config extensions.worktreeConfig true`.quiet();
+    await $`git -C ${dest} config --worktree core.excludesFile ${exclude}`.quiet();
+  }
+  const have = new Set((await readFile(exclude, "utf8")).split("\n"));
+  const add = lines.filter((l) => !have.has(l));
+  if (add.length) await appendFile(exclude, add.join("\n") + "\n");
+}
+
+/**
  * Copies the files matching `patterns` from `src` into the same paths in `dest` (a worktree of `src`'s repo).
- * Tracked files are left alone. Copied files are added to the worktree's info/exclude and their
+ * Tracked files are left alone. Copied files are excluded in the worktree only (not the shared info/exclude) and their
  * `.env*` values to the redaction set. Missing patterns warn. Returns the copied files, relative.
  */
 export async function copyIntoWorktree(src: string, dest: string, patterns: string[]): Promise<string[]> {
@@ -60,11 +82,7 @@ export async function copyIntoWorktree(src: string, dest: string, patterns: stri
   const files = [...copied];
   if (files.length === 0) return files;
 
-  const exclude = resolve(dest, (await $`git -C ${dest} rev-parse --git-path info/exclude`.text()).trim());
-  await mkdir(dirname(exclude), { recursive: true });
-  const have = new Set((await readFile(exclude, "utf8").catch(() => "")).split("\n"));
-  const add = files.map(escapeIgnore).filter((l) => !have.has(l));
-  if (add.length) await appendFile(exclude, add.join("\n") + "\n");
+  await excludeInWorktree(dest, files.map(escapeIgnore));
 
   const secrets: string[] = [];
   for (const f of files) {

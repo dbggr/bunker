@@ -179,6 +179,28 @@ async function originBranches(origin: string): Promise<string[]> {
 }
 
 describe("runIssue()", () => {
+  test("copied files are excluded in the worktree only, not the shared info/exclude", async () => {
+    const { repo } = await setup(issue());
+    await Bun.write(join(repo, ".env"), "TOKEN=abc\n");
+    const out = dirname(repo);
+    const agent: Agent = {
+      command(_p, mode = "write") {
+        if (mode === "write") return ["sh", "-c", `git status --porcelain > ${out}/status.out; cat .env > ${out}/env.out; echo hi > feature.txt && git add feature.txt && git commit -qm "feat: impl"`];
+        return ["sh", "-c", `echo '${APPROVE}'`];
+      },
+    };
+    const r = await runIssue({ cwd: repo, issue: 7, agent, sandbox: noSandbox(), verify: "true", copyToWorktree: [".env"] });
+    expect(r.status).toBe("pr-opened");
+    const shared = await Bun.file(join(repo, ".git", "info", "exclude")).text().catch(() => "");
+    expect(shared).not.toContain(".env");
+    expect(await Bun.file(join(out, "env.out")).text()).toBe("TOKEN=abc\n");
+    expect(await Bun.file(join(out, "status.out")).text()).not.toContain(".env");
+    const other = join(repo, ".worktrees", "other");
+    await $`git -C ${repo} worktree add -q -b other ${other}`;
+    await Bun.write(join(other, ".env"), "x");
+    expect(await $`git -C ${other} status --porcelain`.text()).toContain(".env");
+  });
+
   test("approved + verify passes → pushed, PR opened", async () => {
     const { repo, origin, prLog } = await setup(issue());
     const prompts: string[] = [];
