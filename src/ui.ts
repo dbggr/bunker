@@ -23,6 +23,8 @@ export interface Publisher {
 
 const HOST = "127.0.0.1";
 export const DEFAULT_PORT = 4321;
+/** Most events the hub remembers per repo for late-joining pages. */
+export const HISTORY_LIMIT = 2000;
 export const TOKEN_PATH = join(homedir(), ".config", "bunker", "ui.token");
 
 /** Redacts every string field of an event. */
@@ -73,8 +75,10 @@ const same = (a: string, b: string) => {
  * The shared live view. Always binds to loopback; there is no option to change that.
  * The page and socket are read-only; the one write is POST /publish, which needs the token.
  */
-export function startHub({ port = DEFAULT_PORT, token }: { port?: number; token: string }): Hub {
-  const history: string[] = [];
+export function startHub({ port = DEFAULT_PORT, token, historyLimit = HISTORY_LIMIT }: { port?: number; token: string; historyLimit?: number }): Hub {
+  // Replayed to late clients; capped per repo so one busy repo can't evict the rest.
+  const history = new Map<string, { seq: number; msg: string }[]>();
+  let seq = 0;
   const server = Bun.serve({
     hostname: HOST,
     port,
@@ -99,8 +103,12 @@ export function startHub({ port = DEFAULT_PORT, token }: { port?: number; token:
         if (typeof body?.repo !== "string" || !body.repo || typeof body.event !== "object" || !body.event || typeof body.event.type !== "string") {
           return new Response("bad request", { status: 400 });
         }
-        const msg = JSON.stringify({ repo: redact(body.repo), event: clean(body.event) });
-        history.push(msg);
+        const repo = redact(body.repo);
+        const msg = JSON.stringify({ repo, event: clean(body.event) });
+        const list = history.get(repo) ?? [];
+        history.set(repo, list);
+        list.push({ seq: seq++, msg });
+        if (list.length > historyLimit) list.splice(0, list.length - historyLimit);
         server.publish("events", msg);
         return new Response(null, { status: 204 });
       }
@@ -113,7 +121,7 @@ export function startHub({ port = DEFAULT_PORT, token }: { port?: number; token:
     websocket: {
       open(ws) {
         ws.subscribe("events");
-        for (const m of history) ws.send(m);
+        for (const { msg } of [...history.values()].flat().sort((a, b) => a.seq - b.seq)) ws.send(msg);
       },
       // Read-only: anything a client sends is ignored.
       message() {},
