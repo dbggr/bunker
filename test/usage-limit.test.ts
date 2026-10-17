@@ -74,6 +74,7 @@ if [ "$1 $2" = "issue list" ]; then printf '['; [ -f "${root}/q.json" ] && cat "
 if [ "$1 $2" = "issue view" ]; then cat "${root}/issue.json"; exit 0; fi
 if [ "$1 $2" = "issue edit" ]; then rm -f "${root}/q.json"; exit 0; fi
 if [ "$1 $2" = "issue comment" ] || [ "$1 $2" = "label create" ]; then exit 0; fi
+if [ "$1 $2" = "pr list" ]; then echo '[]'; exit 0; fi
 if [ "$1 $2" = "pr create" ]; then echo "https://github.com/o/r/pull/1"; exit 0; fi
 if [ "$1 $2" = "pr view" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"abc"}}'; exit 0; fi
 if [ "$1 $2" = "pr merge" ]; then rm -f "${root}/q.json"; git --git-dir="${origin}" update-ref refs/heads/main "refs/heads/$(git rev-parse --abbrev-ref HEAD)"; exit 0; fi
@@ -126,6 +127,26 @@ describe("usage limit", () => {
     expect(second.status).toBe("merged");
     expect(await callsOf(root)).toEqual(["write resume=none", "write resume=sess-1"]);
     expect(existsSync(join(repo, ".bunker", "paused", "1.json"))).toBe(false);
+  });
+
+  test("resuming after a pause replaces a diverged origin branch instead of failing the push", async () => {
+    const { root, repo } = await setup();
+    const a = limitedAgent(root, Date.now() + 3_600_000);
+    const first = await runIssue({ ...base, cwd: repo, issue: 1, agent: a });
+    expect(first.status).toBe("paused-usage-limit");
+    const other = join(root, "other");
+    await $`git clone -q ${join(root, "origin.git")} ${other}`;
+    await $`git -C ${other} checkout -q -b ${first.branch}`;
+    await Bun.write(join(other, "diverged.txt"), "x");
+    await $`git -C ${other} add . && git -C ${other} -c user.name=t -c user.email=t@t commit -q -m "feat: diverged"`;
+    await $`git -C ${other} push -q origin ${first.branch}`;
+    const old = (await $`git -C ${other} rev-parse HEAD`.text()).trim();
+
+    const second = await runIssue({ ...base, cwd: repo, issue: 1, agent: a });
+    expect(second.status).toBe("merged");
+    const tags = (await $`git -C ${repo} tag --list ${"bunker/stale/1-remote-*"}`.text()).trim().split("\n").filter(Boolean);
+    expect(tags).toHaveLength(1);
+    expect((await $`git -C ${repo} rev-parse ${`${tags[0]}^{commit}`}`.text()).trim()).toBe(old);
   });
 
   test("watch sleeps until the reset time, resumes the same session, never labels bunker-failed", async () => {
