@@ -530,7 +530,9 @@ function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions):
         ...userArgs,
         "-e", "HOME=/tmp",
         // Verify runs code the agent wrote: no network to send anything out, and no credentials to send.
-        ...(isolate ? ["--network", "none"] : env.flatMap((name) => ["-e", name])), // name only: value comes from our env, never argv
+        // Non-isolated runs use the host network: the default bridge creates and removes a veth per run, and each link event makes Chrome fail in-flight requests (ERR_NETWORK_CHANGED).
+        // Tradeoff: the container can reach the host's localhost services; it already runs the agent with credentials and full outbound network.
+        ...(isolate ? ["--network", "none"] : ["--network", "host", ...env.flatMap((name) => ["-e", name])]), // name only: value comes from our env, never argv
         ...identity,
         "-v", `${this.projectsDir}:/tmp/.claude/projects`,
         ...gitMountArgs(worktree, gitCommonDir),
