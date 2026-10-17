@@ -57,3 +57,9 @@ Each entry is symptom, cause, fix. The run log (`.bunker/runs/<N>-<timestamp>.lo
   ```
 
   Match the user the base image runs as if it differs.
+
+## `paused-usage-limit`
+
+- **Symptom**: status `paused-usage-limit`; `--issue` exits with code 3.
+- **Cause**: `claude` hit your plan's usage limit mid-issue. This is not a failure: the worktree, branch and agent session are kept, and the issue keeps its `bunker` label (it is never relabelled `bunker-failed`).
+- **Fix**: nothing under `--watch`: it sleeps until the reset time (or `--interval` if none was given), then resumes the same session. Otherwise re-run `--issue N` after the printed reset time; it resumes the interrupted step.

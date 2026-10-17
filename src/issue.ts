@@ -1,7 +1,7 @@
 import { enforceLabeler } from "./labeler.ts";
 import { describeQueue, orderQueue, PRIORITY_LABELS, type Queued } from "./priority.ts";
 import { $ } from "bun";
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { appendFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { redact } from "./redact.ts";
@@ -10,7 +10,7 @@ import { emit } from "./events.ts";
 import { tailLines, testCounts } from "./output.ts";
 import { hyperlink } from "./events.ts";
 import { modelLabel } from "./models.ts";
-import { AgentFailure, emitStage, review, runSetup, stepLimits, timeoutMessage, worktreeAdmin, type Timeouts, type Agent, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
+import { AgentFailure, type Pause, emitStage, review, runSetup, stepLimits, timeoutMessage, worktreeAdmin, type Timeouts, type Agent, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
 
 export interface IssueInfo {
   number: number;
@@ -63,7 +63,9 @@ export interface IssueOptions extends Timeouts {
 }
 
 export interface IssueResult {
-  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked" | "bad-output" | "idle-timeout" | "already-in-progress";
+  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked" | "bad-output" | "idle-timeout" | "already-in-progress" | "paused-usage-limit";
+  /** With status `paused-usage-limit`: where the run stopped. Re-running the issue (or the next watch pass) resumes it. */
+  pause?: { resetAt?: number; sessionId?: string };
   /** With status `blocked`: the `discovered` issue filed for what this one waits on. */
   blockedBy?: { number: number; title: string };
   branch: string;
@@ -475,7 +477,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
   const exclude = join(gitCommonDir, "info", "exclude");
   const excluded = (await Bun.file(exclude).exists()) ? await Bun.file(exclude).text() : "";
-  const missing = ["/.worktrees/", "/.bunker/runs/", "/.bunker/sessions/"].filter((p) => !excluded.split("\n").includes(p));
+  const missing = ["/.worktrees/", "/.bunker/runs/", "/.bunker/sessions/", "/.bunker/paused/"].filter((p) => !excluded.split("\n").includes(p));
   if (missing.length) await appendFile(exclude, `${excluded && !excluded.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
 
   // Branch from origin's default branch, not the caller's possibly-stale HEAD.
@@ -520,6 +522,23 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   } catch (e) {
     return fail("failed", { error: e instanceof Error ? e.message : String(e) });
   }
+  // An earlier run that stopped on the usage limit is continued, not reclaimed.
+  const pausedFile = join(repo, ".bunker", "paused", `${number}.json`);
+  let paused: (Pause & { issueBaseSha: string }) | undefined;
+  if (attempt === 1 && existsSync(pausedFile)) {
+    try {
+      const saved = JSON.parse(readFileSync(pausedFile, "utf8")) as Pause & { issueBaseSha: string };
+      const hasBranch = (await $`git -C ${repo} rev-parse --verify -q ${`refs/heads/${branch}`}`.nothrow().quiet()).exitCode === 0;
+      if (existsSync(worktree) && hasBranch && typeof saved.issueBaseSha === "string") paused = saved;
+    } catch {}
+    if (!paused) rmSync(pausedFile, { force: true });
+  }
+  if (paused) {
+    baseSha = paused.issueBaseSha;
+    setUntrack(track({ repo, worktree, branch, base: baseSha }));
+    log("resuming after the usage limit", `session ${paused.sessionId ?? "(none)"}, ${paused.role} round ${paused.round}`);
+    emit(onEvent, { type: "note", text: `#${number}: resuming after the usage limit (session ${paused.sessionId ?? "none"})` });
+  } else {
   // A restart can leave this issue's branch (and worktree) behind; reclaim it, or defer to its open PR.
   const leftover = await reclaimLeftover({ repo, cwd, number, branch, worktree, baseSha, remote, gitCfg, env, log, onEvent });
   if (leftover) return fail("already-in-progress", { prUrl: leftover.prUrl });
@@ -531,6 +550,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   } catch (e) {
     return fail("failed", { error: redact(`could not copy files into the worktree: ${e instanceof Error ? e.message : e}`) });
   }
+  }
 
   const prompt =
     issueSection(number, issue) +
@@ -539,8 +559,20 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     ISSUE_CONVENTION;
   log("models", `implementer: ${modelLabel(agent)}\nreviewer: ${modelLabel(reviewer ?? agent)}`);
   log("raw agent events (stream-json lines follow, interleaved with the sections below)");
-  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...timeouts, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), setup, copyToWorktree: patterns, reviewerInstruction: REVIEWER_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
+  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...timeouts, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), ...(paused ? { resumeFrom: paused } : {}), setup, copyToWorktree: patterns, reviewerInstruction: REVIEWER_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
   spent.usage = result.usage;
+  if (result.status === "paused-usage-limit" && result.pause) {
+    // Keep everything and remember where to pick up; the issue keeps its `bunker` label.
+    mkdirSync(join(repo, ".bunker", "paused"), { recursive: true });
+    writeFileSync(pausedFile, JSON.stringify({ ...result.pause, issueBaseSha: baseSha }));
+    const when = result.pause.resetAt !== undefined ? `resets ${new Date(result.pause.resetAt).toISOString()}` : "reset time unknown";
+    const text = `#${number}: paused on the Claude usage limit (${when}); work kept on ${branch}, session ${result.pause.sessionId ?? "none"}`;
+    log("paused: usage limit", text);
+    emit(onEvent, { type: "note", text });
+    log("final status: paused-usage-limit");
+    return finish("paused-usage-limit", { review: result, pause: { ...(result.pause.resetAt !== undefined ? { resetAt: result.pause.resetAt } : {}), ...(result.pause.sessionId ? { sessionId: result.pause.sessionId } : {}) } });
+  }
+  rmSync(pausedFile, { force: true });
 
   for (const [i, r] of result.rounds.entries()) {
     log(`round ${i + 1}: agent output`, r.output);
@@ -864,6 +896,11 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       done[index] = entry;
       if (result.status === "blocked") counted--;
       await onResult?.(entry);
+      // Every other issue would hit the same limit; stop starting new ones.
+      if (result.status === "paused-usage-limit") {
+        stop = true;
+        return;
+      }
       if (result.status === "merged") await resumeBlocked(cwd, env);
       else if (result.status === "blocked") return;
       if (!keepGoing && (!opts.merge || result.status !== "merged")) stop = true;

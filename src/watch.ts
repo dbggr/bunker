@@ -173,6 +173,8 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
         if (!r.pulled) log(r.message);
       }
       let merged = 0;
+      let pausedUntil: number | undefined;
+      let paused = 0;
       const failedBefore = summary.failed;
       await runQueue({
         ...opts, cwd, merge: true, limit: Infinity, keepGoing: true, relist: true,
@@ -182,7 +184,11 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
           const usd = ((e.review?.usage ?? e.usage)?.costUsd ?? 0) + (e.priorCostUsd ?? 0);
           if (usd > 0) addSpend(usd);
           summary.spentUsd += usd;
-          if (e.status === "merged") {
+          if (e.status === "paused-usage-limit") {
+            // Not a failure: the issue keeps `bunker` and is resumed once the limit resets.
+            paused = e.issue;
+            pausedUntil = e.pause?.resetAt;
+          } else if (e.status === "merged") {
             merged++;
             summary.merged++;
           } else if (e.status !== "blocked" && e.status !== "already-in-progress") {
@@ -193,6 +199,14 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
       });
       summary.passes++;
       if (stopped()) break;
+      if (paused) {
+        const wait = pausedUntil !== undefined ? Math.max(0, pausedUntil - Date.now()) : intervalMs;
+        const until = new Date(Date.now() + wait).toISOString();
+        log(`bunker: Claude usage limit reached on #${paused}; paused, sleeping until ${until}${pausedUntil === undefined ? " (no reset time given; using --interval)" : ""}, then resuming the same issue`);
+        await sleep(wait);
+        if (!stopped()) log(`bunker: resuming #${paused} after the usage limit`);
+        continue;
+      }
       const progressed = merged > 0 || summary.failed > failedBefore;
       idlePasses = progressed ? 0 : idlePasses + 1;
       // Two passes in a row that merged and failed nothing (everything skipped) would spin; sleep instead.
