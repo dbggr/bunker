@@ -72,7 +72,7 @@ describe("review()", () => {
 
   test("reject then approve: round-2 implementer prompt has the feedback", async () => {
     const repo = await makeRepo();
-    const { agent, prompts } = fakeAgent((n) => (n === 1 ? "echo 'rename foo'" : `echo '${APPROVE}'`));
+    const { agent, prompts } = fakeAgent((n) => (n === 1 ? `echo '<verdict>{"approved":false,"required_changes":["rename foo"]}</verdict>'` : `echo '${APPROVE}'`));
     const r = await review({ cwd: repo, prompt: "do it", agent, sandbox: noSandbox() });
     expect(r.status).toBe("approved");
     expect(r.rounds.map((x) => x.approved)).toEqual([false, true]);
@@ -80,12 +80,12 @@ describe("review()", () => {
     expect(r.commits).toHaveLength(2);
     expect(prompts.write[0]).toBe("do it");
     expect(prompts.write[1]).toContain("do it");
-    expect(prompts.write[1]).toContain("A reviewer requested changes:\nrename foo");
+    expect(prompts.write[1]).toContain("A reviewer requested changes:\n- rename foo");
   });
 
   test("never approved → rejected, not merged, branch kept", async () => {
     const repo = await makeRepo();
-    const { agent } = fakeAgent(() => "echo 'no'");
+    const { agent } = fakeAgent(() => `echo '<verdict>{"approved":false,"required_changes":["no"]}</verdict>'`);
     const r = await review({ cwd: repo, prompt: "do it", agent, sandbox: noSandbox(), maxRounds: 2 });
     expect(r.status).toBe("rejected");
     expect(r.rounds).toHaveLength(2);
@@ -99,7 +99,7 @@ describe("review()", () => {
     const repo = await makeRepo();
     const { agent } = fakeAgent((n) =>
       n === 1
-        ? `echo x > sneaky.txt && git add . && git commit -qm sneaky; echo y > stray.txt; echo nope`
+        ? `echo x > sneaky.txt && git add . && git commit -qm sneaky; echo y > stray.txt; echo '<verdict>{"approved":false,"required_changes":["nope"]}</verdict>'`
         : `echo '${APPROVE}'`,
     );
     const r = await review({ cwd: repo, prompt: "do it", agent, sandbox: noSandbox() });
@@ -116,7 +116,7 @@ describe("review()", () => {
     const p = prompts.review[0]!;
     expect(p).toContain("do it");
     expect(p).toContain("+++ b/f1.txt");
-    expect(p).toContain(APPROVE);
+    expect(p).toContain("<verdict>");
     expect(p).toMatch(/not modify/i);
   });
 
@@ -169,9 +169,96 @@ describe("review()", () => {
 
   test("worktree is always removed", async () => {
     const repo = await makeRepo();
-    const { agent } = fakeAgent(() => "echo no");
+    const { agent } = fakeAgent(() => `echo '<verdict>{"approved":false,"required_changes":["no"]}</verdict>'`);
     await review({ cwd: repo, prompt: "p", agent, sandbox: noSandbox(), maxRounds: 1 });
     const list = await $`git -C ${repo} worktree list --porcelain`.text();
     expect(list.match(/^worktree /gm)).toHaveLength(1);
+  });
+});
+
+describe("review() structured verdict", () => {
+  const verdict = (v: object) => `<verdict>${JSON.stringify(v)}</verdict>`;
+  const say = (s: string) => `cat <<'EOF_'\n${s}\nEOF_`;
+
+  test("verdict approved parsed; issues kept with backticks", async () => {
+    const repo = await makeRepo();
+    const v = verdict({ approved: true, issues: [{ title: "T", body: "see `x.ts`" }] });
+    const { agent } = fakeAgent(() => say(v));
+    const r = await review({ cwd: repo, prompt: "p", agent, sandbox: noSandbox() });
+    expect(r.status).toBe("approved");
+    expect(r.rounds[0]!.verdict?.issues).toEqual([{ title: "T", body: "see `x.ts`" }]);
+  });
+
+  test("approved:false rejects; required_changes feed the next round", async () => {
+    const repo = await makeRepo();
+    const { agent, prompts } = fakeAgent((n) => say(n === 1 ? verdict({ approved: false, required_changes: ["rename foo"] }) : verdict({ approved: true })));
+    const r = await review({ cwd: repo, prompt: "p", agent, sandbox: noSandbox() });
+    expect(r.rounds.map((x) => x.approved)).toEqual([false, true]);
+    expect(prompts.write[1]).toContain("rename foo");
+  });
+
+  test("quoted verdict in prose is ignored (last wins)", async () => {
+    const repo = await makeRepo();
+    const { agent } = fakeAgent(() => say(`I would say ${verdict({ approved: true })} if good.\n${verdict({ approved: false })}`));
+    const r = await review({ cwd: repo, prompt: "p", agent, sandbox: noSandbox(), maxRounds: 1 });
+    expect(r.status).toBe("rejected");
+  });
+
+  test("invalid JSON → retry naming the error → success", async () => {
+    const repo = await makeRepo();
+    const prompts = { write: [] as string[], review: [] as string[] };
+    const { agent } = fakeAgent((n) => say(n === 1 ? "<verdict>{oops</verdict>" : verdict({ approved: true })), prompts);
+    const r = await review({ cwd: repo, prompt: "p", agent, sandbox: noSandbox() });
+    expect(r.status).toBe("approved");
+    expect(prompts.review).toHaveLength(2);
+    expect(prompts.review[1]).toContain("invalid JSON");
+    expect(prompts.write).toHaveLength(1);
+  });
+
+  test("still invalid after maxRetries → bad-output", async () => {
+    const repo = await makeRepo();
+    const prompts = { write: [] as string[], review: [] as string[] };
+    const { agent } = fakeAgent(() => say("no verdict here"), prompts);
+    const r = await review({ cwd: repo, prompt: "p", agent, sandbox: noSandbox(), maxRetries: 1 });
+    expect(r.status).toBe("bad-output");
+    expect(r.error).toContain("verdict");
+    expect(prompts.review).toHaveLength(2);
+  });
+
+  test("implementer <report> parsed", async () => {
+    const repo = await makeRepo();
+    const agent: Agent = {
+      command(_p, mode = "write") {
+        if (mode === "review") return ["sh", "-c", say(verdict({ approved: true }))];
+        return ["sh", "-c", `echo a > a.txt && git add . && git commit -qm a && ${say('<report>{"blocked_by":[{"title":"B","body":"b"}]}</report>')}`];
+      },
+    };
+    const r = await review({ cwd: repo, prompt: "p", agent, sandbox: noSandbox() });
+    expect(r.rounds[0]!.report?.blocked_by).toEqual([{ title: "B", body: "b" }]);
+  });
+
+  test("custom approveSignal is still asked of the reviewer", async () => {
+    const repo = await makeRepo();
+    const { agent, prompts } = fakeAgent(() => "echo LGTM");
+    await review({ cwd: repo, prompt: "p", agent, approveSignal: "LGTM", sandbox: noSandbox() });
+    expect(prompts.review[0]).toContain("LGTM");
+    const def = fakeAgent(() => say(verdict({ approved: true })));
+    await review({ cwd: repo, prompt: "p", agent: def.agent, sandbox: noSandbox() });
+    expect(def.prompts.review[0]).not.toContain("<review>APPROVE</review>");
+  });
+
+  test("an invalid <report> is noted and exposed, not silently dropped", async () => {
+    const repo = await makeRepo();
+    const events: string[] = [];
+    const agent: Agent = {
+      command(_p, mode = "write") {
+        if (mode === "review") return ["sh", "-c", say(verdict({ approved: true }))];
+        return ["sh", "-c", `echo a > a.txt && git add . && git commit -qm a && ${say('<report>{oops</report> <issue title="Quoted">body</issue>')}`];
+      },
+    };
+    const r = await review({ cwd: repo, prompt: "p", agent, sandbox: noSandbox(), onEvent: (e) => void (e.text && events.push(e.text)) });
+    expect(r.rounds[0]!.report).toBeUndefined();
+    expect(r.rounds[0]!.reportError).toContain("invalid JSON");
+    expect(events.some((t) => t.includes("<report>") && t.includes("invalid JSON"))).toBe(true);
   });
 });

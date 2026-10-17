@@ -517,7 +517,7 @@ describe("runIssue()", () => {
 
   test("rejected → nothing pushed, worktree kept", async () => {
     const { repo, origin, prLog } = await setup(issue());
-    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent("nope"), sandbox: noSandbox(), maxRounds: 1 });
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent('<verdict>{"approved":false,"required_changes":["nope"]}</verdict>'), sandbox: noSandbox(), maxRounds: 1 });
     expect(r.status).toBe("rejected");
     expect(r.review?.status).toBe("rejected");
     expect(await originBranches(origin)).toEqual(["main"]);
