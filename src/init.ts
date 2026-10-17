@@ -159,11 +159,12 @@ export async function runInit(opts: { cwd: string; env?: Env; yes: boolean; io: 
     io.say("\n== Repo files ==");
     if (!tc) io.say("Could not detect the toolchain: write .bunker/setup and .bunker/verify yourself.");
     else {
-      if (failing("setup")) await writeFileAsk("setup", tc.setup, `${tc.name}: runs in each worktree before the agent`);
-      if (failing("verify")) await writeFileAsk("verify", tc.verify, `${tc.name}: must pass before anything is pushed`);
+      const toml = [failing("setup") && `# runs in each worktree before the agent\nsetup = ${JSON.stringify(tc.setup)}`, failing("verify") && `# must pass before anything is pushed\nverify = ${JSON.stringify(tc.verify)}`].filter(Boolean).join("\n\n");
+      if (toml && existsSync(join(root, ".bunker", "config.toml"))) io.say(`.bunker/config.toml exists and lacks ${[failing("setup") && "setup", failing("verify") && "verify"].filter(Boolean).join(" and ")}; add it yourself (e.g. ${toml.replace(/^#.*\n/gm, "").replaceAll("\n\n", "; ")})`);
+      else if (toml) await writeFileAsk("config.toml", toml, `${tc.name}: one file for the repo settings; see \`bunker --help\` for more keys`);
       if (failing("dockerfile")) await writeFileAsk("Dockerfile", `FROM bunker-claude\n${tc.dockerfile}`, `adds ${tc.name}, which the base image lacks`);
     }
-    if (failing("verify") && !existsSync(join(root, ".bunker", "verify"))) io.say("Without .bunker/verify, --merge and --watch can't run.");
+    if (failing("verify")) io.say("Without a verify command in .bunker/config.toml, --merge and --watch can't run.");
     await ensureIgnored(root, env, io);
   }
 

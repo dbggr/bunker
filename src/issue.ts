@@ -6,6 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { appendFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { redact } from "./redact.ts";
+import { parseConfig } from "./config.ts";
 import { copyIntoWorktree, copyPatterns } from "./copy.ts";
 import { emit } from "./events.ts";
 import { tailLines, testCounts } from "./output.ts";
@@ -526,14 +527,28 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   // Default verify: the base branch's .bunker/verify, read now so the agent can't weaken it in its worktree.
   let verifySource = "--verify";
   if (!verify) {
-    const file = await $`git -C ${repo} show ${`${baseSha}:.bunker/verify`}`.nothrow().quiet();
-    if (file.exitCode === 0 && file.stdout.toString().trim()) {
-      verify = file.stdout.toString().trim();
+    const show = async (path: string) => {
+      const f = await $`git -C ${repo} show ${`${baseSha}:${path}`}`.nothrow().quiet();
+      return f.exitCode === 0 ? f.stdout.toString() : undefined;
+    };
+    let fromToml: string | undefined;
+    try {
+      const toml = await show(".bunker/config.toml");
+      fromToml = toml === undefined ? undefined : parseConfig(toml).config.verify;
+    } catch (e) {
+      return fail("failed", { error: e instanceof Error ? e.message : String(e) });
+    }
+    const legacy = (await show(".bunker/verify"))?.trim();
+    if (fromToml?.trim()) {
+      verify = fromToml.trim();
+      verifySource = ".bunker/config.toml";
+    } else if (legacy) {
+      verify = legacy;
       verifySource = ".bunker/verify";
     }
   }
-  if (merge && !verify) return fail("failed", { error: "merge requires --verify or a .bunker/verify file" });
-  if (verifyOnHost && !verify) return fail("failed", { error: "--verify-on-host requires --verify or a .bunker/verify file" });
+  if (merge && !verify) return fail("failed", { error: "merge requires --verify, verify in .bunker/config.toml or a .bunker/verify file" });
+  if (verifyOnHost && !verify) return fail("failed", { error: "--verify-on-host requires --verify, verify in .bunker/config.toml or a .bunker/verify file" });
   let patterns: string[];
   try {
     patterns = await copyPatterns(repo, copyToWorktree);

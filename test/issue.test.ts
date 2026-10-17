@@ -502,6 +502,16 @@ describe("runIssue()", () => {
     expect(r.status).toBe("merged");
   });
 
+  test("verify in .bunker/config.toml on origin satisfies merge, and wins over the legacy file", async () => {
+    const { repo } = await setup(issue(), "ff");
+    await $`mkdir -p ${repo}/.bunker`;
+    await Bun.write(join(repo, ".bunker", "config.toml"), 'verify = "test -f feature.txt"\n');
+    await Bun.write(join(repo, ".bunker", "verify"), "false\n");
+    await $`git -C ${repo} add .bunker && git -C ${repo} commit -qm "chore: config" && git -C ${repo} push -q origin main`;
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), merge: true, ciPollMs: 10 });
+    expect(r.status).toBe("merged");
+  });
+
   test("a blank .bunker/verify on origin does not satisfy merge", async () => {
     const { repo, origin } = await setup(issue(), "ff");
     await $`mkdir -p ${repo}/.bunker`;

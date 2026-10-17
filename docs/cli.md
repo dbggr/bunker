@@ -58,10 +58,10 @@ Single prompt and --task:
                              Merges stay serial, in queue order: each PR's branch is first updated to the latest default
                              branch and re-verified; a conflict or failure then gets one fresh attempt from the new main.
                              Trade-off: more concurrent spend, and rework when issues touch the same files; 2 is a good choice
-  --setup "<cmd>"            run in the worktree before the agent (default: .bunker/setup)
-  --verify "<cmd>"           run after approval; a failure stops before pushing (default: .bunker/verify)
+  --setup "<cmd>"            run in the worktree before the agent (default: setup in config.toml, else .bunker/setup)
+  --verify "<cmd>"           run after approval; a failure stops before pushing (default: verify in config.toml, else .bunker/verify)
   --verify-on-host           run --verify on the host instead of in the sandbox
-  --merge                    auto-merge the PR once checks pass (requires --verify or .bunker/verify)
+  --merge                    auto-merge the PR once checks pass (requires --verify or verify in config.toml)
   --ci-timeout <min>         (--merge) minutes to wait for the merge (default 30)
   --idle-timeout <min>       kill an agent or reviewer that prints nothing for this long; the step fails as
                              idle-timeout, worktree and branch kept (default 10)
@@ -77,7 +77,7 @@ Single prompt and --task:
   --ui-keep                  (--ui) keep the hub this run started alive after it ends (Ctrl-C to quit)
 
 --watch:
-  --watch                    loop: work the queue, sleep, repeat until Ctrl-C; needs --verify or .bunker/verify
+  --watch                    loop: work the queue, sleep, repeat until Ctrl-C; needs --verify or verify in config.toml
   --interval <min>           minutes to sleep when no work is waiting (default 10)
   --for <duration>           stop starting new issues after this long, e.g. 5h, 90m, 2h30m (default: until Ctrl-C)
   --max-cost-day <usd>       stop starting issues once this much (notional USD, as `claude -p` reports it) was spent in a rolling 24 h,
@@ -96,17 +96,38 @@ Single prompt and --task:
 init and doctor:
   bunker doctor              read-only, safe to re-run: checks tools (docker, git, gh, claude), auth (Claude token, scoped
                              BUNKER_GH_TOKEN and the permissions it lacks), repo files, GitHub labels / auto-merge / CI /
-                             required check, and the model per role. Prints ✓/✗ with a one-line fix; exit 1 if anything
+                             required check, the model per role, and the effective value and source of every .bunker/config.toml
+                             key (config.toml is validated). Prints ✓/✗ with a one-line fix; exit 1 if anything
                              required is missing
   bunker init                interactive, per repo: runs doctor, then walks each ✗: Claude token (via `claude setup-token`)
                              and the scoped GitHub token (hidden input, validated, stored 0600 in ~/.config/bunker/.env),
-                             .bunker/setup, verify and Dockerfile for the detected toolchain (asks before each write, never
+                             .bunker/config.toml (setup, verify) and Dockerfile for the detected toolchain (asks before each write, never
                              overwrites), models, and the four labels. It never changes repo settings (auto-merge, branch
                              protection, required checks): it prints what to set. Ends with doctor and the first command to run
   --yes                      (init) accept every proposed default without asking; still never overwrites a file and skips the
                              steps that need a secret from you
 
-Repo files:
+Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a separate file):
+  Precedence: CLI flag > env var > config.toml > legacy files (.bunker/setup, verify, copy) > built-in default.
+  Legacy files keep working but are deprecated (a note is printed when both exist). Unknown keys warn; a key of
+  the wrong type exits 2. queue.allow_labelers is read from the checkout you run in, so only list people you trust.
+  Keys (tables: [models], [watch], [merge], [queue]):
+  setup                  shell command run in each worktree before the agent (legacy: .bunker/setup)
+  verify                 command that must pass before anything is pushed (legacy: .bunker/verify)
+  copy                   gitignored paths or globs copied into each worktree (legacy: .bunker/copy)
+  models.implementer     model for the implementer role
+  models.reviewer        model for the reviewer role
+  models.auditor         model for the auditor role
+  models.default         model for every role without its own
+  watch.interval         minutes to sleep between --watch passes (default 10)
+  watch.parallel         issues --watch works at once (default 1)
+  watch.max_cost_day     USD cap per rolling 24h for --watch
+  watch.max_cost_month   USD cap per rolling 30 days for --watch
+  watch.audit_every      days between periodic --audit runs in --watch
+  merge.ci_timeout       minutes --merge waits for CI (default 30)
+  queue.allow_labelers   GitHub logins besides maintainers who may add the `bunker` label
+
+Legacy .bunker/copy (same as copy in config.toml):
   .bunker/copy               gitignored files to copy from your checkout into each worktree before setup (e.g. .env):
                              one path or glob per line, `#` comments; directories are copied recursively, missing
                              paths warn. Paths outside the repo (`..`, absolute) are rejected. Copied files are never
@@ -117,7 +138,7 @@ Models:
   Per role (implementer, reviewer, auditor), highest first: role flag (--implementer-model, --reviewer-model,
   --auditor-model) > --model > role env (BUNKER_IMPLEMENTER_MODEL, BUNKER_REVIEWER_MODEL, BUNKER_AUDITOR_MODEL)
   > BUNKER_MODEL > Claude Code's own default (no --model is passed). Env vars follow the Auth precedence below,
-  so a repo's .bunker/.env can set its own defaults. The model in use is shown when each role starts, in the run
+  so a repo's .bunker/.env can set its own defaults; models.* in .bunker/config.toml rank below the env vars. The model in use is shown when each role starts, in the run
   log, the PR body and --ui; "Claude default" when none is set.
 
 Auth:

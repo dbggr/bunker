@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
 import { AgentFailure, claudeCode, formatDuration, formatUsage, docker, noSandbox, review, run, runAll } from "./index.ts";
+import { loadRepoConfigOrExit } from "./config.ts";
 import { modelLabel, resolveModels } from "./models.ts";
 import { formatChecks, runDoctor } from "./doctor.ts";
 import { runInit, terminalIo } from "./init.ts";
@@ -118,6 +119,7 @@ if (positionals.length === 1 && positionals[0] === "ui") {
   await new Promise(() => {});
 }
 
+const { config: repoCfg, legacy: legacyCfg } = await loadRepoConfigOrExit(process.cwd());
 const prompt = positionals.join(" ");
 const tasks = values.task ?? [];
 let watchOpts: { intervalMs: number; maxCostDayUsd?: number; maxCostMonthUsd?: number; forMs?: number; auditEveryDays?: number } | undefined;
@@ -126,7 +128,7 @@ if (values.watch) {
     console.error("bunker: --watch can't be combined with a prompt, --task, --review, --issue, --queue, --audit or --limit");
     process.exit(2);
   }
-  const intervalMin = values.interval === undefined ? 10 : Number(values.interval);
+  const intervalMin = values.interval === undefined ? repoCfg.watch.interval ?? 10 : Number(values.interval);
   if (!(intervalMin > 0) || !Number.isFinite(intervalMin)) {
     console.error("bunker: --interval must be a positive number of minutes");
     process.exit(2);
@@ -137,7 +139,7 @@ if (values.watch) {
   }
   const capArgs = { day: values["max-cost-day"] ?? values["max-cost"], month: values["max-cost-month"] };
   const fileCaps = await loadSpendCaps().catch((e) => (console.error(`bunker: ${e instanceof Error ? e.message : e}`), process.exit(2)));
-  const caps: { day?: number; month?: number } = { ...fileCaps };
+  const caps: { day?: number; month?: number } = { ...(repoCfg.watch.max_cost_day === undefined ? {} : { day: repoCfg.watch.max_cost_day }), ...(repoCfg.watch.max_cost_month === undefined ? {} : { month: repoCfg.watch.max_cost_month }), ...fileCaps };
   for (const [k, flag] of [["day", values["max-cost-day"] === undefined ? "--max-cost" : "--max-cost-day"], ["month", "--max-cost-month"]] as const) {
     if (capArgs[k] === undefined) continue;
     const n = Number(capArgs[k]);
@@ -147,7 +149,7 @@ if (values.watch) {
     }
     caps[k] = n;
   }
-  let auditEveryDays: number | undefined;
+  let auditEveryDays: number | undefined = repoCfg.watch.audit_every;
   if (values["audit-every"] !== undefined) {
     auditEveryDays = Number(values["audit-every"]);
     if (!(auditEveryDays > 0) || !Number.isFinite(auditEveryDays)) {
@@ -163,8 +165,8 @@ if (values.watch) {
       process.exit(2);
     }
   }
-  if (!values.verify && !existsSync(join(process.cwd(), ".bunker", "verify"))) {
-    console.error("bunker: --watch needs a verify command: pass --verify \"<cmd>\" or add a .bunker/verify file");
+  if (!values.verify && !repoCfg.verify && !legacyCfg.verify && !existsSync(join(process.cwd(), ".bunker", "verify"))) {
+    console.error("bunker: --watch needs a verify command: pass --verify \"<cmd>\" or set verify in .bunker/config.toml");
     process.exit(2);
   }
   watchOpts = { intervalMs: intervalMin * 60_000, ...(caps.day === undefined ? {} : { maxCostDayUsd: caps.day }), ...(caps.month === undefined ? {} : { maxCostMonthUsd: caps.month }), ...(forMs === undefined ? {} : { forMs }), ...(auditEveryDays === undefined ? {} : { auditEveryDays }) };
@@ -268,7 +270,7 @@ if (!Number.isInteger(limit) || limit < 1) {
   process.exit(2);
 }
 
-let parallel = 1;
+let parallel = values.watch ? repoCfg.watch.parallel ?? 1 : 1;
 if (values.parallel !== undefined) {
   parallel = Number(values.parallel);
   if (!Number.isInteger(parallel) || parallel < 1) {
@@ -292,7 +294,7 @@ if (!values["no-sandbox"] && !hasAuth()) {
   process.exit(2);
 }
 
-let ciTimeoutMin: number | undefined;
+let ciTimeoutMin: number | undefined = values.merge ? repoCfg.merge.ci_timeout : undefined;
 if (values["ci-timeout"] !== undefined) {
   ciTimeoutMin = Number(values["ci-timeout"]);
   if (!(ciTimeoutMin > 0) || !values.merge) {
@@ -323,7 +325,7 @@ process.on("exit", () => clearProgress());
 const startedAt = Date.now();
 process.on("exit", () => console.log(`bunker: elapsed ${formatDuration(Date.now() - startedAt)} (wall-clock)`));
 
-const allowLabelers = [...(values["allow-labeler"] ?? []), ...(values.issue !== undefined || values.queue ? await configAllowedLabelers().catch((e) => (console.error(`bunker: ${e instanceof Error ? e.message : e}`), process.exit(2))) : [])];
+const allowLabelers = [...(values["allow-labeler"] ?? []), ...(repoCfg.queue.allow_labelers ?? []), ...(values.issue !== undefined || values.queue ? await configAllowedLabelers().catch((e) => (console.error(`bunker: ${e instanceof Error ? e.message : e}`), process.exit(2))) : [])];
 const tty = !!process.stdout.isTTY;
 const progress = createProgress({ write: (s) => output.write(redact(s)), tty, columns: process.stdout.columns ?? 100 });
 // Publish to the shared hub when one is up; --ui makes sure there is one. No hub, no publishing, no errors.
@@ -354,7 +356,7 @@ if (pull) {
   const r = await safePull(process.cwd());
   if (!r.pulled) console.log(r.message);
 }
-const models = resolveModels(values);
+const models = resolveModels(values, process.env, repoCfg.models);
 const agent = claudeCode({ model: models.implementer, json: true });
 const reviewerAgent = () => (models.reviewer === models.implementer ? agent : claudeCode({ model: models.reviewer, json: true }));
 const sandbox = values["no-sandbox"] ? noSandbox() : docker({ image: values.image });

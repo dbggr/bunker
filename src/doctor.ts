@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { formatSpend, loadSpendCaps } from "./spend.ts";
 import { AUTH_VARS, loadBunkerEnv } from "./env.ts";
 import { DEFAULT_MODEL_LABEL, resolveModels } from "./models.ts";
+import { ConfigError, effectiveSettings, formatValue, loadRepoConfig } from "./config.ts";
 import { redact } from "./redact.ts";
 import { PRIORITY_LABELS } from "./priority.ts";
 
@@ -12,7 +13,7 @@ export const LABELS = ["bunker", "discovered", "bunker-failed", "bunker-blocked"
 
 export interface Check {
   id: string;
-  group: "tools" | "auth" | "repo" | "github" | "models" | "spend";
+  group: "tools" | "auth" | "repo" | "config" | "github" | "models" | "spend";
   label: string;
   ok: boolean;
   /** Only required checks decide the exit code; an optional ✗ is shown as a note. */
@@ -132,10 +133,22 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
     });
   }
   const file = (name: string) => existsSync(join(root, ".bunker", name));
-  add({ id: "verify", group: "repo", label: ".bunker/verify", ok: file("verify"), fix: "add .bunker/verify with the command that must pass before pushing, e.g. `bun test && bun run typecheck` (`bunker init` proposes one)" });
-  add({ id: "setup", group: "repo", label: ".bunker/setup (optional)", ok: file("setup"), required: false, fix: "runs in each worktree before the agent, e.g. `bun install --frozen-lockfile`" });
+  let loaded: Awaited<ReturnType<typeof loadRepoConfig>> | undefined;
+  try {
+    loaded = await loadRepoConfig(root);
+  } catch (e) {
+    if (!(e instanceof ConfigError)) throw e;
+    add({ id: "config", group: "config", label: ".bunker/config.toml", ok: false, detail: e.message, fix: "fix the key named above (see `bunker --help`, Repo config)" });
+  }
+  const cfg = loaded?.config;
+  const legacy = loaded?.legacy ?? {};
+  if (loaded?.present) add({ id: "config", group: "config", label: ".bunker/config.toml", ok: true, detail: loaded.warnings.length ? loaded.warnings.join("; ") : "valid" });
+  for (const n of loaded?.notes ?? []) add({ id: "config-legacy", group: "config", label: "legacy files", ok: false, required: false, detail: n.replace(/^bunker: /, ""), fix: "move those settings into .bunker/config.toml and delete the files" });
+  if (loaded) for (const s of effectiveSettings({ config: loaded.config, legacy: loaded.legacy, env })) add({ id: `setting-${s.key}`, group: "config", label: s.key, ok: true, required: false, detail: `${formatValue(s.value)} (${s.source})` });
+  add({ id: "verify", group: "repo", label: "verify command", ok: !!cfg?.verify || !!legacy.verify, fix: "set verify in .bunker/config.toml with the command that must pass before pushing, e.g. `bun test && bun run typecheck` (`bunker init` proposes one)" });
+  add({ id: "setup", group: "repo", label: "setup command (optional)", ok: !!cfg?.setup || !!legacy.setup, required: false, fix: "runs in each worktree before the agent, e.g. `bun install --frozen-lockfile`" });
   add({ id: "dockerfile", group: "repo", label: ".bunker/Dockerfile (optional)", ok: file("Dockerfile"), required: false, fix: "starts with `FROM bunker-claude`; adds the toolchain the base image lacks" });
-  add({ id: "copy", group: "repo", label: ".bunker/copy (optional)", ok: file("copy"), required: false, fix: "list gitignored files tests need (e.g. .env), one per line" });
+  add({ id: "copy", group: "repo", label: "copy list (optional)", ok: !!cfg?.copy || !!legacy.copy, required: false, fix: "list gitignored files tests need (e.g. .env) as copy = [\".env\"] in .bunker/config.toml" });
 
   // the scoped token + GitHub settings need the repo and gh
   let defaultBranch: string | undefined;
@@ -231,7 +244,7 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
   }
 
   // models
-  const models = resolveModels({}, env);
+  const models = resolveModels({}, env, cfg?.models);
   add({
     id: "models",
     group: "models",
@@ -248,7 +261,7 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
   return { checks, code: checks.some((c) => c.required && !c.ok) ? 1 : 0, ...(repo ? { repo } : {}), ...(defaultBranch ? { defaultBranch } : {}) };
 }
 
-const TITLES: Record<Check["group"], string> = { tools: "Tools", auth: "Auth", repo: "Repo", github: "GitHub", models: "Models", spend: "Watch spend" };
+const TITLES: Record<Check["group"], string> = { tools: "Tools", auth: "Auth", repo: "Repo", config: "Config", github: "GitHub", models: "Models", spend: "Watch spend" };
 
 export function formatChecks(all: Check[]): string {
   const order = Object.keys(TITLES);
