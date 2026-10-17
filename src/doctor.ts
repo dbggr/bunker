@@ -214,6 +214,21 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
     });
   }
 
+  // the label-adder check reads collaborator permissions (and the issue's label events) with the scoped token
+  if (repo) {
+    const e = scopedEnv(env);
+    const me = await exec(["gh", "api", "user", "--jq", ".login"], { env: e });
+    const login = me.out.trim();
+    const perm = me.code === 0 && login ? await exec(["gh", "api", `repos/${repo.slug}/collaborators/${login}/permission`, "--jq", ".role_name"], { env: e }) : undefined;
+    add({
+      id: "labeler-check",
+      group: "github",
+      label: "token can look up who may queue work (collaborator permission)",
+      ok: perm?.code === 0,
+      fix: "bunker only works issues whose `bunker` label a maintainer added, and fails closed when it can't read collaborator permissions; use a token that can (Metadata R, or a classic token with repo access) and a GitHub origin",
+    });
+  }
+
   // models
   const models = resolveModels({}, env);
   add({

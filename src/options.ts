@@ -24,6 +24,7 @@ export const options = {
   "completion-timeout": { type: "string" },
   "step-timeout": { type: "string" },
   queue: { type: "boolean", default: false },
+  "allow-labeler": { type: "string", multiple: true },
   limit: { type: "string" },
   parallel: { type: "string" },
   watch: { type: "boolean", default: false },

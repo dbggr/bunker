@@ -62,6 +62,7 @@ async function setup(issues: [number, string, string][]) {
     join(bin, "gh"),
     `#!/bin/sh
 echo "$*" >> "${root}/gh.log"
+if [ "$1" = "api" ]; then case "$*" in *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
 if [ "$1 $2" = "issue list" ]; then
   printf '['; sep=''
   hide=0; case "$*" in *"--label bunker --state"*) [ -f "${root}/hide-2" ] && hide=$(cat "${root}/hide-2");; esac

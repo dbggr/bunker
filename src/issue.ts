@@ -1,3 +1,4 @@
+import { enforceLabeler } from "./labeler.ts";
 import { describeQueue, orderQueue, PRIORITY_LABELS, type Queued } from "./priority.ts";
 import { $ } from "bun";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
@@ -776,6 +777,8 @@ export interface QueueOptions extends Omit<IssueOptions, "issue"> {
    * at that point gets one fresh attempt from the new default branch. Needs `merge`.
    */
   parallel?: number;
+  /** GitHub logins besides repo admins and maintainers whose `bunker` label may queue work. */
+  allowLabelers?: string[];
 }
 
 export interface QueueEntry extends IssueResult {
@@ -790,7 +793,7 @@ export interface QueueEntry extends IssueResult {
  * stops after the first PR opens; with `merge` continues only after `merged`.
  * Stops starting issues at the first other outcome, or after `limit` issues.
  */
-export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shouldStop, skip, onResult, parallel = 1, relist, ...opts }: QueueOptions): Promise<QueueEntry[]> {
+export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shouldStop, skip, onResult, parallel = 1, relist, allowLabelers, ...opts }: QueueOptions): Promise<QueueEntry[]> {
   const cwd = opts.cwd ?? process.cwd();
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
@@ -906,6 +909,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       console.log(`bunker: #${q.number} waiting on #${waiting}`);
       continue;
     }
+    if (!(await enforceLabeler(q.number, { cwd, env, ...(allowLabelers ? { allow: allowLabelers } : {}) }))) continue;
     counted++;
     const before = previous;
     let release!: () => void;

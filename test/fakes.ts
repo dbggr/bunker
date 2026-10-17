@@ -36,6 +36,8 @@ f() { if [ -f "$d/$1" ]; then cat "$d/$1"; else echo "HTTP 404: Not Found" >&2; 
 case "$*" in
   "auth status") exit ${opts.ghAuthFails ? 1 : 0};;
   "api repos/o/r") f repo.json;;
+  "api user"*) echo me;;
+  "api repos/o/r/collaborators/me/permission"*) f permission.json;;
   "api repos/o/r/issues?per_page=1") f issues.json;;
   "api repos/o/r/pulls?per_page=1") f pulls.json;;
   "api repos/o/r/branches/main") f branch.json;;
@@ -51,6 +53,7 @@ esac`,
   const good: Record<string, string> = {
     "repo.json": JSON.stringify({ default_branch: "main", allow_auto_merge: true }),
     "issues.json": "[]",
+    "permission.json": "admin",
     "pulls.json": "[]",
     "branch.json": "{}",
     "labels.json": JSON.stringify(["bunker", "discovered", "bunker-failed", "bunker-blocked", "priority:high", "priority:medium", "priority:low"].map((name) => ({ name }))),

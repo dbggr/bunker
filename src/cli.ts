@@ -7,6 +7,7 @@ import { formatChecks, runDoctor } from "./doctor.ts";
 import { runInit, terminalIo } from "./init.ts";
 import { runAudit } from "./audit.ts";
 import { runIssue, runQueue } from "./issue.ts";
+import { configAllowedLabelers, enforceLabeler } from "./labeler.ts";
 import { parseDuration, runWatch } from "./watch.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -205,6 +206,10 @@ if (!values.ui && (values.port !== undefined || values["ui-keep"])) {
   console.error("bunker: --port and --ui-keep only apply to --ui");
   process.exit(2);
 }
+if (values["allow-labeler"]?.length && values.issue === undefined && !values.queue) {
+  console.error("bunker: --allow-labeler only applies to --issue, --queue or --watch");
+  process.exit(2);
+}
 if (values.ui && values.issue === undefined && !values.queue) {
   console.error("bunker: --ui only applies to --issue or --queue");
   process.exit(2);
@@ -293,6 +298,7 @@ process.on("exit", () => clearProgress());
 const startedAt = Date.now();
 process.on("exit", () => console.log(`bunker: elapsed ${formatDuration(Date.now() - startedAt)} (wall-clock)`));
 
+const allowLabelers = [...(values["allow-labeler"] ?? []), ...(values.issue !== undefined || values.queue ? await configAllowedLabelers().catch((e) => (console.error(`bunker: ${e instanceof Error ? e.message : e}`), process.exit(2))) : [])];
 const tty = !!process.stdout.isTTY;
 const progress = createProgress({ write: (s) => output.write(redact(s)), tty, columns: process.stdout.columns ?? 100 });
 // Publish to the shared hub when one is up; --ui makes sure there is one. No hub, no publishing, no errors.
@@ -356,7 +362,7 @@ if (values.audit) {
     });
   }
   try {
-    await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, ...timeouts, parallel, signal: ctl.signal, pull: !values["no-pull"], ...watchOpts });
+    await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, ...timeouts, parallel, allowLabelers, signal: ctl.signal, pull: !values["no-pull"], ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -366,7 +372,7 @@ if (values.audit) {
   const reviewer = reviewerAgent();
   let results;
   try {
-    results = await runQueue({ onEvent, agent, reviewer, sandbox, maxRounds, resume, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin, ...timeouts, parallel });
+    results = await runQueue({ onEvent, agent, reviewer, sandbox, maxRounds, resume, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin, ...timeouts, parallel, allowLabelers });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -392,6 +398,12 @@ if (values.audit) {
   const reviewer = reviewerAgent();
   let result;
   try {
+    const token = process.env.BUNKER_GH_TOKEN;
+    const ghEnv = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
+    if (!(await enforceLabeler(issue, { cwd: process.cwd(), env: ghEnv, allow: allowLabelers }))) {
+      await publisher?.flush();
+      process.exit(1);
+    }
     result = await runIssue({ onEvent, issue, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin, ...timeouts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
