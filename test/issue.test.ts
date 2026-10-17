@@ -1026,14 +1026,18 @@ describe("runIssue() with a leftover branch", () => {
 
   test("an interrupted run with no commits leaves nothing behind", async () => {
     const { repo } = await setup(issue());
-    const agent: Agent = { command: () => ["sh", "-c", "sleep 2"] };
-    const p = runIssue({ cwd: repo, issue: 7, agent, sandbox: noSandbox() });
+    // The worktree is only tracked for cleanup once `worktree add` returns; wait until the agent runs, not for .git to appear.
+    let started = false;
+    const agent: Agent = { command: () => ((started = true), ["sh", "-c", "sleep 2"]) };
+    // Cleaning up under a running review makes it fail; handle that at once so it is never an unhandled rejection.
+    const p = runIssue({ cwd: repo, issue: 7, agent, sandbox: noSandbox() }).catch(() => {});
     const wt = join(repo, ".worktrees", "7-add-feature");
-    for (let i = 0; i < 100 && !(await Bun.file(join(wt, ".git")).exists()); i++) await Bun.sleep(50);
+    for (let i = 0; i < 200 && !started; i++) await Bun.sleep(25);
+    expect(started).toBe(true);
     cleanupInterrupted();
     expect(await Bun.file(join(wt, ".git")).exists()).toBe(false);
     expect((await $`git -C ${repo} branch --list ${BRANCH}`.text()).trim()).toBe("");
-    await p.catch(() => {});
+    await p;
   });
 
   test.each(["SIGINT", "SIGTERM"] as const)("%s exits with 130 so the exit hook can clean up", async (sig) => {
