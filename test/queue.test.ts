@@ -370,7 +370,7 @@ describe("blocked issues", () => {
     const edits = await Bun.file(join(repo, "..", "edits.log")).text();
     expect(edits).toContain("label create bunker-blocked");
     expect(edits).toContain("issue edit 1 --remove-label bunker --add-label bunker-blocked");
-    expect(edits).toContain("issue comment 1 --body Blocked by #100: Need the thing");
+    expect(edits).toContain("issue comment 1 --body Blocked by #100: ` Need the thing `");
     expect((await $`git -C ${repo} ls-remote --heads origin`.text()).includes("feature/1")).toBe(false);
     expect((await $`git -C ${repo} branch --list ${"feature/1-*"}`.text()).trim()).toBe("");
     expect(await Bun.file(r.worktree).exists()).toBe(false);

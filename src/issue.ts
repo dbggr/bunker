@@ -5,7 +5,7 @@ import { $ } from "bun";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { appendFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { redact } from "./redact.ts";
+import { codeSpan, neutralise, redact } from "./redact.ts";
 import { parseConfig } from "./config.ts";
 import { copyIntoWorktree, copyPatterns } from "./copy.ts";
 import { emit } from "./events.ts";
@@ -175,7 +175,7 @@ function reviewLines(result: ReviewResult, agent: Agent, reviewer: Agent): strin
     .join("\n");
 }
 
-const notFiledLines = (items: { title: string; severity?: string }[]) => items.map((f) => `- ${f.title} (${f.severity ?? "medium"})`).join("\n");
+const notFiledLines = (items: { title: string; severity?: string }[]) => items.map((f) => `- ${codeSpan(f.title)} (${f.severity ?? "medium"})`).join("\n");
 
 const BLOCKED_LABEL = "bunker-blocked";
 
@@ -186,7 +186,7 @@ async function markBlocked(issue: number, blocker: { number: number; title: stri
   await $`gh label create ${BLOCKED_LABEL} --description ${"waiting on another issue; bunker relabels it `bunker` once that is closed"} --color FBCA04`.cwd(cwd).env(env).nothrow().quiet();
   const edit = await $`gh issue edit ${issue} --remove-label bunker --add-label ${BLOCKED_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
   if (edit.exitCode !== 0) output.warn(`bunker: could not relabel #${issue}: ${edit.stderr.toString().trim()}`);
-  await $`gh issue comment ${issue} --body ${`${mention ? `${mention} ` : ""}Blocked by #${blocker.number}: ${blocker.title}`}`.cwd(cwd).env(env).nothrow().quiet();
+  await $`gh issue comment ${issue} --body ${`${mention ? `${mention} ` : ""}Blocked by #${blocker.number}: ${codeSpan(blocker.title)}`}`.cwd(cwd).env(env).nothrow().quiet();
 }
 
 /** Whether #n is closed (any reason, incl. not planned: a rejected blocker no longer blocks); undefined if gh can't say. */
@@ -601,7 +601,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   const { file: toFile, notFiled } = pickFollowUps(blocks, MAX_FOLLOW_UPS);
   if (notFiled.length) log("follow-ups not filed", notFiledLines(notFiled));
   for (const b of toFile) {
-    const body = `${b.body}\n\nFound while working on #${number}.`;
+    const body = `${neutralise(b.body)}\n\nFound while working on #${number}.`;
     const severity = `severity:${b.severity ?? "medium"}`;
     // A repo missing the `severity:*` or `bug` label rejects the call; drop the extra labels one at a time rather than lose the follow-up.
     const attempts = [
@@ -610,11 +610,11 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
       ...(b.bug ? [["--label", "bug"]] : []),
       [],
     ];
-    let created = await $`gh issue create --label discovered ${attempts[0]!} --title ${b.title} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
+    let created = await $`gh issue create --label discovered ${attempts[0]!} --title ${neutralise(b.title)} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
     for (const labels of attempts.slice(1)) {
       if (created.exitCode === 0) break;
       log(`gh issue create with extra labels failed, retrying with fewer: ${b.title}`, created.stderr.toString());
-      created = await $`gh issue create --label discovered ${labels} --title ${b.title} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
+      created = await $`gh issue create --label discovered ${labels} --title ${neutralise(b.title)} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
     }
     if (created.exitCode !== 0) {
       log(`gh issue create failed: ${b.title}`, created.stderr.toString());
@@ -625,7 +625,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   }
   // The issue can't be done yet: file what it waits on, park it, and leave nothing behind.
   if (blocker) {
-    const created = await $`gh issue create --label discovered --title ${blocker.title} --body ${`${blocker.body}\n\nBlocks #${number}.`}`.cwd(cwd).env(env).nothrow().quiet();
+    const created = await $`gh issue create --label discovered --title ${neutralise(blocker.title)} --body ${`${neutralise(blocker.body)}\n\nBlocks #${number}.`}`.cwd(cwd).env(env).nothrow().quiet();
     const m = created.exitCode === 0 ? /\/issues\/(\d+)/.exec(created.stdout.toString()) : null;
     if (!m) {
       log(`gh issue create failed: ${blocker.title}`, created.stderr.toString());
@@ -733,7 +733,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     if (push.exitCode !== 0) return fail("failed", { review: result, error: `git push failed:\n${push.stderr}` });
 
     const body = [`Closes #${number}`, reviewLines(result, agent, reviewer ?? agent), ...(verify ? [`Verify: \`${verify}\` passed (${verifySource})`] : []), ...(notFiled.length ? [`Follow-ups not filed (at most one high/medium per run):\n${notFiledLines(notFiled)}`] : [])].join("\n\n");
-    const pr = await $`gh pr create --head ${branch} --title ${issue.title} --body ${body}`.cwd(worktree).env(env).nothrow().quiet();
+    const pr = await $`gh pr create --head ${branch} --title ${neutralise(issue.title)} --body ${body}`.cwd(worktree).env(env).nothrow().quiet();
     if (pr.exitCode !== 0) return fail("failed", { review: result, error: `gh pr create failed:\n${pr.stderr}` });
     const prUrl = pr.stdout.toString().trim().split("\n").at(-1);
     if (prUrl) emit(onEvent, { type: "meta", url: prUrl });

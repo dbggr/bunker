@@ -40,3 +40,18 @@ describe("redact()", () => {
     expect(redact("ghost sk-learn github")).toBe("ghost sk-learn github");
   });
 });
+
+describe("neutralise()", () => {
+  test("defuses closing keywords, mentions, and redacts tokens", async () => {
+    const { neutralise, codeSpan } = await import("../src/redact.ts");
+    const out = neutralise("Fixes #12, closes https://github.com/o/r/issues/3, resolved o/r#4 cc @someone ghp_abcdefghijklmnop");
+    expect(out).not.toMatch(/fixes\s+#12/i);
+    expect(out).not.toMatch(/closes\s+https/i);
+    expect(out).not.toMatch(/resolved\s+o\/r#4/i);
+    expect(out).not.toMatch(/@someone/);
+    expect(out).toContain("someone");
+    expect(out).toContain("[REDACTED]");
+    expect(out).not.toContain("ghp_");
+    expect(codeSpan("a `b` @c")).toMatch(/^`.*`$/);
+  });
+});
