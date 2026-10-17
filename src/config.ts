@@ -9,7 +9,6 @@ export interface RepoConfig {
   models: { implementer?: string; reviewer?: string; auditor?: string; default?: string };
   watch: { interval?: number; parallel?: number; max_cost_day?: number; max_cost_month?: number; audit_every?: number };
   merge: { ci_timeout?: number };
-  queue: { allow_labelers?: string[] };
 }
 
 /** An invalid `.bunker/config.toml`: the CLI exits 2. */
@@ -40,7 +39,6 @@ export const CONFIG_KEYS: KeySpec[] = [
   { key: "watch.max_cost_month", kind: "number", doc: "USD cap per rolling 30 days for --watch" },
   { key: "watch.audit_every", kind: "number", doc: "days between periodic --audit runs in --watch" },
   { key: "merge.ci_timeout", kind: "number", doc: "minutes --merge waits for CI", default: 30 },
-  { key: "queue.allow_labelers", kind: "strings", doc: "GitHub logins besides maintainers who may add the `bunker` label", default: [] },
 ];
 
 const EXPECTED: Record<Kind, string> = {
@@ -50,7 +48,7 @@ const EXPECTED: Record<Kind, string> = {
   integer: "a positive integer",
 };
 
-const TABLES = ["models", "watch", "merge", "queue"];
+const TABLES = ["models", "watch", "merge"];
 
 function check(kind: Kind, v: unknown): boolean {
   switch (kind) {
@@ -75,11 +73,20 @@ export function parseConfig(text: string, name = ".bunker/config.toml"): { confi
   } catch (e) {
     throw new ConfigError(`${name}: invalid TOML: ${e instanceof Error ? e.message : e}`);
   }
-  const config: RepoConfig = { models: {}, watch: {}, merge: {}, queue: {} };
+  const config: RepoConfig = { models: {}, watch: {}, merge: {} };
   const warnings: string[] = [];
   const known = new Set(CONFIG_KEYS.map((k) => k.key));
   const root = raw as Record<string, unknown>;
   for (const [k, v] of Object.entries(root)) {
+    // A repo file must not widen its own `bunker` label gate: allow-labelers is user-level only.
+    if (k === "queue" && isTable(v)) {
+      for (const sub of Object.keys(v)) {
+        warnings.push(sub === "allow_labelers"
+          ? `${name}: queue.allow_labelers is ignored (a repo file could widen its own gate); set allow-labelers in ~/.config/bunker/config.toml`
+          : `${name}: unknown key queue.${sub}, ignored`);
+      }
+      continue;
+    }
     if (TABLES.includes(k)) {
       if (!isTable(v)) throw new ConfigError(`${name}: ${k} must be a table`);
       for (const [sub, sv] of Object.entries(v)) {

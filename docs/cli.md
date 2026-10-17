@@ -110,8 +110,8 @@ init and doctor:
 Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a separate file):
   Precedence: CLI flag > env var > config.toml > legacy files (.bunker/setup, verify, copy) > built-in default.
   Legacy files keep working but are deprecated (a note is printed when both exist). Unknown keys warn; a key of
-  the wrong type exits 2. queue.allow_labelers is read from the checkout you run in, so only list people you trust.
-  Keys (tables: [models], [watch], [merge], [queue]):
+  the wrong type exits 2.
+  Keys (tables: [models], [watch], [merge]):
   setup                  shell command run in each worktree before the agent (legacy: .bunker/setup)
   verify                 command that must pass before anything is pushed (legacy: .bunker/verify)
   copy                   gitignored paths or globs copied into each worktree (legacy: .bunker/copy)
@@ -125,7 +125,6 @@ Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a sep
   watch.max_cost_month   USD cap per rolling 30 days for --watch
   watch.audit_every      days between periodic --audit runs in --watch
   merge.ci_timeout       minutes --merge waits for CI (default 30)
-  queue.allow_labelers   GitHub logins besides maintainers who may add the `bunker` label
 
 Legacy .bunker/copy (same as copy in config.toml):
   .bunker/copy               gitignored files to copy from your checkout into each worktree before setup (e.g. .env):

@@ -107,8 +107,8 @@ init and doctor:
 Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a separate file):
   Precedence: CLI flag > env var > config.toml > legacy files (.bunker/setup, verify, copy) > built-in default.
   Legacy files keep working but are deprecated (a note is printed when both exist). Unknown keys warn; a key of
-  the wrong type exits 2. queue.allow_labelers is read from the checkout you run in, so only list people you trust.
-  Keys (tables: [models], [watch], [merge], [queue]):
+  the wrong type exits 2.
+  Keys (tables: [models], [watch], [merge]):
 ${CONFIG_HELP}
 
 Legacy .bunker/copy (same as copy in config.toml):
