@@ -3,6 +3,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { redact } from "./redact.ts";
+import { copyIntoWorktree, copyPatterns } from "./copy.ts";
 import { emit } from "./events.ts";
 import { tailLines, testCounts } from "./output.ts";
 import { hyperlink } from "./events.ts";
@@ -34,6 +35,8 @@ export interface IssueOptions {
   resume?: boolean;
   /** Shell command run in the worktree, inside `sandbox`, before the first agent run. Defaults to the repo's `.bunker/setup` script if present. */
   setup?: string;
+  /** Host-relative paths or globs copied from the repo checkout into the worktree before setup (e.g. `.env`). Overrides `.bunker/copy`. Never committed. */
+  copyToWorktree?: string[];
   /** Shell command run in the worktree, inside `sandbox`, once the review approves. */
   verify?: string;
   /** Run `verify` on the host (with the caller's credentials) instead of in the sandbox. */
@@ -336,7 +339,7 @@ export async function runIssue(opts: IssueOptions): Promise<IssueResult> {
   }
 }
 
-async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1 }: IssueOptions, spent: { usage?: Usage }): Promise<IssueResult> {
+async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1 }: IssueOptions, spent: { usage?: Usage }): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -422,8 +425,19 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   }
   if (merge && !verify) return fail("failed", { error: "merge requires --verify or a .bunker/verify file" });
   if (verifyOnHost && !verify) return fail("failed", { error: "--verify-on-host requires --verify or a .bunker/verify file" });
+  let patterns: string[];
+  try {
+    patterns = await copyPatterns(repo, copyToWorktree);
+  } catch (e) {
+    return fail("failed", { error: e instanceof Error ? e.message : String(e) });
+  }
   const add = await worktreeAdmin(() => $`git -C ${repo} worktree add -q -b ${branch} ${worktree} ${baseSha}`.nothrow().quiet());
   if (add.exitCode !== 0) return fail("failed", { error: `could not create worktree:\n${add.stderr}` });
+  try {
+    await copyIntoWorktree(repo, worktree, patterns);
+  } catch (e) {
+    return fail("failed", { error: redact(`could not copy files into the worktree: ${e instanceof Error ? e.message : e}`) });
+  }
 
   const prompt =
     issueSection(number, issue) +
@@ -432,7 +446,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     ISSUE_CONVENTION;
   log("models", `implementer: ${modelLabel(agent)}\nreviewer: ${modelLabel(reviewer ?? agent)}`);
   log("raw agent events (stream-json lines follow, interleaved with the sections below)");
-  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), setup, reviewerInstruction: REVIEWER_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
+  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), setup, copyToWorktree: patterns, reviewerInstruction: REVIEWER_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
   spent.usage = result.usage;
 
   for (const [i, r] of result.rounds.entries()) {

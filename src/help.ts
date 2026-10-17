@@ -71,6 +71,13 @@ Single prompt and --task:
   --focus "<text>"           steer the audit toward a topic
   --setup "<cmd>"            run in the worktree before the agent
 
+Repo files:
+  .bunker/copy               gitignored files to copy from your checkout into each worktree before setup (e.g. .env):
+                             one path or glob per line, \`#\` comments; directories are copied recursively, missing
+                             paths warn. Paths outside the repo (\`..\`, absolute) are rejected. Copied files are never
+                             committed (a commit that includes one fails the run) and the values of copied .env* files
+                             are redacted from output. Library option: copyToWorktree: string[] overrides the file
+
 Models:
   Per role (implementer, reviewer, auditor), highest first: role flag (--implementer-model, --reviewer-model,
   --auditor-model) > --model > role env (BUNKER_IMPLEMENTER_MODEL, BUNKER_REVIEWER_MODEL, BUNKER_AUDITOR_MODEL)
