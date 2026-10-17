@@ -59,6 +59,19 @@ describe("startHub()", () => {
     late.ws.close();
   });
 
+  test("history is capped per repo, keeping the newest events in order", async () => {
+    hub = startHub({ port: 0, token: TOKEN, historyLimit: 3 });
+    for (let i = 1; i <= 5; i++) {
+      await publish(hub.url, { repo: "a/one", event: { type: "stage", issue: 1, name: `s${i}`, at: i } }, TOKEN);
+      if (i === 2) await publish(hub.url, { repo: "b/two", event: { type: "stage", issue: 2, name: "only", at: 10 } }, TOKEN);
+    }
+    const late = await connect(hub.url);
+    await until(() => late.messages.length === 4);
+    await Bun.sleep(50);
+    expect(late.messages.map((m) => m.event.name)).toEqual(["only", "s3", "s4", "s5"]);
+    late.ws.close();
+  });
+
   test("publish without or with a wrong token is rejected and not broadcast", async () => {
     hub = startHub({ port: 0, token: TOKEN });
     const c = await connect(hub.url);
