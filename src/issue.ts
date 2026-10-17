@@ -385,24 +385,34 @@ export async function runIssue(opts: IssueOptions): Promise<IssueResult> {
  * under a `bunker/stale/<n>-<timestamp>` tag; an open PR on origin means the issue is already being handled.
  * Only ever touches `{feature|fix}/<n>-<slug>` for this issue.
  */
-async function reclaimLeftover(o: { repo: string; cwd: string; number: number; branch: string; worktree: string; baseSha: string; remote: string; gitCfg: string[]; env: Record<string, string>; log: (t: string, s?: string) => void; onEvent?: OnEvent }): Promise<{ prUrl?: string } | undefined> {
+async function reclaimLeftover(o: { repo: string; cwd: string; number: number; branch: string; worktree: string; baseSha: string; remote: string; gitCfg: string[]; env: Record<string, string>; log: (t: string, s?: string) => void; onEvent?: OnEvent }): Promise<{ prUrl?: string; remoteSha?: string }> {
   const { repo, number, branch, worktree, baseSha } = o;
-  if (!new RegExp(`^(feature|fix)/${number}-[a-z0-9-]*$`).test(branch)) return undefined;
+  if (!new RegExp(`^(feature|fix)/${number}-[a-z0-9-]*$`).test(branch)) return {};
   const git = (...args: string[]) => $`git -C ${repo} ${args}`.nothrow().quiet();
-  const remoteHas = (await $`git ${o.gitCfg} -C ${repo} ls-remote --heads ${o.remote} ${`refs/heads/${branch}`}`.env(o.env).nothrow().quiet()).stdout.toString().trim() !== "";
-  if (remoteHas) {
+  const remoteSha = (await $`git ${o.gitCfg} -C ${repo} ls-remote --heads ${o.remote} ${`refs/heads/${branch}`}`.env(o.env).nothrow().quiet()).stdout.toString().trim().split(/\s+/)[0] || undefined;
+  if (remoteSha) {
     const prs = await $`gh pr list --head ${branch} --state open --json url`.cwd(o.cwd).env(o.env).nothrow().quiet();
+    // Only a successful lookup with an empty list means "no open PR"; anything else must not lead to replacing the branch.
+    let list: { url?: string }[] | undefined;
     try {
-      const url = (JSON.parse(prs.stdout.toString()) as { url?: string }[])[0]?.url;
-      if (prs.exitCode === 0 && url) {
-        emit(o.onEvent, { type: "note", text: `#${number} is already in progress: ${url}` });
-        return { prUrl: url };
-      }
+      if (prs.exitCode === 0) list = JSON.parse(prs.stdout.toString());
     } catch {}
+    if (!Array.isArray(list)) throw new Error(`could not check for an open PR on ${branch} of #${number}:\n${prs.stderr}`);
+    const url = list[0]?.url;
+    if (url) {
+      emit(o.onEvent, { type: "note", text: `#${number} is already in progress: ${url}` });
+      return { prUrl: url };
+    }
+    // No open PR (e.g. a closed one): keep the remote tip under a tag; the push will replace it.
+    const tag = `bunker/stale/${number}-remote-${stamp()}`;
+    const kept = await $`git ${o.gitCfg} -C ${repo} fetch -q ${o.remote} ${`refs/heads/${branch}:refs/tags/${tag}`}`.env(o.env).nothrow().quiet();
+    if (kept.exitCode !== 0) throw new Error(`could not keep origin's ${branch} of #${number} as ${tag}:\n${kept.stderr}`);
+    o.log("stale remote branch kept", tag);
+    emit(o.onEvent, { type: "note", text: `#${number}: origin already has ${branch} without an open PR; kept it as tag ${tag} and will replace it` });
   }
   const hasBranch = (await git("rev-parse", "--verify", "-q", `refs/heads/${branch}`)).exitCode === 0;
   const hasDir = existsSync(worktree);
-  if (!hasBranch && !hasDir) return undefined;
+  if (!hasBranch && !hasDir) return { remoteSha };
 
   let dirty = false;
   if (hasDir) {
@@ -416,7 +426,7 @@ async function reclaimLeftover(o: { repo: string; cwd: string; number: number; b
       await $`git -C ${worktree} add -A`.nothrow().quiet();
       await $`git -C ${worktree} -c user.name=bunker -c user.email=bunker@localhost commit -q -m ${"wip: uncommitted changes from an interrupted bunker run"}`.nothrow().quiet();
     }
-    const tag = `bunker/stale/${number}-${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z")}`;
+    const tag = `bunker/stale/${number}-${stamp()}`;
     const tagged = await git("tag", tag, hasBranch ? branch : "HEAD");
     if (tagged.exitCode !== 0) throw new Error(`could not keep the leftover work of #${number} as ${tag}:\n${tagged.stderr}`);
     o.log("stale leftover kept", tag);
@@ -426,8 +436,10 @@ async function reclaimLeftover(o: { repo: string; cwd: string; number: number; b
   if (existsSync(worktree)) await rm(worktree, { recursive: true, force: true });
   await worktreeAdmin(() => $`git -C ${repo} worktree prune`.nothrow().quiet());
   if (hasBranch) await worktreeAdmin(() => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
-  return undefined;
+  return { remoteSha };
 }
+
+const stamp = () => new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 
 async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
@@ -505,6 +517,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   if ("error" in fetched) return fail("failed", { error: `could not fetch origin/${defaultBranch}:\n${fetched.error}` });
 
   let baseSha = fetched.sha;
+  let remoteSha: string | undefined;
   // Default verify: the base branch's .bunker/verify, read now so the agent can't weaken it in its worktree.
   let verifySource = "--verify";
   if (!verify) {
@@ -541,7 +554,8 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   } else {
   // A restart can leave this issue's branch (and worktree) behind; reclaim it, or defer to its open PR.
   const leftover = await reclaimLeftover({ repo, cwd, number, branch, worktree, baseSha, remote, gitCfg, env, log, onEvent });
-  if (leftover) return fail("already-in-progress", { prUrl: leftover.prUrl });
+  remoteSha = leftover.remoteSha;
+  if (leftover.prUrl) return fail("already-in-progress", { prUrl: leftover.prUrl });
   const add = await worktreeAdmin(() => $`git -C ${repo} worktree add -q -b ${branch} ${worktree} ${baseSha}`.nothrow().quiet());
   if (add.exitCode !== 0) return fail("failed", { error: `could not create worktree:\n${add.stderr}` });
   setUntrack(track({ repo, worktree, branch, base: baseSha }));
@@ -696,7 +710,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
       if (failed) return failed;
     }
     emitStage({ onEvent }, "PR");
-    const push = await $`git ${gitCfg} -C ${worktree} push -q ${token ? [] : ['-u']} ${remote} ${branch}`.env(env).nothrow().quiet();
+    const push = await $`git ${gitCfg} -C ${worktree} push -q ${token ? [] : ['-u']} ${remoteSha ? [`--force-with-lease=${branch}:${remoteSha}`] : []} ${remote} ${branch}`.env(env).nothrow().quiet();
     if (push.exitCode !== 0) return fail("failed", { review: result, error: `git push failed:\n${push.stderr}` });
 
     const body = [`Closes #${number}`, reviewLines(result, agent, reviewer ?? agent), ...(verify ? [`Verify: \`${verify}\` passed (${verifySource})`] : [])].join("\n\n");
