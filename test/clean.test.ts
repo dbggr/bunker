@@ -279,6 +279,70 @@ describe("bunker clean", () => {
     expect(existsSync(join(runs, "2-new.log"))).toBe(true);
   });
 
+  describe("sessions and auto log pruning", () => {
+    const session = async (repo: string, n: number) => {
+      await Bun.write(join(repo, ".bunker/sessions", String(n), "s.jsonl"), "x");
+      return join(repo, ".bunker/sessions", String(n));
+    };
+
+    test("removes the sessions of closed issues, keeps open ones and failed lookups", async () => {
+      const { root, repo } = await setup();
+      await issueState(root, 1, "CLOSED");
+      await issueState(root, 2, "OPEN");
+      const [s1, s2, s3] = [await session(repo, 1), await session(repo, 2), await session(repo, 3)]; // 3: gh fails
+      const dry = await run(repo);
+      expect(dry.out).toContain("sessions/1");
+      expect(existsSync(s1)).toBe(true);
+      await run(repo, { yes: true });
+      expect(existsSync(s1)).toBe(false);
+      expect(existsSync(s2)).toBe(true);
+      expect(existsSync(s3)).toBe(true);
+    });
+
+    test("keeps the session and log of a paused issue even if it is closed", async () => {
+      const { root, repo } = await setup();
+      await issueState(root, 1, "CLOSED");
+      const s1 = await session(repo, 1);
+      await Bun.write(join(repo, ".bunker/paused/1.json"), "{}");
+      const log = join(repo, ".bunker/runs/1-old.log");
+      await Bun.write(log, "x");
+      const old = new Date(Date.now() - 90 * 86_400_000);
+      await utimes(log, old, old);
+      await run(repo, { yes: true, auto: true, logsDays: 30 });
+      expect(existsSync(s1)).toBe(true);
+      expect(existsSync(log)).toBe(true);
+    });
+
+    test("start-up (auto) cleanup prunes old logs and closed sessions", async () => {
+      const { root, repo } = await setup();
+      await issueState(root, 1, "CLOSED");
+      const s1 = await session(repo, 1);
+      const runs = join(repo, ".bunker/runs");
+      await Bun.write(join(runs, "9-old.log"), "x");
+      await Bun.write(join(runs, "9-new.log"), "x");
+      const old = new Date(Date.now() - 40 * 86_400_000);
+      await utimes(join(runs, "9-old.log"), old, old);
+      await run(repo, { yes: true, auto: true, logsDays: 30 });
+      expect(existsSync(s1)).toBe(false);
+      expect(existsSync(join(runs, "9-old.log"))).toBe(false);
+      expect(existsSync(join(runs, "9-new.log"))).toBe(true);
+    });
+
+    test("keeps the session of an issue whose worktree a process is using", async () => {
+      const { root, repo } = await setup();
+      await issueState(root, 4, "CLOSED");
+      const s4 = await session(repo, 4);
+      const w = await issueWorktree(repo, 4, "busy");
+      const p = Bun.spawn(["sleep", "30"], { cwd: w });
+      try {
+        await run(repo, { yes: true });
+        expect(existsSync(s4)).toBe(true);
+      } finally {
+        p.kill();
+      }
+    });
+  });
+
   test("tests never reach the real docker daemon: the default fake docker answers --images", async () => {
     const { root, repo } = await setup();
     await run(repo, { yes: true, images: true });

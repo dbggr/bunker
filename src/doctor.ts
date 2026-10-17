@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { formatSpend, loadSpendCaps } from "./spend.ts";
 import { AUTH_VARS, loadBunkerEnv } from "./env.ts";
@@ -12,6 +12,25 @@ type Env = Record<string, string | undefined>;
 /** Filed on follow-ups and audit findings; filing falls back to no severity label without them, so they are optional. */
 export const SEVERITY_LABELS = ["severity:high", "severity:medium"] as const;
 export const LABELS = ["bunker", "discovered", "bunker-failed", "bunker-blocked", ...PRIORITY_LABELS.map((p) => p.name), ...SEVERITY_LABELS] as const;
+
+/** Total bytes of the files under `dir` (0 if missing); symlinks are not followed. */
+function dirSize(dir: string): number {
+  let total = 0;
+  try {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      total += e.isDirectory() ? dirSize(p) : lstatSync(p).size;
+    }
+  } catch {}
+  return total;
+}
+
+function formatBytes(n: number): string {
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) (n /= 1024), i++;
+  return i === 0 ? `${n} B` : `${n.toFixed(1)} ${units[i]}`;
+}
 
 export interface Check {
   id: string;
@@ -259,6 +278,9 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
   // spend (notional USD logged by --watch)
   const caps = await loadSpendCaps(env).catch(() => ({}));
   add({ id: "spend", group: "spend", label: "spend so far", ok: true, required: false, detail: formatSpend(join(cwd, ".bunker", "watch-spend.json"), caps) });
+
+  // storage under .bunker/ that pruning keeps in check
+  for (const dir of ["runs", "sessions"]) add({ id: `${dir}-size`, group: "repo", label: `.bunker/${dir}/ size`, ok: true, required: false, detail: formatBytes(dirSize(join(cwd, ".bunker", dir))) });
 
   return { checks, code: checks.some((c) => c.required && !c.ok) ? 1 : 0, ...(repo ? { repo } : {}), ...(defaultBranch ? { defaultBranch } : {}) };
 }

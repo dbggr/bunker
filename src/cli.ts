@@ -97,7 +97,7 @@ if (positionals.length === 1 && positionals[0] === "clean") {
     console.error("bunker: clean only takes --yes, --logs <days>, --images and --force");
     process.exit(2);
   }
-  const logsDays = values.logs === undefined ? undefined : Number(values.logs);
+  const logsDays = values.logs === undefined ? (await loadRepoConfigOrExit(process.cwd())).config.clean.logs_days : Number(values.logs);
   if (logsDays !== undefined && !(logsDays >= 0 && Number.isFinite(logsDays))) {
     console.error("bunker: --logs must be a number of days");
     process.exit(2);
@@ -379,7 +379,7 @@ if (pull) {
   if (!r.pulled) console.log(r.message);
 }
 // Leftovers of earlier interrupted runs; --watch does the same once it holds its lock.
-if (!watchOpts && (values.queue || values.issue !== undefined)) await runClean({ cwd: process.cwd(), yes: true, auto: true });
+if (!watchOpts && (values.queue || values.issue !== undefined)) await runClean({ cwd: process.cwd(), yes: true, auto: true, logsDays: repoCfg.clean.logs_days ?? 30 });
 const models = resolveModels(values, process.env, repoCfg.models);
 const agent = claudeCode({ model: models.implementer, json: true });
 const reviewerAgent = () => (models.reviewer === models.implementer ? agent : claudeCode({ model: models.reviewer, json: true }));
@@ -416,7 +416,7 @@ if (values.audit) {
   const ghToken = process.env.BUNKER_GH_TOKEN;
   const mention = await resolveMention(process.cwd(), (ghToken ? { ...process.env, GH_TOKEN: ghToken } : process.env) as Record<string, string>, repoCfg.notify.github_user);
   try {
-    await runWatch({ notify, mention, onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
+    await runWatch({ notify, mention, onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, logsDays: repoCfg.clean.logs_days ?? 30, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();

@@ -122,3 +122,15 @@ describe("doctor spend", () => {
     expect(r.code).toBe(0);
   });
 });
+
+describe("doctor storage", () => {
+  test("reports the size of runs/ and sessions/", async () => {
+    const w = await fakeWorld();
+    await Bun.write(join(w.repo, ".bunker", "runs", "1-a.log"), "x".repeat(2048));
+    await Bun.write(join(w.repo, ".bunker", "sessions", "1", "s.jsonl"), "x".repeat(1024));
+    const r = await runDoctor({ cwd: w.repo, env: w.env });
+    expect(r.checks.find((c) => c.id === "runs-size")?.detail).toContain("2.0 KB");
+    expect(r.checks.find((c) => c.id === "sessions-size")?.detail).toContain("1.0 KB");
+    expect(r.code).toBe(0);
+  });
+});
