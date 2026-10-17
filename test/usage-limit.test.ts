@@ -152,3 +152,44 @@ describe("usage limit", () => {
     expect(s.failed).toBe(0);
   });
 });
+
+describe("bunker --issue CLI", () => {
+  test("exits 3 with a re-run hint on a usage limit; re-running resumes the same session", async () => {
+    const { root, repo } = await setup();
+    const bin = join(root, "bin");
+    const resetAt = new Date(Date.now() + 3_600_000).toISOString();
+    const out = (o: object) => JSON.stringify({ type: "result", total_cost_usd: 0.1, duration_ms: 5, ...o });
+    await Bun.write(
+      join(bin, "claude"),
+      `#!/bin/sh
+case "$2" in "You are reviewing"*) echo '${out({ result: VERDICT, session_id: "rev" })}'; exit 0;; esac
+resume=none; for a in "$@"; do [ "$prev" = "--resume" ] && resume=$a; prev=$a; done
+echo "write resume=$resume" >> "${root}/calls.log"
+P=$HOME/.claude/projects/$(pwd | tr -c 'a-zA-Z0-9\\n' -)
+mkdir -p "$P"; echo '{}' > "$P/sess-1.jsonl"
+if [ ! -f "${root}/limited" ]; then
+  touch "${root}/limited"
+  echo '${out({ is_error: true, result: "Claude AI usage limit reached", session_id: "sess-1", resets_at: resetAt })}'; exit 1
+fi
+echo hi > f.txt && git add . && git commit -qm "feat: impl"
+echo '${out({ result: "done", session_id: "sess-1" })}'
+`,
+    );
+    await chmod(join(bin, "claude"), 0o755);
+    const cli = join(import.meta.dir, "..", "src", "cli.ts");
+    const run = async () => {
+      const proc = Bun.spawn(["bun", cli, "--issue", "1", "--no-sandbox", "--verify", "true"], { cwd: repo, env: process.env, stdout: "pipe", stderr: "pipe" });
+      const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+      return { stdout, code };
+    };
+    const first = await run();
+    expect(first.code).toBe(3);
+    expect(first.stdout).toContain("[paused-usage-limit]");
+    expect(first.stdout).toContain(`re-run after ${resetAt} to resume`);
+    expect(await Bun.file(join(root, "gh.log")).text()).not.toContain("bunker-failed");
+
+    const second = await run();
+    expect(second.code).toBe(0);
+    expect(await callsOf(root)).toEqual(["write resume=none", "write resume=sess-1"]);
+  });
+});
