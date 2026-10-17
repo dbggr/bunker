@@ -27,11 +27,12 @@ export async function checkLabeler(issue: number, opts: { cwd: string; env: Env;
 }
 
 /** Checks the labeler; when refused for lack of permission, removes the label and says why on the issue. True if the issue may be worked. */
-export async function enforceLabeler(issue: number, opts: { cwd: string; env: Env; allow?: string[]; log?: (text: string) => void }): Promise<boolean> {
+export async function enforceLabeler(issue: number, opts: { cwd: string; env: Env; allow?: string[]; log?: (text: string) => void; onRefused?: () => void }): Promise<boolean> {
   const log = opts.log ?? ((t: string) => console.warn(t));
   const r = await checkLabeler(issue, opts);
   if (r.ok) return true;
   log(`bunker: skipping #${issue}: ${r.reason}`);
+  opts.onRefused?.();
   if (r.denied) {
     const { cwd, env } = opts;
     const edit = await $`gh issue edit ${issue} --remove-label bunker`.cwd(cwd).env(env).nothrow().quiet();

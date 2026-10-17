@@ -364,17 +364,17 @@ describe("runWatch() next pass", () => {
     expect(lines.find((l) => /pass 1 /.test(l))).toMatch(/next pass in 10 min/);
   });
 
-  test("two passes that do nothing sleep even if issues still look waiting", async () => {
-    // The label lookup fails, so every pass skips #1 (no merge, no failure) while countWaiting still sees it as startable.
+  test("an issue whose labeler lookup fails is checked once, then skipped for the run", async () => {
     const { repo, root } = await setup(three.slice(0, 1));
     await Bun.write(join(root, "events-fail"), "");
     const lines: string[] = [];
     const s = await runWatch({ ...long, cwd: repo, agent: fakeAgent(), forMs: 1500, log: (l) => lines.push(l) });
     expect(s.merged).toBe(0);
     expect(s.failed).toBe(0);
-    expect(lines.filter((l) => /next pass now \(1 waiting\)/.test(l))).toHaveLength(1); // pass 1 trusts countWaiting
-    expect(lines.filter((l) => /next pass in/.test(l))).toHaveLength(1); // pass 2 trips the guard
-    expect(s.passes).toBe(2);
+    const calls = (await Bun.file(join(root, "gh.log")).text()).split("\n").filter((l) => /issues\/1\/events/.test(l));
+    expect(calls).toHaveLength(1);
+    expect(lines.filter((l) => /next pass now/.test(l))).toHaveLength(0); // countWaiting no longer counts it
+    expect(lines.find((l) => /pass 1 /.test(l))).toMatch(/next pass in 10 min/);
   });
 });
 
