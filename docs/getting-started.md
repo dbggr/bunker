@@ -1,5 +1,9 @@
 # Getting started
 
+## Quick path
+
+After installing (step 1), run `bunker init` in the repo: it checks everything, walks you through the Claude token, the scoped GitHub token, the `.bunker/` files, models and labels, and ends by running `bunker doctor` and printing the first command to use. `bunker init --yes` accepts the proposed defaults non-interactively (it never overwrites existing files and skips the steps that need a secret). `bunker doctor` is read-only and safe to re-run any time; it exits 1 while anything required is missing. `init` never changes repo settings; for auto-merge and the required check it prints what to set. The steps below are the same setup done by hand.
+
 ## 1. Install
 
 ```sh
