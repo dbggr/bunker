@@ -10,6 +10,7 @@ import { failureReason } from "./reason.ts";
 import { createStatusRecorder } from "./status.ts";
 import pkg from "../package.json" with { type: "json" };
 import { runAudit } from "./audit.ts";
+import { runTriage } from "./triage.ts";
 import type { Agent } from "./index.ts";
 import { countWaiting, runQueue, type QueueEntry, type QueueOptions } from "./issue.ts";
 import { latestBunkerLabeledAt } from "./labeler.ts";
@@ -36,6 +37,8 @@ export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "ke
   pull?: boolean;
   /** Run `--audit` at most once per this many days (state in `.bunker/watch-state.json`). Off by default. */
   auditEveryDays?: number;
+  /** Run `bunker triage` (comment and close only, never labelling) at most once per this many hours. Off by default. */
+  triageEveryHours?: number;
   /** Agent for the periodic audit. Defaults to `agent`. */
   auditor?: Agent;
   /** Cap on issues the periodic audit files. Defaults to 5. */
@@ -52,6 +55,8 @@ export interface WatchSummary {
   failed: number;
   spentUsd: number;
 }
+
+const HOUR_MS = 3_600_000;
 
 export const FAILED_LABEL = "bunker-failed";
 
@@ -100,7 +105,7 @@ function acquireLock(file: string): () => void {
  * Works the `bunker` queue with auto-merge, pass after pass, until aborted or `forMs` is up.
  * Any outcome other than `merged` relabels the issue `bunker-failed` so it is never retried by itself.
  */
-export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, auditor, maxIssues, cleanOnStart, logsDays, log = console.log, notify = noNotify, mention, ...opts }: WatchOptions): Promise<WatchSummary> {
+export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, triageEveryHours, auditor, maxIssues, cleanOnStart, logsDays, log = console.log, notify = noNotify, mention, ...opts }: WatchOptions): Promise<WatchSummary> {
   const cwd = opts.cwd ?? process.cwd();
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
@@ -145,15 +150,31 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   const record = (usd: number) => addSpend(spendFile, usd);
 
   const stateFile = join(dir, "watch-state.json");
-  const readState = (): { lastAuditAt?: number } => {
+  const readState = (): { lastAuditAt?: number; lastTriageAt?: number } => {
     try {
       const raw = JSON.parse(readFileSync(stateFile, "utf8"));
-      return raw && typeof raw.lastAuditAt === "number" ? { lastAuditAt: raw.lastAuditAt } : {};
+      return { ...(typeof raw?.lastAuditAt === "number" ? { lastAuditAt: raw.lastAuditAt } : {}), ...(typeof raw?.lastTriageAt === "number" ? { lastTriageAt: raw.lastTriageAt } : {}) };
     } catch {
       return {};
     }
   };
   const auditDue = () => auditEveryDays !== undefined && Date.now() - (readState().lastAuditAt ?? -Infinity) >= auditEveryDays * DAY_MS;
+  const triageDue = () => triageEveryHours !== undefined && Date.now() - (readState().lastTriageAt ?? -Infinity) >= triageEveryHours * HOUR_MS;
+  /** The periodic triage, comment-and-close only: queueing stays with a maintainer. Recorded as done even when it fails. */
+  const triage = async () => {
+    writeFileSync(stateFile, JSON.stringify({ ...readState(), lastTriageAt: Date.now() }));
+    log("bunker: running the periodic triage");
+    try {
+      const r = await runTriage({ agent: auditor ?? opts.agent, sandbox: opts.sandbox, cwd, setup: opts.setup, mode: "comment", idleTimeoutMs: opts.idleTimeoutMs, completionTimeoutMs: opts.completionTimeoutMs, stepTimeoutMs: opts.stepTimeoutMs });
+      if (r.usage?.costUsd) {
+        record(r.usage.costUsd);
+        summary.spentUsd += r.usage.costUsd;
+      }
+      log(`bunker: triage handled ${r.triaged.length} issue(s)${r.untouched.length ? `, ${r.untouched.length} left untouched` : ""}`);
+    } catch (e) {
+      log(`bunker: triage failed: ${e instanceof Error ? e.message : e}`);
+    }
+  };
   /** The periodic audit. Recorded as done even when it fails, so a broken audit retries next period, not every pass. */
   const audit = async () => {
     writeFileSync(stateFile, JSON.stringify({ ...readState(), lastAuditAt: Date.now() }));
@@ -228,6 +249,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
         if (!r.pulled) log(r.message);
       }
       if (auditDue() && !stopped()) await audit();
+      if (triageDue() && !stopped()) await triage();
       let merged = 0;
       let pausedUntil: number | undefined;
       let paused = 0;

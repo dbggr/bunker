@@ -3,11 +3,11 @@ import { resolveCiTimeout, resolveParallel, resolveWatchSettings } from "../src/
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
-const cfg = { interval: 5, parallel: 3, max_cost_day: 10, max_cost_month: 100, audit_every: 30 };
+const cfg = { interval: 5, parallel: 3, max_cost_day: 10, max_cost_month: 100, audit_every: 30, triage_every: 12 };
 
 describe("watch settings: CLI flag over config.toml", () => {
   test("config values apply when no flag is given", () => {
-    expect(resolveWatchSettings({}, cfg, {})).toEqual({ intervalMin: 5, caps: { day: 10, month: 100 }, auditEveryDays: 30 });
+    expect(resolveWatchSettings({}, cfg, {})).toEqual({ intervalMin: 5, caps: { day: 10, month: 100 }, auditEveryDays: 30, triageEveryHours: 12 });
   });
 
   test("--interval overrides watch.interval", () => {
@@ -25,6 +25,11 @@ describe("watch settings: CLI flag over config.toml", () => {
 
   test("--audit-every overrides watch.audit_every", () => {
     expect(resolveWatchSettings({ "audit-every": "7" }, cfg, {}).auditEveryDays).toBe(7);
+  });
+
+  test("--triage-every overrides watch.triage_every", () => {
+    expect(resolveWatchSettings({ "triage-every": "6" }, cfg, {}).triageEveryHours).toBe(6);
+    expect(() => resolveWatchSettings({ "triage-every": "0" }, cfg, {})).toThrow("--triage-every");
   });
 
   test("a flag beats the user-level spend caps file too", () => {

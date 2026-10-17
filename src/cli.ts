@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { parseArgs } from "node:util";
-import { FlagError, resolveCiTimeout, resolveParallel, resolveWatchSettings } from "./settings.ts";
+import { FlagError, resolveCiTimeout, resolveParallel, resolveTimeouts, resolveWatchSettings } from "./settings.ts";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
 import { $ } from "bun";
 import { AgentFailure, UsageLimit, claudeCode, formatDuration, formatUsage, docker, noSandbox, review, run, runAll, worktreeAdmin } from "./index.ts";
@@ -9,6 +9,7 @@ import { resolveModels } from "./models.ts";
 import { formatChecks, runDoctor } from "./doctor.ts";
 import { runInit, terminalIo } from "./init.ts";
 import { runAudit } from "./audit.ts";
+import { runTriage, formatTriage } from "./triage.ts";
 import { runIssue, runQueue } from "./issue.ts";
 import { loadSpendCaps } from "./spend.ts";
 import { configAllowedLabelers, enforceLabeler } from "./labeler.ts";
@@ -59,6 +60,7 @@ try {
   process.exit(2);
 }
 const { values, positionals } = parsed;
+const isTriage = !process.argv.slice(2).includes("--") && positionals.length === 1 && positionals[0] === "triage";
 
 if (values.help) {
   console.log(HELP);
@@ -133,8 +135,8 @@ if (positionals.length === 1 && positionals[0] === "clean") {
   process.exit(r.code);
 }
 
-if (values.yes) {
-  console.error("bunker: --yes only applies to init and clean");
+if (values.yes && !isTriage) {
+  console.error("bunker: --yes only applies to init, clean and triage");
   process.exit(2);
 }
 if (values.logs !== undefined || values.images || values.force) {
@@ -178,10 +180,45 @@ const guardFlags = <T>(f: () => T): T => {
     process.exit(2);
   }
 };
+// `bunker triage`: a read-only agent checks open `discovered` issues; dry run unless --yes.
+if (isTriage) {
+  const others = Object.entries(values).filter(([k, v]) => !["yes", "limit", "setup", "model", "auditor-model", "image", "no-sandbox", "idle-timeout", "completion-timeout", "step-timeout", "verbose"].includes(k) && v !== false && v !== undefined);
+  if (others.length) {
+    console.error("bunker: triage only takes --yes, --limit, --setup, --model, --auditor-model, --image, --no-sandbox and the timeouts");
+    process.exit(2);
+  }
+  const triageLimit = values.limit === undefined ? 10 : Number(values.limit);
+  if (!Number.isInteger(triageLimit) || triageLimit < 1) {
+    console.error("bunker: --limit must be a positive integer");
+    process.exit(2);
+  }
+  const cfg = (await loadRepoConfigOrExit(process.cwd())).config;
+  await loadBunkerEnv(process.cwd());
+  if (!values["no-sandbox"] && !hasAuth()) {
+    console.error(AUTH_HINT);
+    process.exit(2);
+  }
+  const triageTimeouts = guardFlags(() => resolveTimeouts(values));
+  if (values.verbose) output.verbose = true;
+  const models = resolveModels(values, process.env, cfg.models);
+  const mode = values.yes ? "label" : "dry";
+  let result;
+  try {
+    result = await runTriage({ agent: claudeCode({ model: models.auditor, json: true }), sandbox: values["no-sandbox"] ? noSandbox() : docker({ image: values.image }), mode, limit: triageLimit, setup: values.setup, onEvent: createProgress({ write: (s) => output.write(redact(s)), tty: !!process.stdout.isTTY, columns: process.stdout.columns ?? 100 }).onEvent, ...triageTimeouts });
+  } catch (e) {
+    console.error(`bunker: ${e instanceof Error ? e.message : e}`);
+    process.exit(2);
+  }
+  console.log();
+  for (const line of formatTriage(result, mode)) console.log(line);
+  if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
+  process.exit(0);
+}
+
 const { config: repoCfg, legacy: legacyCfg } = await loadRepoConfigOrExit(process.cwd());
 const prompt = positionals.join(" ");
 const tasks = values.task ?? [];
-let watchOpts: { intervalMs: number; maxCostDayUsd?: number; maxCostMonthUsd?: number; forMs?: number; auditEveryDays?: number } | undefined;
+let watchOpts: { intervalMs: number; maxCostDayUsd?: number; maxCostMonthUsd?: number; forMs?: number; auditEveryDays?: number; triageEveryHours?: number } | undefined;
 if (values.watch) {
   if (prompt || tasks.length || values.review || values.issue !== undefined || values.queue || values.audit || values.limit !== undefined) {
     console.error("bunker: --watch can't be combined with a prompt, --task, --review, --issue, --queue, --audit or --limit");
@@ -192,7 +229,7 @@ if (values.watch) {
     process.exit(2);
   }
   const fileCaps = await loadSpendCaps().catch((e) => (console.error(`bunker: ${e instanceof Error ? e.message : e}`), process.exit(2)));
-  const { intervalMin, caps, auditEveryDays } = guardFlags(() => resolveWatchSettings(values, repoCfg.watch, fileCaps));
+  const { intervalMin, caps, auditEveryDays, triageEveryHours } = guardFlags(() => resolveWatchSettings(values, repoCfg.watch, fileCaps));
   let forMs: number | undefined;
   if (values.for !== undefined) {
     forMs = parseDuration(values.for);
@@ -205,11 +242,11 @@ if (values.watch) {
     console.error("bunker: --watch needs a verify command: pass --verify \"<cmd>\" or set verify in .bunker/config.toml");
     process.exit(2);
   }
-  watchOpts = { intervalMs: intervalMin * 60_000, ...(caps.day === undefined ? {} : { maxCostDayUsd: caps.day }), ...(caps.month === undefined ? {} : { maxCostMonthUsd: caps.month }), ...(forMs === undefined ? {} : { forMs }), ...(auditEveryDays === undefined ? {} : { auditEveryDays }) };
+  watchOpts = { intervalMs: intervalMin * 60_000, ...(caps.day === undefined ? {} : { maxCostDayUsd: caps.day }), ...(caps.month === undefined ? {} : { maxCostMonthUsd: caps.month }), ...(forMs === undefined ? {} : { forMs }), ...(auditEveryDays === undefined ? {} : { auditEveryDays }), ...(triageEveryHours === undefined ? {} : { triageEveryHours }) };
   values.queue = true;
   values.merge = true;
-} else if (values.interval !== undefined || values.for !== undefined || values["max-cost"] !== undefined || values["max-cost-day"] !== undefined || values["max-cost-month"] !== undefined || values["audit-every"] !== undefined) {
-  console.error("bunker: --interval, --for, --max-cost, --max-cost-day, --max-cost-month and --audit-every only apply to --watch");
+} else if (values.interval !== undefined || values.for !== undefined || values["max-cost"] !== undefined || values["max-cost-day"] !== undefined || values["max-cost-month"] !== undefined || values["audit-every"] !== undefined || values["triage-every"] !== undefined) {
+  console.error("bunker: --interval, --for, --max-cost, --max-cost-day, --max-cost-month, --audit-every and --triage-every only apply to --watch");
   process.exit(2);
 }
 if (values.audit) {
@@ -317,21 +354,7 @@ if (!values["no-sandbox"] && !hasAuth()) {
 
 const ciTimeoutMin = guardFlags(() => resolveCiTimeout(values, repoCfg.merge));
 
-const timeouts: { idleTimeoutMs?: number; completionTimeoutMs?: number; stepTimeoutMs?: number } = {};
-for (const [flag, key, unit, ms] of [
-  ["idle-timeout", "idleTimeoutMs", "minutes", 60_000],
-  ["completion-timeout", "completionTimeoutMs", "seconds", 1000],
-  ["step-timeout", "stepTimeoutMs", "minutes", 60_000],
-] as const) {
-  const raw = values[flag];
-  if (raw === undefined) continue;
-  const n = Number(raw);
-  if (!(n > 0)) {
-    console.error(`bunker: --${flag} must be a positive number of ${unit}`);
-    process.exit(2);
-  }
-  timeouts[key] = n * ms;
-}
+const timeouts = guardFlags(() => resolveTimeouts(values));
 
 if (values.verbose) output.verbose = true;
 // The in-place progress line must not outlive the run.
