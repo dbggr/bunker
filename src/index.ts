@@ -1005,7 +1005,7 @@ export interface ReviewResult {
 
 const VERDICT_FORMAT =
   'end your answer with <verdict>{"approved": true|false, "required_changes": ["…"], "issues": [{"title": "…", "body": "…", "severity": "high|medium|low"}], "blocked_by": [{"title": "…", "body": "…"}]}</verdict>: ' +
-  SEVERITY_HELP + " Valid JSON,`approved` true only if the change is acceptable, `required_changes` what must change otherwise. " +
+  SEVERITY_HELP + " Valid JSON, `approved` true only if the change is acceptable, `required_changes` what must change otherwise. " +
   "Only the last <verdict> in your answer counts.";
 
 class BadOutput extends Error {}
