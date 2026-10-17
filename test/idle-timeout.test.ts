@@ -77,21 +77,28 @@ describe("idle timeout", () => {
 });
 
 describe("completion grace", () => {
-  test("reviewer prints approve then hangs → approved after the grace window", async () => {
+  test("reviewer prints approve then goes quiet → not killed by the grace timer", async () => {
     const repo = await makeRepo();
-    const t0 = Date.now();
+    const notes: string[] = [];
     const r = await review({
-      cwd: repo, prompt: "x", sandbox: noSandbox(), completionTimeoutMs: 500, idleTimeoutMs: 20_000, maxRounds: 1,
-      agent: { command: (_p, mode) => ["sh", "-c", mode === "review" ? "echo '<review>APPROVE</review>'; sleep 30" : "true"] },
+      cwd: repo, prompt: "x", sandbox: noSandbox(), completionTimeoutMs: 300, idleTimeoutMs: 20_000, maxRounds: 1,
+      agent: { command: (_p, mode) => ["sh", "-c", mode === "review" ? "echo '<review>APPROVE</review>'; sleep 1" : "true"] },
+      onEvent: (e) => { if (e.type === "note") notes.push(e.text ?? ""); },
     });
     expect(r.status).toBe("approved");
-    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(notes.join("\n")).not.toMatch(/did not exit/i);
   });
 
-  test("run(): completion signal then hang → completed", async () => {
+  test("run(): completion signal then quiet gap → no grace kill, no warning", async () => {
     const repo = await makeRepo();
-    const res = await run({ cwd: repo, prompt: "x", sandbox: noSandbox(), completionTimeoutMs: 400, idleTimeoutMs: 20_000, agent: script("echo '<promise>COMPLETE</promise>'; sleep 30") });
+    const notes: string[] = [];
+    const res = await run({
+      cwd: repo, prompt: "x", sandbox: noSandbox(), completionTimeoutMs: 300, idleTimeoutMs: 20_000,
+      agent: script("echo '<promise>COMPLETE</promise>'; sleep 1; echo finished"),
+      onEvent: (e) => { if (e.type === "note") notes.push(e.text ?? ""); },
+    });
     expect(res.completionSignal).toBe("<promise>COMPLETE</promise>");
+    expect(notes.join("\n")).not.toMatch(/did not exit/i);
   });
 
   test("stream result event then hang → completed, warning noted", async () => {

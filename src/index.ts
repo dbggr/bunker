@@ -102,7 +102,7 @@ export interface ExecResult {
 export interface Timeouts {
   /** An agent or reviewer with no stdout for this long is killed and the step fails as `idle-timeout`. Defaults to 10 minutes. */
   idleTimeoutMs?: number;
-  /** After the completion/approve signal or final `result` event, how long the process may linger before it is killed and counted as done. Defaults to 60 s. */
+  /** After the final stream `result` event, how long the process may linger before it is killed and counted as done. Defaults to 60 s. */
   completionTimeoutMs?: number;
   /** Setup and verify may be quiet: they get this overall limit instead. Defaults to 30 minutes. */
   stepTimeoutMs?: number;
@@ -115,12 +115,12 @@ export const DEFAULT_STEP_MS = 30 * 60_000;
 /** Thrown when an agent or setup/verify step is killed for being quiet or running too long. */
 export class IdleTimeout extends Error {}
 
-/** The limits for an agent step; it counts as finished once it prints a stream `result` event or one of `signals`. */
-export function agentLimits(t: Timeouts, signals: string[]): ExecLimits {
+/** The limits for an agent step; it counts as finished once it prints a stream `result` event. A signal alone doesn't start the grace timer: an agent may merely mention one and go quiet. */
+export function agentLimits(t: Timeouts, _signals: string[] = []): ExecLimits {
   return {
     idleMs: t.idleTimeoutMs ?? DEFAULT_IDLE_MS,
     graceMs: t.completionTimeoutMs ?? DEFAULT_COMPLETION_MS,
-    done: (recent) => /"type"\s*:\s*"result"/.test(recent) || signals.some((s) => s && recent.includes(s)),
+    done: (recent) => /"type"\s*:\s*"result"/.test(recent),
   };
 }
 
