@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { redact } from "./redact.ts";
+import { committedCopies, copyIntoWorktree, copyPatterns, copyRejection } from "./copy.ts";
 import { extractOutput, reportOutput, verdictOutput, type Report, type Verdict } from "./structured.ts";
 import { output, tailLines } from "./output.ts";
 import { emit, findSessionId, findStreamResult, parseClaudeStreamLine, type OnEvent, type Stage, type StreamEvent } from "./events.ts";
@@ -87,6 +88,8 @@ export interface RunOptions {
   resume?: boolean;
   /** Host directory to keep the agent's session files in (`<role>-<round>.jsonl`). Defaults to a temporary one. */
   sessionsDir?: string;
+  /** Host-relative paths or globs copied from `cwd` into the worktree (before setup), e.g. `.env`. Overrides the repo's `.bunker/copy`. Never committed. */
+  copyToWorktree?: string[];
 }
 
 export interface Iteration {
@@ -392,6 +395,17 @@ async function addWorktree(cwd: string, base: string): Promise<Worktree> {
   return wt;
 }
 
+/** Copies the patterns (default: .bunker/copy) into the fresh worktree; on failure removes the worktree and branch. */
+async function copyInto(cwd: string, wt: Worktree, patterns: string[]): Promise<string[]> {
+  try {
+    return await copyIntoWorktree(cwd, wt.path, patterns);
+  } catch (e) {
+    await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.nothrow().quiet());
+    await worktreeAdmin(() => $`git -C ${cwd} branch -D ${wt.branch}`.nothrow().quiet());
+    throw e;
+  }
+}
+
 /** Where an agent run's events are labelled from, and where raw stdout lines go. */
 export interface EventTarget {
   onEvent?: OnEvent | undefined;
@@ -523,9 +537,10 @@ async function runAgent(
   base: string,
   gitCommonDir: string,
   wt: Worktree,
-  { prompt, agent, sandbox, maxIterations = 1, completionSignal = DEFAULT_SIGNAL, onEvent, resume = true, sessionsDir }: Omit<RunOptions, "cwd">,
+  { prompt, agent, sandbox, maxIterations = 1, completionSignal = DEFAULT_SIGNAL, onEvent, resume = true, sessionsDir }: Omit<RunOptions, "cwd" | "copyToWorktree">,
   prefix?: string,
   task?: number,
+  copied: string[] = [],
 ): Promise<AgentOutcome> {
   const signals = [completionSignal].flat();
   const iterations: Iteration[] = [];
@@ -548,6 +563,8 @@ async function runAgent(
       if (code !== 0) {
         throw new AgentFailure(`agent exited with ${code}; work kept on ${wt.branch}`, sumUsage([...iterations.map((i) => i.usage), usage]));
       }
+      const staged = await committedCopies(wt.path, base, copied);
+      if (staged.length) throw new AgentFailure(`${copyRejection(staged)}; work kept on ${wt.branch}`, sumUsage([...iterations.map((i) => i.usage), usage]));
       const total = await commitsBetween(cwd, base, wt.branch);
       iterations.push({ exitCode: code, commits: total.slice(commits.length), ...(step.session ? { sessionId: step.session.id } : {}), ...(usage ? { usage } : {}) });
       commits = total;
@@ -582,10 +599,12 @@ async function mergeBack(cwd: string, branch: string, commits: Commit[]): Promis
  * Branch → sandbox → collect → merge. On agent failure or merge conflict it throws,
  * keeping the branch so you can inspect what it got done.
  */
-export async function run({ cwd = process.cwd(), ...opts }: RunOptions): Promise<RunResult> {
+export async function run({ cwd = process.cwd(), copyToWorktree, ...opts }: RunOptions): Promise<RunResult> {
   const { base, gitCommonDir } = await repoInfo(cwd);
+  const patterns = await copyPatterns(cwd, copyToWorktree);
   const wt = await addWorktree(cwd, base);
-  const outcome = await runAgent(cwd, base, gitCommonDir, wt, opts);
+  const copied = await copyInto(cwd, wt, patterns);
+  const outcome = await runAgent(cwd, base, gitCommonDir, wt, opts, undefined, undefined, copied);
   const conflict = await mergeBack(cwd, wt.branch, outcome.commits);
   if (conflict) throw new Error(conflict);
   return { branch: wt.branch, ...outcome };
@@ -602,6 +621,8 @@ export interface RunAllOptions {
   onEvent?: OnEvent;
   /** As in run(). */
   resume?: boolean;
+  /** As in run(). */
+  copyToWorktree?: string[];
 }
 
 export interface TaskResult {
@@ -622,13 +643,19 @@ export interface TaskResult {
  * its result, never thrown, and its branch is kept. Live output lines are
  * prefixed with the task index (`[2] `); captured stdout is not.
  */
-export async function runAll({ tasks, cwd = process.cwd(), ...opts }: RunAllOptions): Promise<TaskResult[]> {
+export async function runAll({ tasks, cwd = process.cwd(), copyToWorktree, ...opts }: RunAllOptions): Promise<TaskResult[]> {
   const { base, gitCommonDir } = await repoInfo(cwd);
+  const patterns = await copyPatterns(cwd, copyToWorktree);
   const worktrees: Worktree[] = [];
-  for (const _ of tasks) worktrees.push(await addWorktree(cwd, base));
+  const copies: string[][] = [];
+  for (const _ of tasks) {
+    const wt = await addWorktree(cwd, base);
+    worktrees.push(wt);
+    copies.push(await copyInto(cwd, wt, patterns));
+  }
 
   const outcomes = await Promise.allSettled(
-    tasks.map((task, i) => runAgent(cwd, base, gitCommonDir, worktrees[i]!, { ...opts, prompt: task.prompt }, `[${i}] `, i)),
+    tasks.map((task, i) => runAgent(cwd, base, gitCommonDir, worktrees[i]!, { ...opts, prompt: task.prompt }, `[${i}] `, i, copies[i])),
   );
 
   const results: TaskResult[] = [];
@@ -677,6 +704,8 @@ export interface ReviewOptions {
   resume?: boolean;
   /** Host directory to keep agent session files in (`<role>-<round>.jsonl`). Defaults to a temporary one. */
   sessionsDir?: string;
+  /** As in run(), copied before setup. */
+  copyToWorktree?: string[];
 }
 
 export interface ReviewRound {
@@ -751,6 +780,7 @@ export async function review({
   onRaw,
   resume = true,
   sessionsDir,
+  copyToWorktree,
 }: ReviewOptions): Promise<ReviewResult> {
   const { base, gitCommonDir } = await repoInfo(cwd);
   const wt = await addWorktree(cwd, base);
@@ -762,7 +792,9 @@ export async function review({
   let error: string | undefined;
   const store = await sessionStore(sessionsDir);
   let prev: Session | undefined;
+  let copied: string[] = [];
   try {
+    copied = await copyIntoWorktree(cwd, wt.path, await copyPatterns(cwd, copyToWorktree));
     emitStage({ onEvent }, "setup");
     const prep = await runSetup(sandbox, ctx, setup);
     if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${tailLines(prep.stdout)}`);
@@ -783,6 +815,8 @@ export async function review({
       const implOut = interpret(agent, impl.stdout);
       usages.push(implOut.usage);
       if (impl.code !== 0) throw new Error(`agent exited with ${impl.code}; work kept on ${wt.branch}`);
+      const staged = await committedCopies(wt.path, base, copied);
+      if (staged.length) throw new Error(`${copyRejection(staged)}; work kept on ${wt.branch}`);
       const total = await commitsBetween(cwd, base, wt.branch);
       const added = total.slice(commits.length);
       commits = total;

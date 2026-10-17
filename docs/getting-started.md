@@ -35,6 +35,7 @@ Nothing else. See [security.md](security.md) for why.
 In the target repo:
 
 - `.bunker/setup`: runs in each worktree before the agent (worktrees have no `node_modules`), e.g. `bun install`.
+- `.bunker/copy` (optional): gitignored files your tests need (e.g. `.env`), one path or glob per line, copied from your checkout into each worktree before setup. They are never committed and `.env*` values are redacted from logs. Paths outside the repo are rejected.
 - `.bunker/verify`: the command that must pass before anything is pushed, e.g. `bun test && bun run typecheck`. It is read from origin's default branch, so an agent cannot edit it for its own run, and it runs in the sandbox.
 - `.bunker/Dockerfile` (optional): adds the repo's toolchain to the agent image. Start with `FROM bunker-claude`. See [concepts.md](concepts.md).
 - On GitHub: enable "Allow auto-merge", and make a CI check required on the default branch. `--merge` hands the merge to GitHub, which merges only when the required checks pass.
