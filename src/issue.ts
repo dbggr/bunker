@@ -4,7 +4,7 @@ import { describeQueue, orderQueue, PRIORITY_LABELS, type Queued } from "./prior
 import { $ } from "bun";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { appendFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { codeSpan, neutralise, redact } from "./redact.ts";
 import { parseConfig } from "./config.ts";
 import { copyIntoWorktree, copyPatterns } from "./copy.ts";
@@ -13,6 +13,7 @@ import { output, tailLines, testCounts } from "./output.ts";
 import { hyperlink } from "./events.ts";
 import { failureReason } from "./reason.ts";
 import { modelLabel } from "./models.ts";
+import { loadPromptTemplate, renderPrompt } from "./prompt.ts";
 import { AgentFailure, isolatedEnv, type Pause, emitStage, review, runSetup, stepLimits, timeoutMessage, worktreeAdmin, type Timeouts, type Agent, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
 
 export interface IssueInfo {
@@ -99,6 +100,9 @@ const MAX_SLUG = 40;
 const VERIFY_TAIL = 2000;
 /** Follow-ups filed per issue run. */
 const MAX_FOLLOW_UPS = 1;
+
+/** Built-in issue prompt; a repo overrides it with .bunker/prompts/issue.md. */
+const ISSUE_PROMPT = "{{ISSUE}}{{COMMENTS}}Use Conventional Commits for your commit messages, write tests first, and make the repo's tests pass.\n\n{{CONVENTION}}";
 
 const ISSUE_CONVENTION =
   "For problems you find outside this task's scope, do not fix them; instead report them. " +
@@ -603,11 +607,21 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   }
   }
 
-  const prompt =
-    issueSection(number, issue) +
-    commentsSection(issue.comments) +
-    "Use Conventional Commits for your commit messages, write tests first, and make the repo's tests pass.\n\n" +
-    ISSUE_CONVENTION;
+  // Issue text goes in as {{ISSUE}}/{{COMMENTS}} values, so it is never expanded; `!\`cmd\`` only runs from the template.
+  let prompt: string;
+  try {
+    const originUrl = (await $`git -C ${repo} remote get-url origin`.nothrow().quiet().text()).trim();
+    const repoName = /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(originUrl)?.[1] ?? basename(repo);
+    prompt = await renderPrompt(await loadPromptTemplate(worktree, "issue", ISSUE_PROMPT), {
+      cwd: worktree,
+      vars: {
+        ISSUE_NUMBER: String(number), ISSUE_TITLE: issue.title, BRANCH: branch, REPO: repoName, BASE: defaultBranch,
+        ISSUE: issueSection(number, issue), COMMENTS: commentsSection(issue.comments), CONVENTION: ISSUE_CONVENTION,
+      },
+    });
+  } catch (e) {
+    return fail("failed", { error: e instanceof Error ? e.message : String(e) });
+  }
   log("models", `implementer: ${modelLabel(agent)}\nreviewer: ${modelLabel(reviewer ?? agent)}`);
   log("raw agent events (stream-json lines follow, interleaved with the sections below)");
   const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...timeouts, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), ...(paused ? { resumeFrom: paused } : {}), setup, copyToWorktree: patterns, reviewerInstruction: REVIEWER_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
