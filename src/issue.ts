@@ -612,7 +612,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   try {
     const originUrl = (await $`git -C ${repo} remote get-url origin`.nothrow().quiet().text()).trim();
     const repoName = /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(originUrl)?.[1] ?? basename(repo);
-    prompt = await renderPrompt(await loadPromptTemplate(worktree, "issue", ISSUE_PROMPT), {
+    prompt = await renderPrompt(await loadPromptTemplate(repo, fetched.sha, "issue", ISSUE_PROMPT), {
       cwd: worktree,
       vars: {
         ISSUE_NUMBER: String(number), ISSUE_TITLE: issue.title, BRANCH: branch, REPO: repoName, BASE: defaultBranch,

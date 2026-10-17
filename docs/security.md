@@ -7,6 +7,7 @@ An agent runs in a container with the issue worktree and the Claude token. It do
 - **Workflow edits**: the token has no Workflows permission, so GitHub refuses a push that changes `.github/workflows/`. bunker has no code that blocks them; the token does. See [troubleshooting.md](troubleshooting.md).
 - **Queueing work**: agents can only file issues labelled `discovered`, never `bunker`. A human relabelling is the gate.
 - **Verify rules**: `.bunker/verify` is read from origin's default branch, so an agent can't rewrite the check it must pass.
+- **Prompt templates**: `.bunker/prompts/*.md` are read from origin's default branch, never a worktree, so the `` !`cmd` `` lines that run on the host always come from merged (human-reviewed, see below) changes.
 - **Merging**: nothing merges unless the repo's required CI checks pass on GitHub.
 
 ## Token scope
