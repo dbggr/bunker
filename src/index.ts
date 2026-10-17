@@ -116,7 +116,7 @@ export const DEFAULT_STEP_MS = 30 * 60_000;
 export class IdleTimeout extends Error {}
 
 /** The limits for an agent step; it counts as finished once it prints a stream `result` event. A signal alone doesn't start the grace timer: an agent may merely mention one and go quiet. */
-export function agentLimits(t: Timeouts, _signals: string[] = []): ExecLimits {
+export function agentLimits(t: Timeouts): ExecLimits {
   return {
     idleMs: t.idleTimeoutMs ?? DEFAULT_IDLE_MS,
     graceMs: t.completionTimeoutMs ?? DEFAULT_COMPLETION_MS,
@@ -652,12 +652,10 @@ async function agentStep(o: {
   target: Pick<EventTarget, "onEvent" | "task" | "round" | "role">;
   dest: string;
   timeouts?: Timeouts;
-  /** Output that marks the agent as finished, besides a stream `result` event. */
-  signals?: string[];
 }): Promise<{ code: number; stdout: string; session?: Session }> {
   const timeouts = o.timeouts ?? {};
   const label = { ...(o.target.task !== undefined ? { task: o.target.task } : {}), ...(o.target.round !== undefined ? { round: o.target.round } : {}), ...(o.target.role ? { role: o.target.role } : {}) };
-  const ctx: ExecContext = { ...o.ctx, limits: agentLimits(timeouts, o.signals ?? []) };
+  const ctx: ExecContext = { ...o.ctx, limits: agentLimits(timeouts) };
   /** Runs the command; a killed one throws IdleTimeout, a hung-but-finished one is noted and counts as done. */
   const exec = async (cmd: string[]) => {
     const r = await o.sandbox.exec(cmd, ctx);
@@ -731,7 +729,7 @@ async function runAgent(
       const step = await agentStep({
         agent, sandbox, mode: "write", prompt, prev: resume ? prev : undefined, target,
         ctx: { worktree: wt.path, gitCommonDir, ...(prefix ? { prefix } : {}), ...(onLine ? { onLine } : {}) },
-        dest: join(store.dir, `implementer-${i + 1}.jsonl`), timeouts, signals,
+        dest: join(store.dir, `implementer-${i + 1}.jsonl`), timeouts,
       });
       const { code, stdout } = step;
       prev = step.session;
@@ -985,7 +983,6 @@ export async function review({
   let copied: string[] = [];
   /** The step in flight, for the pause record. */
   let step: { role: "implementer" | "reviewer"; round: number; implOutput?: string; implSessionId?: string } = { role: "implementer", round: 1 };
-  const reviewSignals = [approveSignal, "</verdict>"];
   try {
     copied = await copyIntoWorktree(cwd, wt.path, await copyPatterns(cwd, copyToWorktree));
     if (!resumeFrom) {
@@ -1020,7 +1017,7 @@ export async function review({
           ...(resumed ? { resumePrompt: CONTINUE } : feedback !== undefined ? { resumePrompt: `A reviewer requested changes:\n${feedback}` } : {}),
           prev: resumed ? savedSession : resume ? prev : undefined,
           ctx: implHook ? { ...ctx, onLine: implHook } : ctx,
-          dest: join(store.dir, `implementer-${i + 1}.jsonl`), timeouts, signals: [],
+          dest: join(store.dir, `implementer-${i + 1}.jsonl`), timeouts,
         });
         prev = impl.session;
         implOut = interpret(agent, impl.stdout);
@@ -1047,7 +1044,7 @@ export async function review({
         agent: reviewer, sandbox, mode: "review", prompt: revPrompt, target: revTarget,
         ...(revResumed ? { prev: revResumed, resumePrompt: "Your session stopped on the Claude usage limit, which has now reset. Continue the review and finish it." } : {}),
         ctx: revHook ? { ...ctx, onLine: revHook } : ctx,
-        dest: join(store.dir, `reviewer-${i + 1}.jsonl`), timeouts, signals: reviewSignals,
+        dest: join(store.dir, `reviewer-${i + 1}.jsonl`), timeouts,
       });
       let revOut = interpret(reviewer, rev.stdout);
       const attempts: (Usage | undefined)[] = [];
@@ -1060,7 +1057,7 @@ export async function review({
         rev = await agentStep({
           agent: reviewer, sandbox, mode: "review", prompt: `${revPrompt}\n\n${ask}`, resumePrompt: ask, prev: rev.session, target: revTarget,
           ctx: revHook ? { ...ctx, onLine: revHook } : ctx,
-          dest: join(store.dir, `reviewer-${i + 1}-retry${k}.jsonl`), timeouts, signals: reviewSignals,
+          dest: join(store.dir, `reviewer-${i + 1}-retry${k}.jsonl`), timeouts,
         });
         revOut = interpret(reviewer, rev.stdout);
         parsed = extractOutput(revOut.text, verdictOutput);

@@ -94,7 +94,7 @@ describe("runAudit() timeouts", () => {
   test("an agent that prints its audit but lingers is killed and still counts", async () => {
     const { repo } = await setup();
     const out = `<audit>{"issues": []}</audit>`;
-    const r = await runAudit({ cwd: repo, agent: hang(`echo '${out}'; sleep 30`), sandbox: noSandbox(), completionTimeoutMs: 300 });
+    const r = await runAudit({ cwd: repo, agent: hang(`echo '${out}'; echo '{"type":"result","result":"ok"}'; sleep 30`), sandbox: noSandbox(), completionTimeoutMs: 300 });
     expect(r.filed).toEqual([]);
   });
 });
