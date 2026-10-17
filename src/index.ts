@@ -1,4 +1,5 @@
 import { $ } from "bun";
+import { loadRepoConfig } from "./config.ts";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -503,7 +504,7 @@ export async function runSetup(
   setup?: string,
   timeouts: Timeouts = {},
 ): Promise<{ cmd: string; code: number; stdout: string; timedOut?: "idle" | "step" } | undefined> {
-  const cmd = setup ?? ((await Bun.file(join(ctx.worktree, ".bunker", "setup")).exists()) ? "sh .bunker/setup" : undefined);
+  const cmd = setup ?? (await loadRepoConfig(ctx.worktree).then((c) => c.config.setup ?? c.legacy.setup, () => undefined));
   if (!cmd) return undefined;
   const out = await sandbox.exec(["sh", "-c", `(${cmd}) 2>&1`], { ...ctx, limits: stepLimits(timeouts) });
   return { cmd, ...out };

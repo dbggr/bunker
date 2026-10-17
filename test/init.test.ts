@@ -53,8 +53,10 @@ describe("init --yes", () => {
     const w = await bunRepo({ files: { "repo.json": JSON.stringify({ default_branch: "main", allow_auto_merge: false }), "labels.json": JSON.stringify([{ name: "bunker" }]) } });
     const s = scripted();
     await runInit({ cwd: w.repo, env: w.env, yes: true, io: s.io });
-    expect(await Bun.file(join(w.repo, ".bunker/setup")).text()).toBe("bun install --frozen-lockfile\n");
-    expect(await Bun.file(join(w.repo, ".bunker/verify")).text()).toBe("bun test && bun run typecheck\n");
+    const toml = Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text());
+    expect(toml).toEqual({ setup: "bun install --frozen-lockfile", verify: "bun test && bun run typecheck" });
+    expect(await exists(join(w.repo, ".bunker/setup"))).toBe(false);
+    expect(await exists(join(w.repo, ".bunker/verify"))).toBe(false);
     expect(await Bun.file(join(w.repo, ".bunker/Dockerfile")).text()).toContain("FROM bunker-claude");
     const log = await w.log();
     for (const l of ["discovered", "bunker-failed", "bunker-blocked", "priority:high", "priority:medium", "priority:low"]) expect(log).toContain(`gh label create ${l}`);
@@ -71,7 +73,7 @@ describe("init --yes", () => {
     await Bun.write(join(w.repo, ".bunker/verify"), "make check\n");
     await runInit({ cwd: w.repo, env: w.env, yes: true, io: scripted().io });
     expect(await Bun.file(join(w.repo, ".bunker/verify")).text()).toBe("make check\n");
-    expect(await Bun.file(join(w.repo, ".bunker/setup")).text()).toContain("bun install");
+    expect(Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text())).toEqual({ setup: "bun install --frozen-lockfile" });
   });
 
   test("ignores .bunker/.env and .bunker/runs/ without touching tracked files", async () => {
@@ -133,11 +135,10 @@ describe("init interactive", () => {
 
   test("declining a file writes nothing; models go to the repo's .bunker/.env", async () => {
     const w = await bunRepo();
-    const s = scripted({ no: [/\.bunker\/setup/, /\.bunker\/Dockerfile/, /label/i], asks: ["claude-sonnet-5-5", "claude-opus-5-5", "repo"] });
+    const s = scripted({ no: [/config\.toml/, /\.bunker\/Dockerfile/, /label/i], asks: ["claude-sonnet-5-5", "claude-opus-5-5", "repo"] });
     await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io });
-    expect(await exists(join(w.repo, ".bunker/setup"))).toBe(false);
+    expect(await exists(join(w.repo, ".bunker/config.toml"))).toBe(false);
     expect(await exists(join(w.repo, ".bunker/Dockerfile"))).toBe(false);
-    expect(await exists(join(w.repo, ".bunker/verify"))).toBe(true);
     expect(await w.log()).not.toContain("label create");
     const env = await Bun.file(join(w.repo, ".bunker/.env")).text();
     expect(env).toContain("BUNKER_MODEL=claude-sonnet-5-5");
@@ -178,7 +179,7 @@ describe("cli", () => {
     const w = await bunRepo();
     const r = cli(w, "init", "--yes");
     expect(r.err).toBe("");
-    expect(await Bun.file(join(w.repo, ".bunker/verify")).text()).toBe("bun test && bun run typecheck\n");
+    expect(Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text())).toMatchObject({ verify: "bun test && bun run typecheck" });
   });
   test("bunker init without a terminal and without --yes refuses", async () => {
     const w = await bunRepo();

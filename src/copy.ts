@@ -1,14 +1,15 @@
 import { $, Glob } from "bun";
 import { cp, mkdir, realpath, readdir, stat, appendFile, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { loadRepoConfig } from "./config.ts";
 import { addSecrets } from "./redact.ts";
 
-/** The patterns to copy: `override` if given, else the lines of `<dir>/.bunker/copy` (`#` comments, blanks skipped). */
+/** The patterns to copy: `override` if given, else `copy` of `<dir>/.bunker/config.toml`, else the lines of the legacy `.bunker/copy` (`#` comments, blanks skipped). */
 export async function copyPatterns(dir: string, override?: string[]): Promise<string[]> {
   let patterns = override;
   if (!patterns) {
-    const file = Bun.file(join(dir, ".bunker", "copy"));
-    patterns = (await file.exists()) ? (await file.text()).split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")) : [];
+    const { config, legacy } = await loadRepoConfig(dir);
+    patterns = config.copy ?? legacy.copy ?? [];
   }
   for (const p of patterns) {
     if (isAbsolute(p) || p.split(/[\\/]/).includes("..")) throw new Error(`copy path outside the repo: ${p}`);
