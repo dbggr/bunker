@@ -26,7 +26,7 @@ async function branches(repo: string): Promise<string[]> {
   return (await $`git -C ${repo} branch ${"--format=%(refname:short)"}`.text()).trim().split("\n");
 }
 
-const APPROVE = "<review>APPROVE</review>";
+const APPROVE = "<verdict>{\"approved\":true,\"required_changes\":[]}</verdict>";
 
 // Implementer commits one file per round (N = commits so far). The reviewer's
 // script is chosen per call; both see the prompt they were given in `prompts`.
@@ -118,16 +118,6 @@ describe("review()", () => {
     expect(p).toContain("+++ b/f1.txt");
     expect(p).toContain("<verdict>");
     expect(p).toMatch(/not modify/i);
-  });
-
-  test("custom reviewer and approveSignal", async () => {
-    const repo = await makeRepo();
-    const impl = fakeAgent(() => "exit 9");
-    const rev = fakeAgent(() => "echo LGTM");
-    const r = await review({ cwd: repo, prompt: "p", agent: impl.agent, reviewer: rev.agent, approveSignal: "LGTM", sandbox: noSandbox() });
-    expect(r.status).toBe("approved");
-    expect(impl.prompts.review).toHaveLength(0);
-    expect(rev.prompts.review).toHaveLength(1);
   });
 
   test("implementer failure → failed, branch kept, not thrown", async () => {
@@ -235,16 +225,6 @@ describe("review() structured verdict", () => {
     };
     const r = await review({ cwd: repo, prompt: "p", agent, sandbox: noSandbox() });
     expect(r.rounds[0]!.report?.blocked_by).toEqual([{ title: "B", body: "b" }]);
-  });
-
-  test("custom approveSignal is still asked of the reviewer", async () => {
-    const repo = await makeRepo();
-    const { agent, prompts } = fakeAgent(() => "echo LGTM");
-    await review({ cwd: repo, prompt: "p", agent, approveSignal: "LGTM", sandbox: noSandbox() });
-    expect(prompts.review[0]).toContain("LGTM");
-    const def = fakeAgent(() => say(verdict({ approved: true })));
-    await review({ cwd: repo, prompt: "p", agent: def.agent, sandbox: noSandbox() });
-    expect(def.prompts.review[0]).not.toContain("<review>APPROVE</review>");
   });
 
   test("an invalid <report> is noted and exposed, not silently dropped", async () => {

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, type Agent, type Sandbox } from "../src/index.ts";
 import { output } from "../src/output.ts";
-import { parseBlockedBy, parseIssueBlocks, runIssue, runQueue } from "../src/issue.ts";
+import { runIssue, runQueue } from "../src/issue.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -16,7 +16,7 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
-const APPROVE = "<review>APPROVE</review>";
+const APPROVE = "<verdict>{\"approved\":true,\"required_changes\":[]}</verdict>";
 
 // Implementer commits a unique file and prints `implOut`; reviewer prints `verdict`.
 function fakeAgent(verdict: string | ((n: number) => string) = APPROVE, implOut = "", prompts: string[] = []): Agent {
@@ -117,50 +117,13 @@ exit 1
   return { repo, createLog };
 }
 
-describe("code in filed blocks", () => {
-  test("a real block keeps inline code and fenced snippets in title and body", () => {
-    const body = "fix `src/issue.ts` now\n```ts\nconst a = 1;\n```\nend";
-    expect(parseIssueBlocks(`<issue title="Use \`--flag\`">${body}</issue>`)).toEqual([{ title: "Use `--flag`", body }]);
-    expect(parseBlockedBy('<blocked-by title="T">see `x.ts`</blocked-by>')).toEqual({ title: "T", body: "see `x.ts`" });
-  });
-  test("a real block between inline code spans keeps those spans", () => {
-    expect(parseIssueBlocks('use `a` <issue title="Real">has `b` inside</issue> and `c`')).toEqual([{ title: "Real", body: "has `b` inside" }]);
-  });
-  test("a block quoted in backticks is still ignored", () => {
-    expect(parseIssueBlocks('say `<issue title="Q">x</issue>` ok')).toEqual([]);
-  });
-});
-
-describe("parseIssueBlocks()", () => {
-  test("extracts blocks, dedupes by title", () => {
-    const out = 'x <issue title="A">body a</issue>\n<issue title="B">line1\nline2</issue> <issue title="A">again</issue>';
-    expect(parseIssueBlocks(out)).toEqual([
-      { title: "A", body: "body a" },
-      { title: "B", body: "line1\nline2" },
-    ]);
-  });
-
-  test("ignores quoted examples and placeholder titles, keeps real blocks", () => {
-    const b = (t: string) => `<issue title="${t}">body</issue>`;
-    expect(parseIssueBlocks(`see \`${b("Quoted")}\``)).toEqual([]);
-    expect(parseIssueBlocks("```\n" + b("Fenced") + "\n```")).toEqual([]);
-    expect(parseIssueBlocks("~~~xml\n" + b("Tilde") + "\n~~~")).toEqual([]);
-    expect(parseIssueBlocks(`${b("…")} ${b("...")} ${b("  ")} ${b("short title")} ${b("Short Title")}`)).toEqual([]);
-    expect(parseIssueBlocks(`\`x\` then ${b("Real")}`)).toEqual([{ title: "Real", body: "body" }]);
-    expect(parseIssueBlocks(`a stray \` tick\n${b("Real")}\nanother \` tick`)).toEqual([{ title: "Real", body: "body" }]);
-    // Only an equal-length backtick run closes a span.
-    expect(parseIssueBlocks(`a \`\`b\`c ${b("Real")} d\`\` e`)).toEqual([]);
-    expect(parseIssueBlocks(`\`a\`\` ${b("Real")}`)).toEqual([{ title: "Real", body: "body" }]);
-  });
-});
-
 describe("filing discovered issues", () => {
   test("files at most one follow-up (implementer and reviewer blocks, deduped), never bunker", async () => {
     const { repo, createLog } = await setup([[7, "Add feature", "2026-01-01T00:00:00Z"]]);
     const prompts: string[] = [];
     const r = await runIssue({
       cwd: repo, issue: 7, sandbox: noSandbox(),
-      agent: fakeAgent(`${APPROVE} <issue title="Rev found">rb</issue> <issue title="Dup">second</issue>`, '<issue title="Dup">first</issue>', prompts),
+      agent: fakeAgent(`<verdict>${JSON.stringify({ approved: true, required_changes: [], issues: [{ title: "Rev found", body: "rb" }, { title: "Dup", body: "second" }] })}</verdict>`, `<report>${JSON.stringify({ issues: [{ title: "Dup", body: "first" }] })}</report>`, prompts),
     });
     expect(r.status).toBe("pr-opened");
     expect(r.filed).toEqual([{ number: 100, title: "Dup" }]);
@@ -377,18 +340,6 @@ describe("runQueue()", () => {
   });
 });
 
-describe("parseBlockedBy()", () => {
-  const b = (t: string) => `<blocked-by title="${t}">why</blocked-by>`;
-  test("extracts the first real block", () => {
-    expect(parseBlockedBy(`x ${b("Need A")} ${b("Need B")}`)).toEqual({ title: "Need A", body: "why" });
-    expect(parseBlockedBy("no block")).toBeUndefined();
-  });
-  test("ignores code spans, fences and placeholders", () => {
-    expect(parseBlockedBy(`see \`${b("Quoted")}\``)).toBeUndefined();
-    expect(parseBlockedBy("```\n" + b("Fenced") + "\n```")).toBeUndefined();
-    expect(parseBlockedBy(`${b("…")} ${b("short title")}`)).toBeUndefined();
-  });
-});
 
 describe("blocked issues", () => {
   const issues: [number, string, string][] = [
@@ -396,7 +347,7 @@ describe("blocked issues", () => {
     [2, "Second", "2026-02-01T00:00:00Z"],
     [3, "Third", "2026-03-01T00:00:00Z"],
   ];
-  const BLOCK = '<blocked-by title="Need the thing">Cannot proceed. Accept: thing exists.</blocked-by>';
+  const BLOCK = `<report>${JSON.stringify({ blocked_by: [{ title: "Need the thing", body: "Cannot proceed. Accept: thing exists." }] })}</report>`;
   // Issue 1's implementer says it is blocked; everyone else is fine.
   function blockingAgent(): Agent {
     const ok = fakeAgent();
@@ -425,9 +376,9 @@ describe("blocked issues", () => {
     expect(await Bun.file(r.worktree).exists()).toBe(false);
   });
 
-  test("a quoted <blocked-by> is not a block", async () => {
+  test("the old <blocked-by> tag is no longer a block", async () => {
     const { repo } = await setup(issues);
-    const r = await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: fakeAgent(APPROVE, `\`${BLOCK}\``) });
+    const r = await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: fakeAgent(APPROVE, '<blocked-by title="Need the thing">why</blocked-by>') });
     expect(r.status).toBe("pr-opened");
   });
 

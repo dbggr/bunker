@@ -104,21 +104,19 @@ const REVIEWER_CONVENTION =
   "Out-of-scope problems you find go in the verdict's \"issues\" (do not ask for them to be fixed). " +
   'If this issue cannot be done until something else is done, put that in "blocked_by".';
 
-/** Follow-ups from the agents' structured output; the old tag scan applies only to a text whose structured block is absent or invalid. */
+/** Follow-ups from the agents' structured `<report>` / `<verdict>` output. */
 function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: string; body: string; bug?: boolean; severity?: Severity }[]; blocker?: { title: string; body: string } } {
   const real = (f: { title: string }) => !isPlaceholder(f.title.trim());
   const seen = new Map<string, { body: string; bug: boolean; severity?: Severity }>();
   const blocked: { title: string; body: string }[] = [];
   for (const r of rounds) {
     const sources = [
-      { structured: r.report, text: r.output },
-      { structured: r.verdict, text: r.feedback },
+      { structured: r.report },
+      { structured: r.verdict },
     ];
-    for (const { structured, text } of sources) {
-      // A present-but-invalid <report> is never rescued by the regex scan: that would re-open quoted-example bugs.
-      const scan = !structured && !(text === r.output && r.reportError);
-      const issues = structured ? structured.issues : scan ? parseIssueBlocks(text) : [];
-      const blocks = structured ? structured.blocked_by : scan ? [parseBlockedBy(text)].filter((b) => b !== undefined) : [];
+    for (const { structured } of sources) {
+      const issues = structured ? structured.issues : [];
+      const blocks = structured ? structured.blocked_by : [];
       for (const i of issues) if (real(i) && !seen.has(i.title.trim())) seen.set(i.title.trim(), { body: i.body.trim(), bug: "bug" in i && i.bug === true, ...(((i as { severity?: Severity }).severity) ? { severity: (i as { severity?: Severity }).severity } : {}) });
       for (const b of blocks) if (real(b)) blocked.push({ title: b.title.trim(), body: b.body.trim() });
     }
@@ -126,35 +124,7 @@ function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: st
   return { issues: [...seen].map(([title, f]) => ({ title, body: f.body, ...(f.bug ? { bug: true } : {}), ...(f.severity ? { severity: f.severity } : {}) })), ...(blocked[0] ? { blocker: blocked[0] } : {}) };
 }
 
-/**
- * `text` with fenced code and inline code spans blanked out (same length, so offsets line up with the original):
- * blocks an agent merely quotes are not findings. Match on this, then read titles and bodies from the original.
- */
-function prose(text: string): string {
-  const blank = (s: string) => s.replace(/[^\n]/g, "\0");
-  return text
-    .replace(/^ *(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^ *\1[`~]*[ \t]*$|(?![\s\S]))/gm, blank)
-    .replace(/(?<!`)(`+)(?!`)[^\n]*?(?<!`)\1(?!`)/g, blank);
-}
-
-/** Capture groups of every match of `re` (which needs the `d` flag) in the prose of `text`, re-read from the original text. */
-function* proseMatches(text: string, re: RegExp): Generator<string[]> {
-  for (const m of prose(text).matchAll(re)) {
-    const [, ...groups] = (m as RegExpMatchArray & { indices: [number, number][] }).indices;
-    yield groups.map(([from, to]) => text.slice(from, to));
-  }
-}
-
 const isPlaceholder = (title: string) => !/[\p{L}\p{N}]/u.test(title) || title.toLowerCase() === "short title";
-
-/** The first real `<blocked-by title="...">body</blocked-by>` block in `text`, if any. */
-export function parseBlockedBy(text: string): { title: string; body: string } | undefined {
-  for (const m of proseMatches(text, /<blocked-by\s+title="([^"]*)"\s*>([\s\S]*?)<\/blocked-by>/dg)) {
-    const title = m[0]!.trim();
-    if (!isPlaceholder(title)) return { title, body: m[1]!.trim() };
-  }
-  return undefined;
-}
 
 const isObj = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === "object";
 
@@ -174,16 +144,6 @@ export function blockerRefs(issue: Pick<IssueInfo, "body" | "comments">): number
   const refs = new Set<number>();
   for (const t of texts) for (const m of t.matchAll(/\b(?:blocked\s+by|depends\s+on)\s+#(\d+)/gi)) refs.add(Number(m[1]));
   return [...refs];
-}
-
-/** Every `<issue title="...">body</issue>` block in `text`, deduped by title (first wins). */
-export function parseIssueBlocks(text: string): { title: string; body: string }[] {
-  const seen = new Map<string, string>();
-  for (const m of proseMatches(text, /<issue\s+title="([^"]*)"\s*>([\s\S]*?)<\/issue>/dg)) {
-    const title = m[0]!.trim();
-    if (!isPlaceholder(title) && !seen.has(title)) seen.set(title, m[1]!.trim());
-  }
-  return [...seen].map(([title, body]) => ({ title, body }));
 }
 
 /** `fix/<N>-<slug>` for a bug-labelled issue, else `feature/<N>-<slug>`. */

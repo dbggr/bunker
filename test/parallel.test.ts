@@ -15,7 +15,7 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
-const APPROVE = "<review>APPROVE</review>";
+const APPROVE = "<verdict>{\"approved\":true,\"required_changes\":[]}</verdict>";
 
 /**
  * `work` gets the issue number and how many times that issue has been attempted, and returns shell that edits files.

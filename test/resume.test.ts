@@ -34,7 +34,7 @@ async function makeRepo(): Promise<string> {
   return dir;
 }
 
-const APPROVE = "<review>APPROVE</review>";
+const APPROVE = "<verdict>{\"approved\":true,\"required_changes\":[]}</verdict>";
 const REJ = '<verdict>{"approved":false,"required_changes":["fix"]}</verdict>';
 
 /**

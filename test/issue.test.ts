@@ -63,7 +63,7 @@ describe("issueBranch()", () => {
   });
 });
 
-const APPROVE = "<review>APPROVE</review>";
+const APPROVE = "<verdict>{\"approved\":true,\"required_changes\":[]}</verdict>";
 
 // Implementer commits one file; reviewer prints `verdict`. Records the prompts.
 function fakeAgent(verdict: string, prompts: string[] = []): Agent {

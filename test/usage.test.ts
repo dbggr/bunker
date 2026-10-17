@@ -66,7 +66,7 @@ describe("usage totals", () => {
         const out = json("impl", 1, 100);
         return `N=$(git rev-list --count HEAD); echo $N > f$N.txt && git add . && git commit -qm "impl $N"; echo '${out}'`;
       }
-      const out = ++reviews === 1 ? json('<verdict>{"approved":false,"required_changes":["fix it"]}</verdict>', 0.5, 50) : json("<review>APPROVE</review>", 0.5, 50);
+      const out = ++reviews === 1 ? json('<verdict>{"approved":false,"required_changes":["fix it"]}</verdict>', 0.5, 50) : json("<verdict>{\"approved\":true,\"required_changes\":[]}</verdict>", 0.5, 50);
       return `echo '${out}'`;
     });
     const r = await review({ cwd: repo, prompt: "do it", agent, sandbox: noSandbox() });
@@ -95,7 +95,7 @@ describe("usage totals", () => {
     const agent: Agent = {
       command: (_p, mode = "write") => [
         "sh", "-c",
-        mode === "write" ? `echo a > a.txt && git add . && git commit -qm a` : "echo '<review>APPROVE</review>'",
+        mode === "write" ? `echo a > a.txt && git add . && git commit -qm a` : "echo '<verdict>{\"approved\":true,\"required_changes\":[]}</verdict>'",
       ],
     };
     const r = await review({ cwd: repo, prompt: "x", agent, sandbox: noSandbox() });

@@ -155,7 +155,7 @@ function streamingAgent(): Agent {
   return {
     command: (_p, mode = "write") => [
       "sh", "-c",
-      mode === "write" ? `echo hi > a.txt && git add . && git commit -qm "feat: x" && ${lines("done")}` : lines("<review>APPROVE</review>"),
+      mode === "write" ? `echo hi > a.txt && git add . && git commit -qm "feat: x" && ${lines("done")}` : lines("<verdict>{\"approved\":true,\"required_changes\":[]}</verdict>"),
     ],
     parse: (stdout) => ({ text: findStreamResult(stdout)!.text }),
     parseLine: parseClaudeStreamLine,
