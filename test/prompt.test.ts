@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { $ } from "bun";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -68,11 +69,24 @@ describe("renderPrompt", () => {
 });
 
 describe("loadPromptTemplate", () => {
-  test("repo file overrides the built-in", async () => {
-    const cwd = await tmp();
-    expect(await loadPromptTemplate(cwd, "issue", "builtin")).toBe("builtin");
-    await mkdir(join(cwd, ".bunker", "prompts"), { recursive: true });
-    await Bun.write(join(cwd, ".bunker", "prompts", "issue.md"), "custom");
-    expect(await loadPromptTemplate(cwd, "issue", "builtin")).toBe("custom");
+  // #316: templates come from a commit on the default branch, never a worktree's files.
+  test("reads the template at the given commit, ignoring the working tree", async () => {
+    const repo = await tmp();
+    await $`git init -q -b main ${repo} && git -C ${repo} -c user.name=T -c user.email=t@e commit -q --allow-empty -m init`;
+    const bare = (await $`git -C ${repo} rev-parse HEAD`.text()).trim();
+    expect(await loadPromptTemplate(repo, bare, "issue", "builtin")).toBe("builtin");
+    await mkdir(join(repo, ".bunker", "prompts"), { recursive: true });
+    await Bun.write(join(repo, ".bunker", "prompts", "issue.md"), "custom");
+    await $`git -C ${repo} add -A && git -C ${repo} -c user.name=T -c user.email=t@e commit -qm t`;
+    const withTemplate = (await $`git -C ${repo} rev-parse HEAD`.text()).trim();
+    await Bun.write(join(repo, ".bunker", "prompts", "issue.md"), "edited in the worktree");
+    expect(await loadPromptTemplate(repo, withTemplate, "issue", "builtin")).toBe("custom");
+    expect(await loadPromptTemplate(repo, bare, "issue", "builtin")).toBe("builtin");
+  });
+
+  test("an unreadable commit is an error, not the built-in", async () => {
+    const repo = await tmp();
+    await $`git init -q -b main ${repo}`;
+    await expect(loadPromptTemplate(repo, "0000000000000000000000000000000000000000", "issue", "builtin")).rejects.toThrow(/prompt/);
   });
 });

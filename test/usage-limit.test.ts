@@ -129,6 +129,49 @@ describe("usage limit", () => {
     expect(existsSync(join(repo, ".bunker", "paused", "1.json"))).toBe(false);
   });
 
+  // #316: agent commits stay in the review worktree until the run ends, so a resumed run's prompt never sees them.
+  /** Implementer commits `plant` (plus a file); the first review call hits the usage limit, later ones approve. */
+  function reviewerLimitedAgent(root: string, plant: string): Agent {
+    const base = claudeCode({ json: true });
+    return {
+      ...base,
+      command(prompt, mode = "write") {
+        if (mode === "review") {
+          const limited = !existsSync(join(root, "limited"));
+          return ["sh", "-c", limited ? `touch ${root}/limited; ${result({ is_error: true, result: "Claude AI usage limit reached", session_id: "rev-1", resets_at: new Date(Date.now() + 3_600_000).toISOString() })}; exit 1` : result({ result: VERDICT, session_id: "rev-2" })];
+        }
+        return ["sh", "-c", `${plant}echo hi > f.txt && git add -A && git commit -qm "feat: impl"; ${result({ result: "done", session_id: "sess-1" })}`];
+      },
+    };
+  }
+
+  test("a resumed run ignores a prompt template the agent committed before the pause", async () => {
+    const { root, repo } = await setup();
+    const pwned = join(root, "pwned");
+    const plant = `mkdir -p .bunker/prompts && printf '%s\\n' '!\`touch ${pwned}\`' '{{ISSUE}}' > .bunker/prompts/issue.md; `;
+    const a = reviewerLimitedAgent(root, plant);
+    const first = await runIssue({ ...base, cwd: repo, issue: 1, agent: a });
+    expect(first.status).toBe("paused-usage-limit");
+    expect(existsSync(join(first.worktree, ".bunker", "prompts", "issue.md"))).toBe(false); // not merged back while paused
+    await runIssue({ ...base, cwd: repo, issue: 1, agent: a });
+    expect(existsSync(pwned)).toBe(false);
+  });
+
+  test("a default-branch template's command runs against the default branch, not the agent's worktree", async () => {
+    const { root, repo } = await setup();
+    await $`mkdir -p ${repo}/.bunker/prompts`;
+    await Bun.write(join(repo, ".bunker", "prompts", "issue.md"), "ctx: !`sh ctx.sh`\n{{ISSUE}}\n");
+    await Bun.write(join(repo, "ctx.sh"), "echo trusted\n");
+    await $`git -C ${repo} add -A && git -C ${repo} commit -qm "chore: template" && git -C ${repo} push -q origin main`;
+    const pwned = join(root, "pwned");
+    const a = reviewerLimitedAgent(root, `printf 'touch ${pwned}\\necho evil\\n' > ctx.sh; `);
+    const first = await runIssue({ ...base, cwd: repo, issue: 1, agent: a });
+    expect(first.status).toBe("paused-usage-limit");
+    expect(await Bun.file(join(first.worktree, "ctx.sh")).text()).toBe("echo trusted\n");
+    await runIssue({ ...base, cwd: repo, issue: 1, agent: a });
+    expect(existsSync(pwned)).toBe(false);
+  });
+
   test("resuming after a pause replaces a diverged origin branch instead of failing the push", async () => {
     const { root, repo } = await setup();
     const a = limitedAgent(root, Date.now() + 3_600_000);

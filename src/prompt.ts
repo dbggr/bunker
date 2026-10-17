@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { $ } from "bun";
 import { isolatedEnv } from "./index.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -14,10 +14,14 @@ export interface RenderOptions {
   timeoutMs?: number;
 }
 
-/** The template for `name`: the repo's `.bunker/prompts/<name>.md` if present, else the built-in. */
-export async function loadPromptTemplate(repo: string, name: string, builtin: string): Promise<string> {
-  const file = Bun.file(join(repo, ".bunker", "prompts", `${name}.md`));
-  return (await file.exists()) ? file.text() : builtin;
+/**
+ * The template for `name`: `.bunker/prompts/<name>.md` at `rev` (the default branch) if present, else the built-in.
+ * Read from a commit, never a worktree, so an agent can't supply the commands a template runs on the host.
+ */
+export async function loadPromptTemplate(repo: string, rev: string, name: string, builtin: string): Promise<string> {
+  if ((await $`git -C ${repo} cat-file -e ${`${rev}^{commit}`}`.nothrow().quiet()).exitCode !== 0) throw new Error(`prompt: cannot read commit ${rev}`);
+  const file = await $`git -C ${repo} show ${`${rev}:.bunker/prompts/${name}.md`}`.nothrow().quiet();
+  return file.exitCode === 0 ? file.stdout.toString() : builtin;
 }
 
 /**
