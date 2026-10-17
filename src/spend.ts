@@ -1,6 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { readUserConfig } from "./user-config.ts";
 
 export const DAY_MS = 24 * 3_600_000;
 export const MONTH_MS = 30 * DAY_MS;
@@ -79,9 +78,7 @@ export function formatSpend(file: string, caps: SpendCaps): string {
 
 /** `max-cost-day` / `max-cost-month` from ~/.config/bunker/config.toml; absent keys mean no cap. */
 export async function loadSpendCaps(env: Record<string, string | undefined> = process.env): Promise<SpendCaps> {
-  const file = Bun.file(join(env.XDG_CONFIG_HOME || join(env.HOME ?? homedir(), ".config"), "bunker", "config.toml"));
-  if (!(await file.exists())) return {};
-  const parsed = Bun.TOML.parse(await file.text()) as Record<string, unknown>;
+  const parsed = await readUserConfig(env);
   const caps: SpendCaps = {};
   for (const [key, field] of [["max-cost-day", "day"], ["max-cost-month", "month"]] as const) {
     const v = parsed[key];

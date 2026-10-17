@@ -1,6 +1,5 @@
 import { $ } from "bun";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { readUserConfig } from "./user-config.ts";
 
 type Env = Record<string, string>;
 
@@ -44,9 +43,7 @@ export async function enforceLabeler(issue: number, opts: { cwd: string; env: En
 
 /** `allow-labelers = ["login", ...]` from ~/.config/bunker/config.toml (user-level only: a repo file could widen its own gate). */
 export async function configAllowedLabelers(env: Record<string, string | undefined> = process.env): Promise<string[]> {
-  const file = Bun.file(join(env.XDG_CONFIG_HOME || join(env.HOME ?? homedir(), ".config"), "bunker", "config.toml"));
-  if (!(await file.exists())) return [];
-  const parsed = Bun.TOML.parse(await file.text()) as { "allow-labelers"?: unknown };
+  const parsed = await readUserConfig(env);
   const v = parsed["allow-labelers"];
   if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) {
     if (v !== undefined) throw new Error("config.toml: allow-labelers must be a list of GitHub logins");
