@@ -84,6 +84,7 @@ interface Env {
   origin: string;
   prLog: string;
   mergeLog: string;
+  editLog: string;
 }
 
 // A repo with a bare local origin and a fake `gh` first on PATH.
@@ -157,6 +158,7 @@ if [ "$1 $2" = "pr view" ]; then
   echo '{"state":"OPEN","mergeCommit":null}'
   exit 0
 fi
+if [ "$1 $2" = "pr edit" ] || [ "$1 $2" = "label create" ]; then echo "$*" >> "${root}/edit.log"; exit 0; fi
 if [ "$1 $2" = "pr close" ] || [ "$1 $2" = "pr reopen" ]; then echo "$1 $2" >> "${root}/reopen.log"; exit 0; fi
 if [ "$1 $2" = "api repos/{owner}/{repo}/issues/7" ]; then
   echo "$*" >> "${root}/assoc.log"
@@ -174,7 +176,7 @@ exit 1
   );
   await chmod(join(bin, "gh"), 0o755);
   process.env.PATH = `${bin}:${origPath}`;
-  return { repo, origin, prLog, mergeLog: join(root, "merge.log") };
+  return { repo, origin, prLog, mergeLog: join(root, "merge.log"), editLog: join(root, "edit.log") };
 }
 
 const issue = (extra: object = {}) => ({ number: 7, title: "feat: Add feature", body: "Make it so.", state: "OPEN", labels: [], author: { login: "owner" }, authorAssociation: "OWNER", ...extra });
@@ -770,6 +772,38 @@ describe("runIssue() --merge", () => {
     expect(r.error).toContain("bunker doctor");
     expect((await Bun.file(mergeLog).text()).trim().split("\n")).toEqual(["|pr merge https://github.com/o/r/pull/99 --auto --squash"]);
     expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
+  });
+
+  test.each([".bunker/verify", ".github/workflows/ci.yml"])("a PR touching %s → no auto-merge, labelled needs-human-review, needs-review", async (path) => {
+    const { repo, mergeLog, editLog } = await setup(issue(), "ff");
+    const agent: Agent = { command: (p, m = "write") => (m === "write" ? ["sh", "-c", `mkdir -p $(dirname ${path}) && echo x > ${path} && echo hi > feature.txt && git add -A && git commit -qm "feat: impl"`] : ["sh", "-c", `echo '${APPROVE}'`]) };
+    const r = await run(repo, { agent });
+    expect(r.status).toBe("needs-review");
+    expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
+    expect(r.error).toContain(path);
+    expect(await Bun.file(mergeLog).exists()).toBe(false);
+    expect(await Bun.file(editLog).text()).toContain("pr edit https://github.com/o/r/pull/99 --add-label needs-human-review");
+  });
+
+  // git quotes such paths in plain --name-only output ("\".bunker/\\303\\251\""), which a ^.bunker/ match would miss.
+  test.each([".bunker/é", '.bunker/a"b'])("a PR touching %s (a path git would quote) → needs-review", async (path) => {
+    const { repo, mergeLog } = await setup(issue(), "ff");
+    const agent: Agent = { command: (p, m = "write") => (m === "write" ? ["sh", "-c", `mkdir -p .bunker && echo x > '${path}' && echo hi > feature.txt && git add -A && git commit -qm "feat: impl"`] : ["sh", "-c", `echo '${APPROVE}'`]) };
+    const r = await run(repo, { agent });
+    expect(r.status).toBe("needs-review");
+    expect(r.error).toContain(path);
+    expect(await Bun.file(mergeLog).exists()).toBe(false);
+  });
+
+  test("moving a file out of .bunker/ is still needs-review", async () => {
+    const { repo, mergeLog } = await setup(issue(), "ff");
+    await $`mkdir -p ${repo}/.bunker`;
+    await Bun.write(join(repo, ".bunker", "Dockerfile"), "FROM scratch\n");
+    await $`git -C ${repo} add -A && git -C ${repo} commit -qm "chore: dockerfile" && git -C ${repo} push -q origin main`;
+    const agent: Agent = { command: (p, m = "write") => (m === "write" ? ["sh", "-c", `git mv .bunker/Dockerfile Dockerfile && echo hi > feature.txt && git add -A && git commit -qm "feat: impl"`] : ["sh", "-c", `echo '${APPROVE}'`]) };
+    const r = await run(repo, { agent });
+    expect(r.status).toBe("needs-review");
+    expect(await Bun.file(mergeLog).exists()).toBe(false);
   });
 
   test("no merge flag → never calls pr merge", async () => {

@@ -234,6 +234,10 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
             summary.merged++;
           } else if (e.status === "already-in-progress") {
             giveUp(e.issue);
+          } else if (e.status === "needs-review") {
+            // Not a failure: the PR waits for a human, and the issue must not be picked up again.
+            giveUp(e.issue);
+            notify(`bunker: #${e.issue} needs human review`, e.prUrl ?? e.error ?? "");
           } else if (e.status === "blocked") {
             notify(`bunker: #${e.issue} blocked`, e.error ?? "waiting on another issue");
           } else {

@@ -40,7 +40,7 @@ Before v1.0 bunker will not build:
 
 - [Getting started](docs/getting-started.md)
 - [Concepts](docs/concepts.md)
-- [Security](docs/security.md)
+- [Security](docs/security.md): token handling, `.bunker/` changes need human review, `--no-sandbox` gives no isolation
 - [Troubleshooting](docs/troubleshooting.md)
 - [CLI reference](docs/cli.md) (generated from `bunker --help`)
 - [Releasing](docs/release.md)

@@ -71,7 +71,7 @@ export interface IssueOptions extends Timeouts {
 }
 
 export interface IssueResult {
-  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked" | "bad-output" | "idle-timeout" | "already-in-progress" | "paused-usage-limit";
+  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked" | "bad-output" | "idle-timeout" | "already-in-progress" | "paused-usage-limit" | "needs-review";
   /** With status `paused-usage-limit`: where the run stopped. Re-running the issue (or the next watch pass) resumes it. */
   pause?: { resetAt?: number; sessionId?: string };
   /** With status `blocked`: the `discovered` issue filed for what this one waits on. */
@@ -487,7 +487,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   const fail = (status: IssueResult["status"], extra: Partial<IssueResult> = {}): IssueResult => {
     log(`final status: ${status}`, [extra.error, extra.prUrl].filter(Boolean).join("\n"));
     if (status === "merged") emitStage({ onEvent }, "merged");
-    else if (status !== "pr-opened") emitStage({ onEvent }, "failed", status);
+    else if (status !== "pr-opened" && status !== "needs-review") emitStage({ onEvent }, "failed", status);
     return finish(status, extra);
   };
   // The terminal gets the tail of a failed step's output and where the full log is; the rest lives in the log.
@@ -771,6 +771,18 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     if (prUrl) emit(onEvent, { type: "meta", url: prUrl });
     const opened = { review: result, ...(prUrl ? { prUrl } : {}) };
     if (!merge || !prUrl) return fail("pr-opened", opened);
+
+    // .bunker/ feeds the host (docker build, copy globs) and .github/ is CI: only a human may merge changes to them.
+    // Fails closed: if the diff can't be read, a human reviews. --no-renames lists the old path of a moved file too;
+    // -z keeps paths raw (plain output quotes non-ASCII, quote and tab characters, which would dodge the match).
+    const diff = await $`git -C ${worktree} diff -z --name-only --no-renames ${baseSha} HEAD`.nothrow().quiet();
+    const sensitive = diff.exitCode === 0 ? diff.stdout.toString().split("\0").filter((f) => /^\.(bunker|github)\//.test(f)) : [`(could not list the changed files: ${diff.stderr.toString().trim()})`];
+    if (sensitive.length) {
+      await $`gh label create needs-human-review --color D93F0B --description "bunker will not auto-merge this PR" --force`.cwd(worktree).env(env).nothrow().quiet();
+      const labelled = await $`gh pr edit ${prUrl} --add-label needs-human-review`.cwd(worktree).env(env).nothrow().quiet();
+      const shown = sensitive.slice(0, 10).join(", ") + (sensitive.length > 10 ? ", …" : "");
+      return fail("needs-review", { ...opened, error: `the PR changes ${shown}, which a human must review: bunker left auto-merge off${labelled.exitCode === 0 ? "" : " (could not add the needs-human-review label: " + labelled.stderr.toString().trim() + ")"}` });
+    }
 
     // GitHub merges once the required checks pass (and refuses if they fail), so bunker never reads CI.
     // No --delete-branch: gh would also switch/delete the local branch, which fails in a worktree.

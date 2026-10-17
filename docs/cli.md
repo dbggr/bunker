@@ -24,7 +24,7 @@ Common options (all modes):
   --implementer-model <id>   model for the implementer
   --auditor-model <id>       model for the --audit agent
   --image <name>             use this docker image as-is
-  --no-sandbox               run the agent on the host instead of in docker
+  --no-sandbox               run the agent on the host (empty HOME, no isolation)
   -h, --help                 show this help (wins over every other flag)
   --verbose                  stream all agent, setup and verify output (also BUNKER_VERBOSE=1)
   --version                  print the version and the tag (or main@<sha>) it was built from

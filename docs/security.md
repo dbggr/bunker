@@ -2,7 +2,7 @@
 
 ## What agents can and can't do
 
-An agent runs in a container with the issue worktree and the Claude token. It does not get `BUNKER_GH_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, your SSH keys or your `gh` login: the docker sandbox never passes them, and `--no-sandbox` strips them from the agent's environment. The agent cannot push or open PRs. bunker does that after review and verify, from the host.
+An agent runs in a container with the issue worktree and the Claude token. It does not get `BUNKER_GH_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, your SSH keys or your `gh` login: the docker sandbox never passes them, and `--no-sandbox` strips them from the agent's environment and runs it with a temporary empty `HOME` (see below). The agent cannot push or open PRs. bunker does that after review and verify, from the host.
 
 - **Workflow edits**: the token has no Workflows permission, so GitHub refuses a push that changes `.github/workflows/`. bunker has no code that blocks them; the token does. See [troubleshooting.md](troubleshooting.md).
 - **Queueing work**: agents can only file issues labelled `discovered`, never `bunker`. A human relabelling is the gate.
@@ -22,6 +22,14 @@ Use a short expiry. Even a fully compromised run can then only touch that repo's
 ## Redaction
 
 Output is passed through a redactor before it reaches the terminal, run logs, the live view or issue comments. It masks the values of `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `BUNKER_GH_TOKEN`, `GH_TOKEN` and `GITHUB_TOKEN`, plus token-shaped strings (`github_pat_…`, `ghp_…`, `sk-ant-…`). This is a safety net; keep secrets out of the repo anyway.
+
+## Changes to `.bunker/` and `.github/` need a human
+
+A merged PR controls inputs used on your host: `.bunker/Dockerfile` is built by the host docker daemon, and the `copy` globs in `.bunker/config.toml` decide which untracked host files enter the sandbox. So with `--merge`, a PR that changes anything under `.bunker/` or `.github/` is never auto-merged by bunker. It opens the PR, leaves auto-merge off, labels it `needs-human-review` and reports `needs-review`. The issue is not marked failed. Review and merge such a PR yourself.
+
+## `--no-sandbox` is not isolation
+
+`--no-sandbox` runs the agent as you, on your filesystem and network. bunker strips the GitHub token variables and gives the agent a temporary empty `HOME` (only claude's login files are copied in), so it can't read `~/.config/bunker/.env`, `~/.config/gh/hosts.yml` or `~/.ssh`. It can still read and write anything else you can, so bunker prints a warning. Use docker or podman for untrusted issues.
 
 ## Trusted comments and the label gate
 
