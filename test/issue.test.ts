@@ -814,6 +814,23 @@ describe("runIssue() with a leftover branch", () => {
     expect((await $`git -C ${repo} branch --list ${BRANCH}`.text()).trim()).toContain(BRANCH);
   });
 
+  test("a remote branch without an open PR is kept under a tag and replaced by the push", async () => {
+    const { repo, origin } = await setup(issue());
+    const other = join(dirname(origin), "other");
+    await $`git clone -q ${origin} ${other}`;
+    await $`git -C ${other} checkout -q -b ${BRANCH}`;
+    await Bun.write(join(other, "closed.txt"), "closed");
+    await $`git -C ${other} add . && git -C ${other} -c user.name=t -c user.email=t@t commit -q -m "feat: closed pr work"`;
+    await $`git -C ${other} push -q origin ${BRANCH}`;
+    const old = (await $`git -C ${origin} rev-parse ${BRANCH}`.text()).trim();
+    const r = await run(repo);
+    expect(r.status).toBe("pr-opened");
+    const t = await tags(repo);
+    expect(t).toHaveLength(1);
+    expect((await $`git -C ${repo} rev-parse ${`${t[0]}^{commit}`}`.text()).trim()).toBe(old);
+    expect((await $`git -C ${origin} rev-parse ${BRANCH}`.text()).trim()).not.toBe(old);
+  });
+
   test("an interrupted run with no commits leaves nothing behind", async () => {
     const { repo } = await setup(issue());
     const agent: Agent = { command: () => ["sh", "-c", "sleep 2"] };
