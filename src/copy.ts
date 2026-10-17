@@ -19,12 +19,13 @@ export async function copyPatterns(dir: string, override?: string[]): Promise<st
 }
 
 /** `root` must be a realpath. Throws if any walked entry resolves outside it (e.g. a symlink). */
-async function walk(root: string, rel: string): Promise<string[]> {
+async function walk(root: string, rel: string, ancestors: string[] = []): Promise<string[]> {
   const real = await realpath(join(root, rel));
   if (real !== root && !real.startsWith(root + sep)) throw new Error(`copy path outside the repo: ${rel}`);
   if (!(await stat(join(root, rel))).isDirectory()) return [rel];
+  if (ancestors.includes(real)) throw new Error(`copy path has a symlink cycle: ${rel}`);
   const out: string[] = [];
-  for (const e of await readdir(join(root, rel))) out.push(...(await walk(root, join(rel, e))));
+  for (const e of await readdir(join(root, rel))) out.push(...(await walk(root, join(rel, e), [...ancestors, real])));
   return out;
 }
 

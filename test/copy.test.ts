@@ -134,6 +134,13 @@ describe("copyToWorktree", () => {
     }
   });
 
+  test("a symlink cycle inside a copied directory is rejected with a clear error", async () => {
+    const repo = await makeRepo();
+    await symlink("..", join(repo, "fixtures", "sub", "loop"));
+    const err = await run({ cwd: repo, prompt: "p", sandbox: noSandbox(), agent: sh("true"), copyToWorktree: ["fixtures"] }).catch((e) => e);
+    expect(String(err)).toMatch(/symlink cycle/);
+  });
+
   test("values of copied .env files are redacted", async () => {
     const repo = await makeRepo();
     await run({ cwd: repo, prompt: "p", sandbox: noSandbox(), agent: sh("true"), copyToWorktree: [".env"] });
