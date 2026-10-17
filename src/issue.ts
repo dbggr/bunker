@@ -701,6 +701,50 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   return merge && mergeTurn ? mergeTurn(publish) : publish();
 }
 
+async function listQueued(cwd: string, env: Env): Promise<Queued[]> {
+  const list = await $`gh issue list --label bunker --state open --limit 1000 --json number,title,createdAt,labels`.cwd(cwd).env(env).nothrow().quiet();
+  // A transient failure of one list must not abort the queue; the other list may still succeed.
+  if (list.exitCode !== 0) {
+    console.warn(`bunker: gh issue list failed:\n${list.stderr}`);
+    return [];
+  }
+  try {
+    const parsed: unknown = JSON.parse(list.stdout.toString());
+    if (!Array.isArray(parsed)) throw new Error("not an array");
+    return parsed.filter((i): i is Queued => i !== null && typeof i === "object" && typeof i.number === "number" && typeof i.title === "string" && typeof i.createdAt === "string").map((i) => ({ ...i, labels: Array.isArray(i.labels) ? i.labels.filter((l) => l !== null && typeof l === "object" && typeof l.name === "string") : [] }));
+  } catch {
+    console.warn("bunker: gh issue list returned unparseable output");
+    return [];
+  }
+}
+
+/** Open `bunker` issues that could start now: not in `skip`, not waiting on an open `Blocked by #N` issue. */
+export async function countWaiting(cwd: string, env: Env, skip: (issue: number) => boolean = () => false): Promise<number> {
+  let n = 0;
+  for (const q of await listQueued(cwd, env)) {
+    if (skip(q.number)) continue;
+    const view = await $`gh issue view ${q.number} --json state,labels,body,comments`.cwd(cwd).env(env).nothrow().quiet();
+    if (view.exitCode !== 0) continue;
+    let live: Pick<IssueInfo, "state" | "labels" | "body" | "comments">;
+    try {
+      live = JSON.parse(view.stdout.toString());
+      if (live === null || typeof live !== "object" || !isLiveShape(live)) continue;
+    } catch {
+      continue;
+    }
+    if (live.state !== "OPEN" || !live.labels.some((l) => l.name === "bunker")) continue;
+    let blocked = false;
+    for (const ref of blockerRefs(live)) {
+      if ((await isDone(ref, cwd, env)) === false) {
+        blocked = true;
+        break;
+      }
+    }
+    if (!blocked) n++;
+  }
+  return n;
+}
+
 export interface QueueOptions extends Omit<IssueOptions, "issue"> {
   /** Max issues per run. Defaults to 5. */
   limit?: number;
@@ -740,22 +784,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
   const cwd = opts.cwd ?? process.cwd();
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
-  const listIssues = async () => {
-    const list = await $`gh issue list --label bunker --state open --limit 1000 --json number,title,createdAt,labels`.cwd(cwd).env(env).nothrow().quiet();
-    // A transient failure of one list must not abort the queue; the other list may still succeed.
-    if (list.exitCode !== 0) {
-      console.warn(`bunker: gh issue list failed:\n${list.stderr}`);
-      return [];
-    }
-    try {
-      const parsed: unknown = JSON.parse(list.stdout.toString());
-      if (!Array.isArray(parsed)) throw new Error("not an array");
-      return parsed.filter((i): i is Queued => i !== null && typeof i === "object" && typeof i.number === "number" && typeof i.title === "string" && typeof i.createdAt === "string").map((i) => ({ ...i, labels: Array.isArray(i.labels) ? i.labels.filter((l) => l !== null && typeof l === "object" && typeof l.name === "string") : [] }));
-    } catch {
-      console.warn("bunker: gh issue list returned unparseable output");
-      return [];
-    }
-  };
+  const listIssues = () => listQueued(cwd, env);
   await resumeBlocked(cwd, env);
   for (const p of PRIORITY_LABELS) await $`gh label create ${p.name} --description ${"bunker queue priority"} --color ${p.color}`.cwd(cwd).env(env).nothrow().quiet();
   // The list can lag with a partial result too, so always list twice and merge.

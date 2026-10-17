@@ -69,7 +69,7 @@ Single prompt and --task:
 
 --watch:
   --watch                    loop: work the queue, sleep, repeat until Ctrl-C; needs --verify or .bunker/verify
-  --interval <min>           minutes between passes (default 10)
+  --interval <min>           minutes to sleep when no work is waiting (default 10)
   --for <duration>           stop starting new issues after this long, e.g. 5h, 90m, 2h30m (default: until Ctrl-C)
   --max-cost <usd>           spend cap per rolling 24 h, kept in .bunker/watch-spend.json (default 20)
   Failed issues get \`bunker-failed\` instead of \`bunker\` and are never retried automatically.
