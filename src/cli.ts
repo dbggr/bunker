@@ -21,6 +21,7 @@ import { HELP } from "./help.ts";
 import { options } from "./options.ts";
 import { output } from "./output.ts";
 import { safePull } from "./pull.ts";
+import { runClean } from "./clean.ts";
 import { selfUpdate } from "./self-update.ts";
 import { buildLabel } from "./build-info.ts";
 import pkg from "../package.json" with { type: "json" };
@@ -88,8 +89,28 @@ if (positionals.length === 1 && (positionals[0] === "doctor" || positionals[0] =
   process.exit(await runInit({ cwd: process.cwd(), yes: !!values.yes, io: terminalIo() }));
 }
 
+// `bunker clean`: dry run unless --yes.
+if (positionals.length === 1 && positionals[0] === "clean") {
+  const others = Object.entries(values).filter(([k, v]) => !["yes", "logs", "images", "force", "verbose"].includes(k) && v !== false && v !== undefined);
+  if (others.length) {
+    console.error("bunker: clean only takes --yes, --logs <days>, --images and --force");
+    process.exit(2);
+  }
+  const logsDays = values.logs === undefined ? undefined : Number(values.logs);
+  if (logsDays !== undefined && !(logsDays >= 0 && Number.isFinite(logsDays))) {
+    console.error("bunker: --logs must be a number of days");
+    process.exit(2);
+  }
+  const r = await runClean({ cwd: process.cwd(), yes: values.yes, logsDays, images: values.images, force: values.force });
+  process.exit(r.code);
+}
+
 if (values.yes) {
-  console.error("bunker: --yes only applies to init");
+  console.error("bunker: --yes only applies to init and clean");
+  process.exit(2);
+}
+if (values.logs !== undefined || values.images || values.force) {
+  console.error("bunker: --logs, --images and --force only apply to clean");
   process.exit(2);
 }
 
@@ -357,6 +378,8 @@ if (pull) {
   const r = await safePull(process.cwd());
   if (!r.pulled) console.log(r.message);
 }
+// Leftovers of earlier interrupted runs; --watch does the same once it holds its lock.
+if (!watchOpts && (values.queue || values.issue !== undefined)) await runClean({ cwd: process.cwd(), yes: true, auto: true });
 const models = resolveModels(values, process.env, repoCfg.models);
 const agent = claudeCode({ model: models.implementer, json: true });
 const reviewerAgent = () => (models.reviewer === models.implementer ? agent : claudeCode({ model: models.reviewer, json: true }));
@@ -391,7 +414,7 @@ if (values.audit) {
     });
   }
   try {
-    await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, ...timeouts, parallel, allowLabelers, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
+    await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();

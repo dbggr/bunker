@@ -523,10 +523,39 @@ export function worktreeAdmin<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/** This process's `/tmp/bunker-*` worktrees that are still live, by path. */
+const tmpWorktrees = new Map<string, { repo: string; base: string; branch: string }>();
+let tmpHooked = false;
+
+/** Remove each live /tmp worktree and its branch if it has no commits and no changes. Synchronous: runs in exit and signal handlers. */
+function cleanupTmpWorktrees(): void {
+  for (const [path, w] of tmpWorktrees) {
+    const commits = Bun.spawnSync(["git", "-C", w.repo, "rev-list", "--count", `${w.base}..${w.branch}`]);
+    if (commits.exitCode !== 0 || commits.stdout.toString().trim() !== "0") continue;
+    if (existsSync(path)) {
+      const dirty = Bun.spawnSync(["git", "-C", path, "status", "--porcelain"]);
+      if (dirty.exitCode !== 0 || dirty.stdout.toString().trim()) continue;
+      Bun.spawnSync(["git", "-C", w.repo, "worktree", "remove", "--force", path]);
+    }
+    Bun.spawnSync(["git", "-C", w.repo, "worktree", "prune"]);
+    Bun.spawnSync(["git", "-C", w.repo, "branch", "-D", w.branch]);
+    tmpWorktrees.delete(path);
+  }
+}
+
 async function addWorktree(cwd: string, base: string): Promise<Worktree> {
   const id = crypto.randomUUID().slice(0, 8);
   const wt = { branch: `bunker/${id}`, path: join(tmpdir(), `bunker-${id}`) };
   await worktreeAdmin(() => $`git -C ${cwd} worktree add -q -b ${wt.branch} ${wt.path} ${base}`);
+  tmpWorktrees.set(wt.path, { repo: cwd, base, branch: wt.branch });
+  if (!tmpHooked) {
+    tmpHooked = true;
+    process.on("exit", cleanupTmpWorktrees);
+    for (const sig of ["SIGINT", "SIGTERM"] as const) {
+      // The watch CLI installs its own handler (which exits through the "exit" hook above).
+      if (process.listenerCount(sig) === 0) process.on(sig, () => process.exit(130));
+    }
+  }
   return wt;
 }
 
@@ -1103,7 +1132,8 @@ export async function review({
   } finally {
     await store.done();
     // A paused run keeps its worktree: whatever the agent had not committed yet is the work.
-    if (!pause) await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
+    if (pause) tmpWorktrees.delete(wt.path); // kept for the resume
+    else await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
   }
   if (status === "approved") {
     error = await mergeBack(cwd, wt.branch, commits);

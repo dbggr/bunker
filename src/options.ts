@@ -42,6 +42,9 @@ export const options = {
   "ui-keep": { type: "boolean", default: false },
   channel: { type: "string" },
   yes: { type: "boolean", default: false },
+  logs: { type: "string" },
+  images: { type: "boolean", default: false },
+  force: { type: "boolean", default: false },
   verbose: { type: "boolean", default: false },
   version: { type: "boolean", default: false },
 } as const satisfies ParseArgsOptionsConfig;
