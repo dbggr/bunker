@@ -417,7 +417,7 @@ if (values.audit) {
   const ghToken = process.env.BUNKER_GH_TOKEN;
   const mention = await resolveMention(process.cwd(), (ghToken ? { ...process.env, GH_TOKEN: ghToken } : process.env) as Record<string, string>, repoCfg.notify.github_user);
   try {
-    await runWatch({ notify, mention, onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
+    await runWatch({ notify, mention, onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -427,7 +427,7 @@ if (values.audit) {
   const reviewer = reviewerAgent();
   let results;
   try {
-    results = await runQueue({ onEvent, agent, reviewer, sandbox, maxRounds, resume, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin, ...timeouts, parallel, allowLabelers });
+    results = await runQueue({ onEvent, agent, reviewer, sandbox, maxRounds, resume, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, merge: values.merge, ciTimeoutMin, ...timeouts, parallel, allowLabelers });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -463,7 +463,7 @@ if (values.audit) {
       await publisher?.flush();
       process.exit(1);
     }
-    result = await runIssue({ onEvent, issue, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin, ...timeouts });
+    result = await runIssue({ onEvent, issue, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, merge: values.merge, ciTimeoutMin, ...timeouts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();

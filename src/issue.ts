@@ -12,7 +12,7 @@ import { emit } from "./events.ts";
 import { output, tailLines, testCounts } from "./output.ts";
 import { hyperlink } from "./events.ts";
 import { modelLabel } from "./models.ts";
-import { AgentFailure, type Pause, emitStage, review, runSetup, stepLimits, timeoutMessage, worktreeAdmin, type Timeouts, type Agent, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
+import { AgentFailure, isolatedEnv, type Pause, emitStage, review, runSetup, stepLimits, timeoutMessage, worktreeAdmin, type Timeouts, type Agent, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
 
 export interface IssueInfo {
   number: number;
@@ -47,6 +47,8 @@ export interface IssueOptions extends Timeouts {
   verify?: string;
   /** Run `verify` on the host (with the caller's credentials) instead of in the sandbox. */
   verifyOnHost?: boolean;
+  /** Let sandboxed verify use the network (and Claude credentials). Off by default: verify runs agent-written code. */
+  verifyNetwork?: boolean;
   /** After the PR opens, squash-merge it and check the merge landed. Requires `verify`. */
   merge?: boolean;
   /** With `merge`: minutes to wait for GitHub to auto-merge the PR before giving up. Defaults to 30. */
@@ -423,7 +425,7 @@ async function reclaimLeftover(o: LeftoverOpts): Promise<{ prUrl?: string; remot
 
 export const stamp = () => new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 
-async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, mention, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
+async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyOnHost, verifyNetwork, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, mention, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -662,7 +664,8 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     const verifyStart = Date.now();
     if (verifyOnHost) {
       // Own process group (setsid) so a timeout kills the whole tree, not just the shell.
-      const proc = Bun.spawn(["setsid", "sh", "-c", verify], { cwd: worktree, env, stdout: "pipe", stderr: "pipe" });
+      // Agent-written code on the host: no GitHub tokens, no Claude credentials.
+      const proc = Bun.spawn(["setsid", "sh", "-c", verify], { cwd: worktree, env: isolatedEnv(), stdout: "pipe", stderr: "pipe" });
       const timer = setTimeout(() => {
         timedOut = "step";
         try { process.kill(-proc.pid, "SIGKILL"); } catch { proc.kill("SIGKILL"); }
@@ -675,8 +678,9 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
         clearTimeout(timer);
       }
     } else {
-      // Agent-written code: same sandbox as the agent, no GitHub tokens. stderr folded in so we can report it.
-      const out = await sandbox.exec(["sh", "-c", `(${verify}) 2>&1`], { worktree, gitCommonDir, limits: stepLimits(timeouts) });
+      // Agent-written code: same sandbox as the agent, no GitHub tokens, and (unless opted in) no network
+      // or Claude credentials. stderr folded in so we can report it.
+      const out = await sandbox.exec(["sh", "-c", `(${verify}) 2>&1`], { worktree, gitCommonDir, limits: stepLimits(timeouts), isolate: !verifyNetwork });
       timedOut = out.timedOut;
       code = out.code;
       text = out.stdout;

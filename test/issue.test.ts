@@ -428,6 +428,30 @@ describe("runIssue()", () => {
     expect(calls.some((c) => c.join(" ").includes("ONHOST"))).toBe(false);
   });
 
+  test("verifyOnHost runs with no GitHub tokens or Claude credentials in its env", async () => {
+    const { repo } = await setup(issue());
+    const vars = ["GH_TOKEN", "GITHUB_TOKEN", "BUNKER_GH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
+    const saved = Object.fromEntries(vars.map((k) => [k, process.env[k]]));
+    for (const k of vars) process.env[k] = `secret-${k}`;
+    try {
+      const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: `echo "[${vars.map((k) => `$${k}`).join("|")}]"; exit 4`, verifyOnHost: true });
+      expect(r.verifyOutput).toContain("[||||]");
+    } finally {
+      for (const k of vars) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+    }
+  });
+
+  test("sandboxed verify is isolated (no network, no credentials) unless verifyNetwork", async () => {
+    const seen: boolean[] = [];
+    const inner = noSandbox();
+    const sandbox = { exec: (cmd: string[], ctx: { worktree: string; gitCommonDir: string; isolate?: boolean }) => (cmd.join(" ").includes("VERIFYME") && seen.push(!!ctx.isolate), inner.exec(cmd, ctx)) };
+    const { repo } = await setup(issue());
+    await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox, verify: "echo VERIFYME; exit 4" });
+    const { repo: repo2 } = await setup(issue());
+    await runIssue({ cwd: repo2, issue: 7, agent: fakeAgent(APPROVE), sandbox, verify: "echo VERIFYME; exit 4", verifyNetwork: true });
+    expect(seen).toEqual([true, false]);
+  });
+
   test("verifyOnHost kills a hung verify at the step timeout", async () => {
     const { repo } = await setup(issue());
     const t0 = Date.now();

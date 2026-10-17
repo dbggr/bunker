@@ -5,6 +5,7 @@ type Env = Record<string, string | undefined>;
 export interface RepoConfig {
   setup?: string;
   verify?: string;
+  verify_network?: boolean;
   copy?: string[];
   models: { implementer?: string; reviewer?: string; auditor?: string; default?: string };
   watch: { interval?: number; parallel?: number; max_cost_day?: number; max_cost_month?: number; audit_every?: number };
@@ -29,6 +30,7 @@ interface KeySpec {
 export const CONFIG_KEYS: KeySpec[] = [
   { key: "setup", kind: "string", doc: "shell command run in each worktree before the agent (legacy: .bunker/setup)" },
   { key: "verify", kind: "string", doc: "command that must pass before anything is pushed (legacy: .bunker/verify)" },
+  { key: "verify_network", kind: "boolean", doc: "let sandboxed verify use the network and Claude credentials (off: verify runs agent-written code)", default: false },
   { key: "copy", kind: "strings", doc: "gitignored paths or globs copied into each worktree (legacy: .bunker/copy)", default: [] },
   { key: "models.implementer", kind: "string", doc: "model for the implementer role" },
   { key: "models.reviewer", kind: "string", doc: "model for the reviewer role" },
