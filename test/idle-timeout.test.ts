@@ -77,28 +77,37 @@ describe("idle timeout", () => {
 });
 
 describe("completion grace", () => {
-  test("reviewer prints approve then goes quiet → not killed by the grace timer", async () => {
+  test("reviewer prints its verdict then hangs → approved, warning noted", async () => {
     const repo = await makeRepo();
     const notes: string[] = [];
     const r = await review({
       cwd: repo, prompt: "x", sandbox: noSandbox(), completionTimeoutMs: 300, idleTimeoutMs: 20_000, maxRounds: 1,
-      agent: { command: (_p, mode) => ["sh", "-c", mode === "review" ? "echo '<verdict>{\"approved\":true,\"required_changes\":[]}</verdict>'; sleep 1" : "true"] },
+      agent: { command: (_p, mode) => ["sh", "-c", mode === "review" ? "echo '<verdict>{\"approved\":true,\"required_changes\":[]}</verdict>'; sleep 30" : "true"] },
       onEvent: (e) => { if (e.type === "note") notes.push(e.text ?? ""); },
     });
     expect(r.status).toBe("approved");
-    expect(notes.join("\n")).not.toMatch(/did not exit/i);
+    expect(notes.join("\n")).toMatch(/did not exit/i);
   });
 
-  test("run(): completion signal then quiet gap → no grace kill, no warning", async () => {
+  test("run(): completion signal on its own last line then hang → completed, warning noted", async () => {
     const repo = await makeRepo();
     const notes: string[] = [];
     const res = await run({
       cwd: repo, prompt: "x", sandbox: noSandbox(), completionTimeoutMs: 300, idleTimeoutMs: 20_000,
-      agent: script("echo '<promise>COMPLETE</promise>'; sleep 1; echo finished"),
+      agent: script("echo '<promise>COMPLETE</promise>'; sleep 30"),
       onEvent: (e) => { if (e.type === "note") notes.push(e.text ?? ""); },
     });
     expect(res.completionSignal).toBe("<promise>COMPLETE</promise>");
-    expect(notes.join("\n")).not.toMatch(/did not exit/i);
+    expect(notes.join("\n")).toMatch(/did not exit/i);
+  });
+
+  test("run(): a signal mentioned mid-line is not a done marker", async () => {
+    const repo = await makeRepo();
+    const res = await run({
+      cwd: repo, prompt: "x", sandbox: noSandbox(), completionTimeoutMs: 300, idleTimeoutMs: 20_000,
+      agent: script("echo 'I will print <promise>COMPLETE</promise> later'; sleep 1; echo finished"),
+    });
+    expect(res.iterations[0]!.exitCode).toBe(0);
   });
 
   test("stream result event then hang → completed, warning noted", async () => {

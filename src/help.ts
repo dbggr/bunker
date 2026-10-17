@@ -64,7 +64,7 @@ Single prompt and --task:
   --ci-timeout <min>         (--merge) minutes to wait for the merge (default 30)
   --idle-timeout <min>       kill an agent or reviewer that prints nothing for this long; the step fails as
                              idle-timeout, worktree and branch kept (default 10)
-  --completion-timeout <s>   seconds an agent may linger after its final result event before it is
+  --completion-timeout <s>   seconds an agent may linger after its final result event or closing signal before it is
                              killed and the step counts as done, with a warning (default 60)
   --step-timeout <min>       overall limit for setup and verify, which can be quiet for long (default 30)
 
