@@ -344,7 +344,7 @@ if (values.audit) {
   try {
     const auditor = claudeCode({ model: models.auditor, json: true });
     emit(onEvent, { type: "stage", name: "audit", role: "auditor", model: modelLabel(auditor) });
-    result = await runAudit({ agent: auditor, sandbox, maxIssues, focus: values.focus, setup: values.setup });
+    result = await runAudit({ agent: auditor, sandbox, maxIssues, focus: values.focus, setup: values.setup, ...timeouts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
