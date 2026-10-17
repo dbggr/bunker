@@ -62,7 +62,7 @@ async function setup(issues: [number, string, string][]) {
     join(bin, "gh"),
     `#!/bin/sh
 echo "$*" >> "${root}/gh.log"
-if [ "$1" = "api" ]; then case "$*" in *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
+if [ "$1" = "api" ]; then case "$*" in *"/events"*) [ -f "${root}/events-fail" ] && { echo "api down" >&2; exit 1; }; echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
 if [ "$1 $2" = "issue list" ]; then
   printf '['; sep=''
   hide=0; case "$*" in *"--label bunker --state"*) [ -f "${root}/hide-2" ] && hide=$(cat "${root}/hide-2");; esac
@@ -365,13 +365,16 @@ describe("runWatch() next pass", () => {
   });
 
   test("two passes that do nothing sleep even if issues still look waiting", async () => {
-    // A held-open issue that is never started (skipped as already handled would not count; this one is simply unstartable).
+    // The label lookup fails, so every pass skips #1 (no merge, no failure) while countWaiting still sees it as startable.
     const { repo, root } = await setup(three.slice(0, 1));
-    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Do it.", state: "OPEN", labels: [] })); // list lags: view says no longer labelled
+    await Bun.write(join(root, "events-fail"), "");
     const lines: string[] = [];
     const s = await runWatch({ ...long, cwd: repo, agent: fakeAgent(), forMs: 1500, log: (l) => lines.push(l) });
-    expect(s.passes).toBeLessThanOrEqual(2);
-    expect(lines.filter((l) => /next pass in/.test(l))).toHaveLength(1);
+    expect(s.merged).toBe(0);
+    expect(s.failed).toBe(0);
+    expect(lines.filter((l) => /next pass now \(1 waiting\)/.test(l))).toHaveLength(1); // pass 1 trusts countWaiting
+    expect(lines.filter((l) => /next pass in/.test(l))).toHaveLength(1); // pass 2 trips the guard
+    expect(s.passes).toBe(2);
   });
 });
 
