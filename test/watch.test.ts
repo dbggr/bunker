@@ -463,6 +463,30 @@ describe("bunker --watch (CLI)", () => {
     expect(seen).toContain("daily spend cap reached ($25.00 of $20 in 24 h)");
   });
 
+  test("under bun test the CLI never reaches the real desktop notifier", async () => {
+    const { repo, root } = await setup([]);
+    const bin = join(root, "fakebin");
+    const calls = join(root, "notify-calls.log");
+    await Bun.write(join(bin, "notify-send"), `#!/bin/sh\necho "$@" >> "${calls}"\n`);
+    await chmod(join(bin, "notify-send"), 0o755);
+    await Bun.write(join(bin, "osascript"), `#!/bin/sh\necho "$@" >> "${calls}"\n`);
+    await chmod(join(bin, "osascript"), 0o755);
+    await Bun.write(join(repo, ".bunker", "verify"), "true");
+    await Bun.write(join(repo, ".bunker", "watch-spend.json"), JSON.stringify([{ at: Date.now() - 1000, usd: 25 }]));
+    const p = Bun.spawn(["bun", join(import.meta.dir, "..", "src", "cli.ts"), "--watch", "--no-sandbox", "--interval", "0.01", "--max-cost-day", "20"], { cwd: repo, stdout: "pipe", stderr: "pipe", env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+    const reader = p.stdout.getReader();
+    let seen = "";
+    while (!/cap reached/.test(seen)) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += new TextDecoder().decode(value);
+    }
+    p.kill("SIGINT");
+    await p.exited;
+    await new Promise((r) => setTimeout(r, 300));
+    expect(existsSync(calls)).toBe(false);
+  });
+
   test("SIGINT finishes cleanly and exits 0", async () => {
     const { repo } = await setup([]);
     await Bun.write(join(repo, ".bunker", "verify"), "true");
