@@ -70,7 +70,7 @@ describe("idle timeout", () => {
     const repo = await makeRepo();
     const r = await review({
       cwd: repo, prompt: "x", sandbox: noSandbox(), idleTimeoutMs: 700, maxRounds: 1,
-      agent: { command: (_p, mode) => ["sh", "-c", mode === "review" ? "echo '<review>APPROVE</review>'" : "for i in 1 2 3; do echo tick; sleep 0.4; done"] },
+      agent: { command: (_p, mode) => ["sh", "-c", mode === "review" ? "echo '<verdict>{\"approved\":true,\"required_changes\":[]}</verdict>'" : "for i in 1 2 3; do echo tick; sleep 0.4; done"] },
     });
     expect(r.status).toBe("approved");
   });
@@ -82,7 +82,7 @@ describe("completion grace", () => {
     const notes: string[] = [];
     const r = await review({
       cwd: repo, prompt: "x", sandbox: noSandbox(), completionTimeoutMs: 300, idleTimeoutMs: 20_000, maxRounds: 1,
-      agent: { command: (_p, mode) => ["sh", "-c", mode === "review" ? "echo '<review>APPROVE</review>'; sleep 1" : "true"] },
+      agent: { command: (_p, mode) => ["sh", "-c", mode === "review" ? "echo '<verdict>{\"approved\":true,\"required_changes\":[]}</verdict>'; sleep 1" : "true"] },
       onEvent: (e) => { if (e.type === "note") notes.push(e.text ?? ""); },
     });
     expect(r.status).toBe("approved");

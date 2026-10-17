@@ -75,7 +75,7 @@ describe("visibility", () => {
     await $`git init -q -b main ${root} && git -C ${root} config user.name T && git -C ${root} config user.email t@t && git -C ${root} commit -q --allow-empty -m init`;
     const write = ["sh", "-c", "echo hi > a.txt && git add . && git commit -qm 'feat: x'"];
     const impl = { model: "impl-m", command: () => write };
-    const rev = { model: "rev-m", command: () => ["echo", "<review>APPROVE</review>"] };
+    const rev = { model: "rev-m", command: () => ["echo", "<verdict>{\"approved\":true,\"required_changes\":[]}</verdict>"] };
     const events: BunkerEvent[] = [];
     await review({ cwd: root, prompt: "x", agent: impl, reviewer: rev, sandbox: noSandbox(), onEvent: (e) => events.push(e) });
     const stages = events.filter((e) => e.type === "stage" && e.role).map((e) => `${e.name}:${e.model}`);

@@ -892,8 +892,6 @@ export interface ReviewOptions extends Timeouts {
   cwd?: string;
   /** Max implement → review rounds. Defaults to 2. */
   maxRounds?: number;
-  /** Legacy fallback, used only when the reviewer printed no `<verdict>` at all: stdout containing this approves. Defaults to "<review>APPROVE</review>". */
-  approveSignal?: string;
   /** Times to re-ask the reviewer (resuming its session) for a missing or invalid `<verdict>`. Defaults to 2. */
   maxRetries?: number;
   /** Extra instruction appended to every reviewer prompt. */
@@ -922,7 +920,7 @@ export interface ReviewRound {
   approved: boolean;
   /** The reviewer's stdout. */
   feedback: string;
-  /** The reviewer's structured verdict, absent when only the legacy approve signal was used. */
+  /** The reviewer's structured verdict. */
   verdict?: Verdict;
   /** The implementer's structured `<report>`, if it printed a valid one. */
   report?: Report;
@@ -946,8 +944,6 @@ export interface ReviewResult {
   error?: string;
 }
 
-const DEFAULT_APPROVE = "<review>APPROVE</review>";
-
 const VERDICT_FORMAT =
   'end your answer with <verdict>{"approved": true|false, "required_changes": ["…"], "issues": [{"title": "…", "body": "…", "severity": "high|medium|low"}], "blocked_by": [{"title": "…", "body": "…"}]}</verdict>: ' +
   SEVERITY_HELP + " Valid JSON,`approved` true only if the change is acceptable, `required_changes` what must change otherwise. " +
@@ -955,13 +951,12 @@ const VERDICT_FORMAT =
 
 class BadOutput extends Error {}
 
-function reviewerPrompt(task: string, diff: string, extra?: string, approveSignal = DEFAULT_APPROVE): string {
+function reviewerPrompt(task: string, diff: string, extra?: string): string {
   return (
     `You are reviewing a change made for this task:\n\n${task}\n\n` +
     `Here is the full diff of the change:\n\n${diff}\n\n` +
     "Do not modify any files and do not commit anything. " +
     `Review it, then ${VERDICT_FORMAT}` +
-    (approveSignal !== DEFAULT_APPROVE ? ` If you approve, you may instead print ${approveSignal} on its own.` : "") +
     (extra ? `\n\n${extra}` : "")
   );
 }
@@ -980,7 +975,6 @@ export async function review({
   reviewer = agent,
   sandbox,
   maxRounds = 2,
-  approveSignal = DEFAULT_APPROVE,
   maxRetries = 2,
   reviewerInstruction,
   setup,
@@ -1067,7 +1061,7 @@ export async function review({
       emitStage(revTarget, "review", undefined, modelLabel(reviewer));
       const revHook = lineHook(reviewer, revTarget);
       // Reviewers never resume: each review is independent.
-      const revPrompt = reviewerPrompt(prompt, diff, reviewerInstruction, approveSignal);
+      const revPrompt = reviewerPrompt(prompt, diff, reviewerInstruction);
       const revResumed = resuming?.role === "reviewer" ? savedSession : undefined;
       resuming = undefined;
       let rev = await agentStep({
@@ -1079,9 +1073,7 @@ export async function review({
       let revOut = interpret(reviewer, rev.stdout);
       const attempts: (Usage | undefined)[] = [];
       let parsed = extractOutput(revOut.text, verdictOutput);
-      // A reviewer that never heard of <verdict> may still say the old approve signal; that stays a fallback.
-      const legacy = (text: string, p: typeof parsed) => !p.ok && !p.present && text.includes(approveSignal);
-      for (let k = 1; rev.code === 0 && !parsed.ok && !legacy(revOut.text, parsed) && k <= maxRetries; k++) {
+      for (let k = 1; rev.code === 0 && !parsed.ok && k <= maxRetries; k++) {
         attempts.push(revOut.usage);
         const ask = `Your answer had no usable verdict (${parsed.error}). Reply again, ${VERDICT_FORMAT}`;
         rev = await agentStep({
@@ -1098,10 +1090,10 @@ export async function review({
       attempts.push(revOut.usage);
       usages.push(...attempts);
       if (rev.code !== 0) throw new Error(`reviewer exited with ${rev.code}; work kept on ${wt.branch}`);
-      if (!parsed.ok && !legacy(revOut.text, parsed)) throw new BadOutput(`reviewer gave bad output after ${maxRetries} retries: ${parsed.error}; work kept on ${wt.branch}`);
+      if (!parsed.ok) throw new BadOutput(`reviewer gave bad output after ${maxRetries} retries: ${parsed.error}; work kept on ${wt.branch}`);
 
       const verdict = parsed.ok ? parsed.value : undefined;
-      const approved = verdict ? verdict.approved : true;
+      const approved = verdict?.approved === true;
       const reported = extractOutput(implOut.text, reportOutput);
       const reportError = reported.ok || !reported.present ? undefined : reported.error;
       if (reportError) emit(onEvent, { type: "note", round: i + 1, role: "implementer", text: `ignoring the implementer's <report>: ${reportError}` });
