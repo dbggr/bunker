@@ -199,3 +199,42 @@ echo '${out({ result: "done", session_id: "sess-1" })}'
     expect(await callsOf(root)).toEqual(["write resume=none", "write resume=sess-1"]);
   });
 });
+
+describe("bunker --review and plain run CLI on a usage limit", () => {
+  async function limitedClaude() {
+    const { root, repo } = await setup();
+    const resetAt = new Date(Date.now() + 3_600_000).toISOString();
+    const out = (o: object) => JSON.stringify({ type: "result", total_cost_usd: 0.1, duration_ms: 5, ...o });
+    await Bun.write(
+      join(root, "bin", "claude"),
+      `#!/bin/sh
+echo '${out({ is_error: true, result: "Claude AI usage limit reached", session_id: "sess-1", resets_at: resetAt })}'; exit 1
+`,
+    );
+    await chmod(join(root, "bin", "claude"), 0o755);
+    const cli = join(import.meta.dir, "..", "src", "cli.ts");
+    const run = async (...args: string[]) => {
+      const proc = Bun.spawn(["bun", cli, ...args, "--no-sandbox"], { cwd: repo, env: process.env, stdout: "pipe", stderr: "pipe" });
+      const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+      return { stdout, stderr, code };
+    };
+    return { repo, resetAt, run };
+  }
+
+  test("--review exits 3 with a re-run hint and leaves no worktree behind", async () => {
+    const { repo, resetAt, run } = await limitedClaude();
+    const r = await run("--review", "do it");
+    expect(r.code).toBe(3);
+    expect(r.stdout).toContain("[paused-usage-limit]");
+    expect(r.stdout).toContain(`re-run after ${resetAt}`);
+    expect((await $`git -C ${repo} worktree list --porcelain`.text()).match(/^worktree /gm)?.length).toBe(1);
+  });
+
+  test("plain run exits 3 with a re-run hint instead of a generic failure", async () => {
+    const { resetAt, run } = await limitedClaude();
+    const r = await run("do it");
+    expect(r.code).toBe(3);
+    expect(r.stdout + r.stderr).toContain("paused on the Claude usage limit");
+    expect(r.stdout + r.stderr).toContain(`re-run after ${resetAt}`);
+  });
+});

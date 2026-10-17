@@ -589,7 +589,7 @@ export interface Pause {
 }
 
 /** Thrown inside a step when the agent hit the usage limit. */
-class UsageLimit extends Error {
+export class UsageLimit extends Error {
   constructor(readonly resetAt: number | undefined, readonly session: Session | undefined) {
     super("claude usage limit reached");
   }
