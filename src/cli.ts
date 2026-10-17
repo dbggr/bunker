@@ -412,7 +412,7 @@ if (values.audit) {
       ctl.abort();
     });
   }
-  const notify = desktopNotifier({ enabled: !values["no-notify"] && repoCfg.notify.enabled !== false });
+  const notify = desktopNotifier({ enabled: !values["no-notify"] && repoCfg.notify.enabled !== false && !process.env.BUNKER_TEST_NO_NOTIFY });
   const ghToken = process.env.BUNKER_GH_TOKEN;
   const mention = await resolveMention(process.cwd(), (ghToken ? { ...process.env, GH_TOKEN: ghToken } : process.env) as Record<string, string>, repoCfg.notify.github_user);
   try {

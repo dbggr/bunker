@@ -38,3 +38,7 @@ const withEnv = (args: any[]) => {
 };
 (Bun as any).spawn = (...args: any[]) => (realSpawn as any)(...withEnv(args));
 (Bun as any).spawnSync = (...args: any[]) => (realSpawnSync as any)(...withEnv(args));
+
+// A `bunker --watch` run in a test subprocess would pop real desktop notifications (spend cap, failed, stopped) on a
+// developer's machine; the CLI skips the desktop notifier when this is set (children inherit it from process.env).
+process.env.BUNKER_TEST_NO_NOTIFY = "1";
