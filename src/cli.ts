@@ -96,7 +96,7 @@ if (positionals.length === 1 && positionals[0] === "ui") {
     console.error("bunker: --port must be an integer between 0 and 65535");
     process.exit(2);
   }
-  if (await hubReachable(port)) {
+  if (await hubReachable(port, readToken())) {
     console.log(`bunker: hub already running at http://127.0.0.1:${port}`);
     process.exit(0);
   }
@@ -301,10 +301,10 @@ let publisher: Publisher | undefined;
 const hubUrl = `http://127.0.0.1:${uiPort}`;
 if (values.ui || values.queue || values.issue !== undefined) {
   try {
-    if (values.ui && !(await hubReachable(uiPort))) {
+    if (values.ui && !(await hubReachable(uiPort, readToken()))) {
       hub = startHub({ port: uiPort, token: readToken() });
     }
-    if (values.ui || (await hubReachable(uiPort))) {
+    if (values.ui || (await hubReachable(uiPort, readToken()))) {
       publisher = await connectHub({ port: hub?.server.port ?? uiPort, repo: await repoId(), token: readToken() });
     }
   } catch (e) {
