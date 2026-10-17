@@ -572,6 +572,32 @@ describe("queue order: priority, bug, age", () => {
     expect(rs.map((r) => r.issue)).toEqual([1, 3, 2]);
   });
 
+  test("relist: labels the queue note '(re-ordered)' only when the relative order changed", async () => {
+    const pass = async (promote: boolean) => {
+      const { repo, root } = await ordered([
+        [1, "2026-01-01T00:00:00Z", []],
+        [2, "2026-01-02T00:00:00Z", []],
+        [3, "2026-01-03T00:00:00Z", []],
+      ]);
+      const inner = fakeAgent();
+      const agent: Agent = {
+        command(prompt, mode = "write") {
+          const cmd = inner.command(prompt, mode);
+          if (promote && mode === "write" && /issue #1[:.]/.test(prompt)) {
+            const edit = `sed -i 's/"number":3,\\("title":"T3","createdAt":"[^"]*"\\),"labels":\\[\\]/"number":3,\\1,"labels":[{"name":"priority:high"}]/' "${join(root, "list.json")}"`;
+            return ["sh", "-c", `${edit}; ${cmd[2]}`];
+          }
+          return cmd;
+        },
+      };
+      const notes: string[] = [];
+      await runQueue({ cwd: repo, agent, sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10, listRetryMs: 10, limit: 10, relist: true, onEvent: (e: { type: string; text?: string }) => e.type === "note" && notes.push(e.text ?? "") });
+      return notes.filter((n) => n.includes("re-ordered"));
+    };
+    expect(await pass(false)).toEqual([]);
+    expect((await pass(true)).length).toBe(1);
+  });
+
   test("without relist the order is fixed at the start of the pass", async () => {
     const { repo, root } = await ordered([
       [1, "2026-01-01T00:00:00Z", []],
