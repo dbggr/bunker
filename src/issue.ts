@@ -100,8 +100,10 @@ function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: st
       { structured: r.verdict, text: r.feedback },
     ];
     for (const { structured, text } of sources) {
-      const issues = structured ? structured.issues : parseIssueBlocks(text);
-      const blocks = structured ? structured.blocked_by : [parseBlockedBy(text)].filter((b) => b !== undefined);
+      // A present-but-invalid <report> is never rescued by the regex scan: that would re-open quoted-example bugs.
+      const scan = !structured && !(text === r.output && r.reportError);
+      const issues = structured ? structured.issues : scan ? parseIssueBlocks(text) : [];
+      const blocks = structured ? structured.blocked_by : scan ? [parseBlockedBy(text)].filter((b) => b !== undefined) : [];
       for (const i of issues) if (real(i) && !seen.has(i.title.trim())) seen.set(i.title.trim(), i.body.trim());
       for (const b of blocks) if (real(b)) blocked.push({ title: b.title.trim(), body: b.body.trim() });
     }

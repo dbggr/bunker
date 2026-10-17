@@ -234,4 +234,29 @@ describe("review() structured verdict", () => {
     const r = await review({ cwd: repo, prompt: "p", agent, sandbox: noSandbox() });
     expect(r.rounds[0]!.report?.blocked_by).toEqual([{ title: "B", body: "b" }]);
   });
+
+  test("custom approveSignal is still asked of the reviewer", async () => {
+    const repo = await makeRepo();
+    const { agent, prompts } = fakeAgent(() => "echo LGTM");
+    await review({ cwd: repo, prompt: "p", agent, approveSignal: "LGTM", sandbox: noSandbox() });
+    expect(prompts.review[0]).toContain("LGTM");
+    const def = fakeAgent(() => say(verdict({ approved: true })));
+    await review({ cwd: repo, prompt: "p", agent: def.agent, sandbox: noSandbox() });
+    expect(def.prompts.review[0]).not.toContain("<review>APPROVE</review>");
+  });
+
+  test("an invalid <report> is noted and exposed, not silently dropped", async () => {
+    const repo = await makeRepo();
+    const events: string[] = [];
+    const agent: Agent = {
+      command(_p, mode = "write") {
+        if (mode === "review") return ["sh", "-c", say(verdict({ approved: true }))];
+        return ["sh", "-c", `echo a > a.txt && git add . && git commit -qm a && ${say('<report>{oops</report> <issue title="Quoted">body</issue>')}`];
+      },
+    };
+    const r = await review({ cwd: repo, prompt: "p", agent, sandbox: noSandbox(), onEvent: (e) => void (e.text && events.push(e.text)) });
+    expect(r.rounds[0]!.report).toBeUndefined();
+    expect(r.rounds[0]!.reportError).toContain("invalid JSON");
+    expect(events.some((t) => t.includes("<report>") && t.includes("invalid JSON"))).toBe(true);
+  });
 });

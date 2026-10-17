@@ -672,6 +672,8 @@ export interface ReviewRound {
   verdict?: Verdict;
   /** The implementer's structured `<report>`, if it printed a valid one. */
   report?: Report;
+  /** Why the implementer's `<report>` was ignored, when it printed one that was invalid. */
+  reportError?: string;
   /** The implementer's stdout. */
   output: string;
   /** Implementer + reviewer this round. */
@@ -697,12 +699,13 @@ const VERDICT_FORMAT =
 
 class BadOutput extends Error {}
 
-function reviewerPrompt(task: string, diff: string, extra?: string): string {
+function reviewerPrompt(task: string, diff: string, extra?: string, approveSignal = DEFAULT_APPROVE): string {
   return (
     `You are reviewing a change made for this task:\n\n${task}\n\n` +
     `Here is the full diff of the change:\n\n${diff}\n\n` +
     "Do not modify any files and do not commit anything. " +
     `Review it, then ${VERDICT_FORMAT}` +
+    (approveSignal !== DEFAULT_APPROVE ? ` If you approve, you may instead print ${approveSignal} on its own.` : "") +
     (extra ? `\n\n${extra}` : "")
   );
 }
@@ -771,18 +774,19 @@ export async function review({
       emitStage(revTarget, "review");
       const revHook = lineHook(reviewer, revTarget);
       // Reviewers never resume: each review is independent.
-      const revPrompt = reviewerPrompt(prompt, diff, reviewerInstruction);
+      const revPrompt = reviewerPrompt(prompt, diff, reviewerInstruction, approveSignal);
       let rev = await agentStep({
         agent: reviewer, sandbox, mode: "review", prompt: revPrompt, target: revTarget,
         ctx: revHook ? { ...ctx, onLine: revHook } : ctx,
         dest: join(store.dir, `reviewer-${i + 1}.jsonl`),
       });
       let revOut = interpret(reviewer, rev.stdout);
+      const attempts: (Usage | undefined)[] = [];
       let parsed = extractOutput(revOut.text, verdictOutput);
       // A reviewer that never heard of <verdict> may still say the old approve signal; that stays a fallback.
       const legacy = (text: string, p: typeof parsed) => !p.ok && !p.present && text.includes(approveSignal);
       for (let k = 1; rev.code === 0 && !parsed.ok && !legacy(revOut.text, parsed) && k <= maxRetries; k++) {
-        usages.push(revOut.usage);
+        attempts.push(revOut.usage);
         const ask = `Your answer had no usable verdict (${parsed.error}). Reply again, ${VERDICT_FORMAT}`;
         rev = await agentStep({
           agent: reviewer, sandbox, mode: "review", prompt: `${revPrompt}\n\n${ask}`, resumePrompt: ask, prev: rev.session, target: revTarget,
@@ -795,16 +799,19 @@ export async function review({
       // Only the implementer's commits survive, whatever the reviewer did.
       await $`git -C ${wt.path} reset -q --hard ${head}`.quiet();
       await $`git -C ${wt.path} clean -qfd`.quiet();
-      usages.push(revOut.usage);
+      attempts.push(revOut.usage);
+      usages.push(...attempts);
       if (rev.code !== 0) throw new Error(`reviewer exited with ${rev.code}; work kept on ${wt.branch}`);
       if (!parsed.ok && !legacy(revOut.text, parsed)) throw new BadOutput(`reviewer gave bad output after ${maxRetries} retries: ${parsed.error}; work kept on ${wt.branch}`);
 
       const verdict = parsed.ok ? parsed.value : undefined;
       const approved = verdict ? verdict.approved : true;
       const reported = extractOutput(implOut.text, reportOutput);
+      const reportError = reported.ok || !reported.present ? undefined : reported.error;
+      if (reportError) emit(onEvent, { type: "note", round: i + 1, role: "implementer", text: `ignoring the implementer's <report>: ${reportError}` });
       const changes = verdict && !verdict.approved && verdict.required_changes.length ? verdict.required_changes.map((c) => `- ${c}`).join("\n") + "\n\n" : "";
-      const usage = sumUsage([implOut.usage, revOut.usage]);
-      rounds.push({ ...(impl.session ? { sessionId: impl.session.id } : {}), commits: added, approved, feedback: changes + revOut.text, ...(verdict ? { verdict } : {}), ...(reported.ok ? { report: reported.value } : {}), output: implOut.text, ...(usage ? { usage } : {}) });
+      const usage = sumUsage([implOut.usage, ...attempts]);
+      rounds.push({ ...(impl.session ? { sessionId: impl.session.id } : {}), commits: added, approved, feedback: changes + revOut.text, ...(verdict ? { verdict } : {}), ...(reported.ok ? { report: reported.value } : {}), ...(reportError ? { reportError } : {}), output: implOut.text, ...(usage ? { usage } : {}) });
       if (approved) {
         status = "approved";
         break;

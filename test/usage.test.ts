@@ -74,6 +74,20 @@ describe("usage totals", () => {
     expect(r.usage?.durationMs).toBe(300);
   });
 
+  test("review() round usage includes reviewer retries", async () => {
+    const repo = await makeRepo();
+    let reviews = 0;
+    const agent = jsonAgent((mode) => {
+      if (mode === "write") return `echo a > a.txt && git add . && git commit -qm a; echo '${json("impl", 1, 100)}'`;
+      const out = ++reviews === 1 ? json("no verdict", 0.5, 50) : json('<verdict>{"approved":true}</verdict>', 0.5, 50);
+      return `echo '${out}'`;
+    });
+    const r = await review({ cwd: repo, prompt: "x", agent, sandbox: noSandbox() });
+    expect(r.status).toBe("approved");
+    expect(r.rounds[0]!.usage).toEqual(r.usage);
+    expect(r.usage?.costUsd).toBeCloseTo(2);
+  });
+
   test("review() usage is undefined when the agent reports none", async () => {
     const repo = await makeRepo();
     const agent: Agent = {
