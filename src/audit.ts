@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IdleTimeout, agentLimits, emitStage, lineHook, runSetup, sumUsage, timeoutMessage, type OnEvent, type Timeouts, type Agent, type Sandbox, type Usage } from "./index.ts";
 import { modelLabel } from "./models.ts";
+import { neutralise } from "./redact.ts";
 import { SEVERITY_HELP, auditOutput, extractOutput, pickFollowUps, type FollowUp } from "./structured.ts";
 
 export interface AuditOptions extends Timeouts {
@@ -136,11 +137,11 @@ async function auditRun({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, fo
   const { file, notFiled } = pickFollowUps(fresh, maxIssues);
   result.notFiled = notFiled.map((b) => ({ title: b.title, ...(b.severity ? { severity: b.severity } : {}) }));
   for (const b of file) {
-    const body = `${b.body}\n\nFiled by \`bunker --audit\`.`;
+    const body = `${neutralise(b.body)}\n\nFiled by \`bunker --audit\`.`;
     const severity = `severity:${b.severity ?? "medium"}`;
-    let created = await $`gh issue create --label discovered --label ${severity} --title ${b.title} --body ${body}`.cwd(repo).env(env).nothrow().quiet();
+    let created = await $`gh issue create --label discovered --label ${severity} --title ${neutralise(b.title)} --body ${body}`.cwd(repo).env(env).nothrow().quiet();
     // A repo without the severity labels rejects the call; file it without rather than drop it.
-    if (created.exitCode !== 0) created = await $`gh issue create --label discovered --title ${b.title} --body ${body}`.cwd(repo).env(env).nothrow().quiet();
+    if (created.exitCode !== 0) created = await $`gh issue create --label discovered --title ${neutralise(b.title)} --body ${body}`.cwd(repo).env(env).nothrow().quiet();
     if (created.exitCode !== 0) {
       console.error(`bunker: gh issue create failed for "${b.title}":\n${created.stderr}`);
       continue;

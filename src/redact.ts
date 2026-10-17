@@ -20,7 +20,7 @@ export function addSecrets(values: string[]): void {
 }
 
 const ZWJ = "‍";
-const CLOSING_REF = /\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?=:?\s+(?:#\d+|[\w.-]+\/[\w.-]+#\d+|https?:\/\/\S+))/gi;
+const CLOSING_REF = /\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?=:?\s+(?:#\d+|GH-\d+|[\w.-]+\/[\w.-]+#\d+|https?:\/\/\S+))/gi;
 
 /** Redacts secrets and defuses what GitHub would act on in agent-written text: closing keywords (`Fixes #12`) and `@mentions`. */
 export function neutralise(text: string): string {
