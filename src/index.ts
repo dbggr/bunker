@@ -348,7 +348,7 @@ const BASE_IMAGE = "bunker-claude";
 
 /** Builds the base image from the Dockerfile embedded in the bundle (it has no COPY, so stdin needs no context). */
 export async function buildBaseImage(tag = BASE_IMAGE, dockerBin = "docker") {
-  console.error(`bunker: building ${tag}`);
+  output.warn(`bunker: building ${tag}`);
   const proc = Bun.spawn([dockerBin, "build", "-q", "-t", tag, "-"], {
     stdin: new TextEncoder().encode(baseDockerfile),
     stdout: "ignore",
@@ -359,7 +359,7 @@ export async function buildBaseImage(tag = BASE_IMAGE, dockerBin = "docker") {
 }
 
 async function dockerBuild(bin: string, tag: string, context: string, dockerfile = join(context, "Dockerfile")) {
-  console.error(`bunker: building ${tag}`);
+  output.warn(`bunker: building ${tag}`);
   const code = await Bun.spawn([bin, "build", "-q", "-t", tag, "-f", dockerfile, context], {
     stdio: ["ignore", "ignore", "inherit"],
   }).exited;
