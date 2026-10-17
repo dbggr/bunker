@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, review, run, runAll, type Agent } from "../src/index.ts";
@@ -99,6 +99,20 @@ describe("copyToWorktree", () => {
     await expect(run({ cwd: repo, prompt: "p", sandbox: noSandbox(), agent: sh("true") })).rejects.toThrow(/outside/);
     const res = await review({ cwd: repo, prompt: "p", sandbox: noSandbox(), agent: sh("true"), copyToWorktree: ["../x"] });
     expect(res.status).toBe("failed");
+  });
+
+  test("symlinks inside a copied directory that point outside the repo are rejected", async () => {
+    const repo = await makeRepo();
+    const outside = await mkdtemp(join(tmpdir(), "bunker-outside-"));
+    dirs.push(outside);
+    await Bun.write(join(outside, "secret.txt"), "outside-secret");
+    await mkdir(join(outside, "dir"));
+    await Bun.write(join(outside, "dir", "x.txt"), "X");
+    for (const target of [join(outside, "secret.txt"), join(outside, "dir")]) {
+      await symlink(target, join(repo, "fixtures", "link"));
+      await expect(run({ cwd: repo, prompt: "p", sandbox: noSandbox(), agent: sh("true"), copyToWorktree: ["fixtures"] })).rejects.toThrow(/outside/);
+      await unlink(join(repo, "fixtures", "link"));
+    }
   });
 
   test("values of copied .env files are redacted", async () => {
