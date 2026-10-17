@@ -135,3 +135,49 @@ export function pickFollowUps<T extends { severity?: Severity }>(items: T[], cap
   const file = eligible.slice(0, cap);
   return { file, notFiled: sorted.filter((f) => !file.includes(f)) };
 }
+
+export const TRIAGE_VERDICTS = ["fixed", "as-designed", "duplicate", "valid"] as const;
+export type TriageKind = (typeof TRIAGE_VERDICTS)[number];
+
+export interface TriageVerdict {
+  issue: number;
+  verdict: TriageKind;
+  /** `file:line`, the commit or PR that fixed it, or why it is as designed. */
+  evidence: string;
+  duplicate_of?: number;
+  /** With `valid`: suggested priority. */
+  priority?: Severity;
+  bug?: boolean;
+}
+
+/** The `<triage>` block: entries are kept raw, and checked one by one by `readTriageVerdict` so one bad entry spares the rest. */
+export const triageOutput = Output.object<{ verdicts: unknown[] }>({
+  tag: "triage",
+  schema: {
+    parse(v) {
+      if (!isObj(v) || !Array.isArray(v.verdicts)) throw new Error('"verdicts" must be an array');
+      return { verdicts: v.verdicts };
+    },
+  },
+});
+
+/** One triage entry, validated; the error says why it is unusable. */
+export function readTriageVerdict(x: unknown): { ok: true; value: TriageVerdict } | { ok: false; issue?: number; error: string } {
+  if (!isObj(x) || !Number.isInteger(x.issue) || (x.issue as number) < 1) return { ok: false, error: 'entry needs an integer "issue"' };
+  const issue = x.issue as number;
+  const bad = (error: string) => ({ ok: false as const, issue, error });
+  if (!TRIAGE_VERDICTS.includes(x.verdict as TriageKind)) return bad('"verdict" must be fixed, as-designed, duplicate or valid');
+  if (typeof x.evidence !== "string" || !x.evidence.trim()) return bad('"evidence" must be a non-empty string');
+  const value: TriageVerdict = { issue, verdict: x.verdict as TriageKind, evidence: x.evidence };
+  if (value.verdict === "duplicate") {
+    if (!Number.isInteger(x.duplicate_of) || (x.duplicate_of as number) < 1 || x.duplicate_of === issue) return bad('"duplicate_of" must be the number of another issue');
+    value.duplicate_of = x.duplicate_of as number;
+  }
+  if (value.verdict === "valid") {
+    if (!SEVERITIES.includes(x.priority as Severity)) return bad('"priority" must be "high", "medium" or "low"');
+    value.priority = x.priority as Severity;
+    if (x.bug !== undefined && typeof x.bug !== "boolean") return bad('"bug" must be a boolean');
+    if (x.bug === true) value.bug = true;
+  }
+  return { ok: true, value };
+}

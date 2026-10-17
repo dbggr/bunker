@@ -17,6 +17,7 @@ Usage:
   bunker status [--json]                      read-only watch summary: watcher, current run, queue, merged/failed with reasons, spend
   bunker ui [--port <n>]                      shared live view: one tab per repo (default port 4321)
   bunker --audit                              file improvement ideas as `discovered` issues
+  bunker triage [--yes]                       read-only agent verifies open `discovered` issues (dry run unless --yes)
   bunker clean [--yes] [--logs <days>] [--images] [--force]   remove leftover worktrees and branches (dry run unless --yes)
   bunker self-update [--channel main]         build and install the latest v* release tag (--channel main: pull main instead)
 
@@ -91,6 +92,7 @@ Single prompt and --task:
                              Also max-cost-day in ~/.config/bunker/config.toml. `--max-cost` is an alias
   --max-cost-month <usd>     same for a rolling 30 days (default: no cap; config.toml: max-cost-month)
   --audit-every <days>       also run --audit at most once per this many days, kept in .bunker/watch-state.json (default off; 30 is a good value)
+  --triage-every <hours>     also run triage at most once per this many hours, comment and close only (default off)
   Failed issues get `bunker-failed` instead of `bunker` and are never retried automatically.
 
 --audit:
@@ -98,6 +100,16 @@ Single prompt and --task:
   --max-issues <n>           max issues to file (default 5); only high/medium severity are filed, as `discovered` + `severity:*`
   --focus "<text>"           steer the audit toward a topic
   --setup "<cmd>"            run in the worktree before the agent
+
+triage:
+  triage                     read-only agent (same sandbox as --audit) checks each open `discovered` issue without a triage comment
+                             against the default branch: fixed, as-designed, duplicate or valid (with a suggested priority and bug).
+                             Bunker posts the verdict as a comment, sanitised and redacted. Dry run by default: prints verdicts and
+                             planned actions, changes nothing. Failed or unparseable verdicts leave the issue untouched
+  --yes                      (triage) comment and close fixed / duplicate issues (as-designed: closed not planned), and label valid
+                             ones bunker + priority:* + bug as you. Valid issues are never labelled bunker without --yes
+  --limit <n>                (triage) max issues per run, oldest first (default 10)
+  --watch --triage-every     runs triage unattended in comment-and-close mode only: it never labels
 
 init and doctor:
   bunker doctor              read-only, safe to re-run: checks tools (docker, git, gh, claude), auth (Claude token, scoped
@@ -154,6 +166,7 @@ Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a sep
   watch.max_cost_day     USD cap per rolling 24h for --watch
   watch.max_cost_month   USD cap per rolling 30 days for --watch
   watch.audit_every      days between periodic --audit runs in --watch
+  watch.triage_every     hours between periodic `bunker triage` runs in --watch (comment and close only)
   merge.ci_timeout       minutes --merge waits for CI (default 30)
   clean.logs_days        days to keep .bunker/runs logs; --watch / --queue start-up and `bunker clean` prune older ones (default 30)
   notify.enabled         desktop notifications from --watch (notify-send / osascript) (default true)
@@ -188,5 +201,7 @@ Examples:
   bunker --queue --verify "bun test && bun run typecheck" --merge
   bunker --watch --for 5h --max-cost-day 10
   bunker ui
+  bunker triage
+  bunker triage --yes
   bunker --audit --focus "error handling"
 ```

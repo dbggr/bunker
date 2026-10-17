@@ -25,6 +25,7 @@ parallel = 3
 max_cost_day = 10
 max_cost_month = 100.5
 audit_every = 30
+triage_every = 12
 
 [merge]
 ci_timeout = 45
@@ -43,7 +44,7 @@ describe("parseConfig", () => {
       verify: "bun test",
       copy: [".env", "config/*.json"],
       models: { implementer: "m-impl", reviewer: "m-rev", auditor: "m-aud", default: "m-def" },
-      watch: { interval: 5, parallel: 3, max_cost_day: 10, max_cost_month: 100.5, audit_every: 30 },
+      watch: { interval: 5, parallel: 3, max_cost_day: 10, max_cost_month: 100.5, audit_every: 30, triage_every: 12 },
       merge: { ci_timeout: 45 },
       clean: {},
       notify: { enabled: false, github_user: "carol" },

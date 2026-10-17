@@ -10,7 +10,7 @@ const positive = (raw: unknown) => {
   return n > 0 && Number.isFinite(n) ? n : undefined;
 };
 
-/** --interval, --max-cost*, --audit-every over [watch] in config.toml. `fileCaps` are the user-level caps, which a flag also beats. */
+/** --interval, --max-cost*, --audit-every, --triage-every over [watch] in config.toml. `fileCaps` are the user-level caps, which a flag also beats. */
 export function resolveWatchSettings(values: Flags, watch: RepoConfig["watch"], fileCaps: { day?: number; month?: number }) {
   let intervalMin = watch.interval ?? 10;
   if (values.interval !== undefined) {
@@ -31,7 +31,12 @@ export function resolveWatchSettings(values: Flags, watch: RepoConfig["watch"], 
     auditEveryDays = positive(values["audit-every"]);
     if (auditEveryDays === undefined) throw new FlagError("--audit-every must be a positive number of days");
   }
-  return { intervalMin, caps, auditEveryDays };
+  let triageEveryHours = watch.triage_every;
+  if (values["triage-every"] !== undefined) {
+    triageEveryHours = positive(values["triage-every"]);
+    if (triageEveryHours === undefined) throw new FlagError("--triage-every must be a positive number of hours");
+  }
+  return { intervalMin, caps, auditEveryDays, triageEveryHours };
 }
 
 /** --parallel over watch.parallel (config applies to --watch only). */
@@ -52,4 +57,21 @@ export function resolveCiTimeout(values: Flags, merge: RepoConfig["merge"]): num
   const n = Number(values["ci-timeout"]);
   if (!(n > 0) || !values.merge) throw new FlagError("--ci-timeout must be a positive number of minutes and requires --merge");
   return n;
+}
+
+/** --idle-timeout (minutes), --completion-timeout (seconds) and --step-timeout (minutes) as milliseconds. */
+export function resolveTimeouts(values: Flags): { idleTimeoutMs?: number; completionTimeoutMs?: number; stepTimeoutMs?: number } {
+  const timeouts: { idleTimeoutMs?: number; completionTimeoutMs?: number; stepTimeoutMs?: number } = {};
+  for (const [flag, key, unit, ms] of [
+    ["idle-timeout", "idleTimeoutMs", "minutes", 60_000],
+    ["completion-timeout", "completionTimeoutMs", "seconds", 1000],
+    ["step-timeout", "stepTimeoutMs", "minutes", 60_000],
+  ] as const) {
+    const raw = values[flag];
+    if (raw === undefined) continue;
+    const n = Number(raw);
+    if (!(n > 0)) throw new FlagError(`--${flag} must be a positive number of ${unit}`);
+    timeouts[key] = n * ms;
+  }
+  return timeouts;
 }

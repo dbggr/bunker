@@ -36,6 +36,27 @@ export interface AuditResult {
 
 const norm = (t: string) => t.trim().replace(/\s+/g, " ").toLowerCase();
 
+/** Fetches origin's default branch into a private ref and returns its commit; `tag` names the ref. */
+export async function fetchDefaultBranch(repo: string, env: Record<string, string>, token: string | undefined, tag: string): Promise<string> {
+  const gitCfg = token ? ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"] : [];
+  let remote = "origin";
+  if (token) {
+    const url = (await $`git -C ${repo} remote get-url origin`.nothrow().quiet().text()).trim();
+    const m = /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(url);
+    if (m) remote = `https://github.com/${m[1]}.git`;
+  }
+  const head = await $`git ${gitCfg} -C ${repo} ls-remote --symref ${remote} HEAD`.env(env).nothrow().quiet();
+  const defaultBranch = /^ref: refs\/heads\/(\S+)\s+HEAD$/m.exec(head.stdout.toString())?.[1] ?? "main";
+  // A private ref, not FETCH_HEAD: other bunker processes share the repo and their fetches rewrite FETCH_HEAD.
+  const ref = `refs/bunker/fetch/${tag}-${crypto.randomUUID()}`;
+  const fetch = await $`git ${gitCfg} -C ${repo} fetch -q --no-write-fetch-head ${remote} ${`+refs/heads/${defaultBranch}:${ref}`}`.env(env).nothrow().quiet();
+  if (fetch.exitCode !== 0) throw new Error(`could not fetch origin/${defaultBranch}:\n${fetch.stderr}`);
+  const baseSha = (await $`git -C ${repo} rev-parse ${ref}`.text()).trim();
+  await $`git -C ${repo} update-ref -d ${ref}`.nothrow().quiet();
+
+  return baseSha;
+}
+
 const AUDIT_FORMAT =
   'End your answer with <audit>{"issues": [{"title": "short title", "body": "body with acceptance criteria as a checklist", "severity": "high|medium|low"}]}</audit>: ' +
   SEVERITY_HELP + " Valid JSON (escape quotes and newlines in strings), with an empty array if there is nothing to report. Only the last <audit> in your answer counts.";
@@ -71,24 +92,10 @@ export async function runAudit(opts: AuditOptions): Promise<AuditResult> {
 async function auditRun({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, focus, setup, maxRetries = 2, onEvent, ...timeouts }: AuditOptions): Promise<AuditResult> {
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
-  const gitCfg = token ? ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"] : [];
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
 
-  let remote = "origin";
-  if (token) {
-    const url = (await $`git -C ${repo} remote get-url origin`.nothrow().quiet().text()).trim();
-    const m = /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(url);
-    if (m) remote = `https://github.com/${m[1]}.git`;
-  }
-  const head = await $`git ${gitCfg} -C ${repo} ls-remote --symref ${remote} HEAD`.env(env).nothrow().quiet();
-  const defaultBranch = /^ref: refs\/heads\/(\S+)\s+HEAD$/m.exec(head.stdout.toString())?.[1] ?? "main";
-  // A private ref, not FETCH_HEAD: other bunker processes share the repo and their fetches rewrite FETCH_HEAD.
-  const ref = `refs/bunker/fetch/audit-${crypto.randomUUID()}`;
-  const fetch = await $`git ${gitCfg} -C ${repo} fetch -q --no-write-fetch-head ${remote} ${`+refs/heads/${defaultBranch}:${ref}`}`.env(env).nothrow().quiet();
-  if (fetch.exitCode !== 0) throw new Error(`could not fetch origin/${defaultBranch}:\n${fetch.stderr}`);
-  const baseSha = (await $`git -C ${repo} rev-parse ${ref}`.text()).trim();
-  await $`git -C ${repo} update-ref -d ${ref}`.nothrow().quiet();
+  const baseSha = await fetchDefaultBranch(repo, env, token, "audit");
 
   const open = await $`gh issue list --state open --limit 1000 --json number,title`.cwd(repo).env(env).nothrow().quiet();
   if (open.exitCode !== 0) throw new Error(`gh issue list failed:\n${open.stderr}`);
