@@ -193,6 +193,7 @@ if (!Number.isInteger(maxIterations) || maxIterations < 1) {
   process.exit(2);
 }
 
+const resume = !values["no-resume"];
 const maxRounds = values["max-rounds"] === undefined ? 2 : Number(values["max-rounds"]);
 if (!Number.isInteger(maxRounds) || maxRounds < 1) {
   console.error("bunker: --max-rounds must be a positive integer");
@@ -307,7 +308,7 @@ if (values.audit) {
     });
   }
   try {
-    await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, parallel, signal: ctl.signal, pull: !values["no-pull"], ...watchOpts });
+    await runWatch({ onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, parallel, signal: ctl.signal, pull: !values["no-pull"], ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -317,7 +318,7 @@ if (values.audit) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
   let results;
   try {
-    results = await runQueue({ onEvent, agent, reviewer, sandbox, maxRounds, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin, parallel });
+    results = await runQueue({ onEvent, agent, reviewer, sandbox, maxRounds, resume, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin, parallel });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -343,7 +344,7 @@ if (values.audit) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
   let result;
   try {
-    result = await runIssue({ onEvent, issue, agent, reviewer, sandbox, maxRounds, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
+    result = await runIssue({ onEvent, issue, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -361,7 +362,7 @@ if (values.audit) {
   if (result.status !== (values.merge ? "merged" : "pr-opened")) process.exitCode = 1;
 } else if (values.review) {
   const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
-  const result = await review({ onEvent, prompt, agent, reviewer, sandbox, maxRounds });
+  const result = await review({ onEvent, prompt, agent, reviewer, sandbox, maxRounds, resume });
   console.log();
   for (const [i, r] of result.rounds.entries()) {
     console.log(`bunker: round ${i + 1}: ${r.commits.length} commit(s), ${r.approved ? "approved" : "changes requested"}`);
@@ -374,7 +375,7 @@ if (values.audit) {
 } else if (prompt) {
   let result;
   try {
-    result = await run({ onEvent, prompt, agent, sandbox, maxIterations });
+    result = await run({ onEvent, prompt, agent, sandbox, maxIterations, resume });
   } catch (e) {
     console.error(`\nbunker: ${e instanceof Error ? e.message : e}`);
     if (e instanceof AgentFailure && e.usage) console.log(`bunker: cost ${formatUsage(e.usage)}`);
@@ -385,7 +386,7 @@ if (values.audit) {
   for (const c of result.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
 } else {
-  const results = await runAll({ onEvent, tasks: tasks.map((p) => ({ prompt: p })), agent, sandbox, maxIterations });
+  const results = await runAll({ onEvent, tasks: tasks.map((p) => ({ prompt: p })), agent, sandbox, maxIterations, resume });
   console.log();
   for (const r of results) {
     console.log(`bunker: [${r.status}] ${r.branch} (${r.commits.length} commit(s)) ${r.prompt}`);

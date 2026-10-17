@@ -29,6 +29,8 @@ export interface IssueOptions {
   /** The target repo's main checkout. Defaults to process.cwd(). */
   cwd?: string;
   maxRounds?: number;
+  /** Resume the implementer's agent session across review rounds. Defaults to true. */
+  resume?: boolean;
   /** Shell command run in the worktree, inside `sandbox`, before the first agent run. Defaults to the repo's `.bunker/setup` script if present. */
   setup?: string;
   /** Shell command run in the worktree, inside `sandbox`, once the review approves. */
@@ -304,7 +306,7 @@ export async function runIssue(opts: IssueOptions): Promise<IssueResult> {
   }
 }
 
-async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, setup, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1 }: IssueOptions, spent: { usage?: Usage }): Promise<IssueResult> {
+async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1 }: IssueOptions, spent: { usage?: Usage }): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -351,7 +353,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
   const exclude = join(gitCommonDir, "info", "exclude");
   const excluded = (await Bun.file(exclude).exists()) ? await Bun.file(exclude).text() : "";
-  const missing = ["/.worktrees/", "/.bunker/runs/"].filter((p) => !excluded.split("\n").includes(p));
+  const missing = ["/.worktrees/", "/.bunker/runs/", "/.bunker/sessions/"].filter((p) => !excluded.split("\n").includes(p));
   if (missing.length) await appendFile(exclude, `${excluded && !excluded.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
 
   // Branch from origin's default branch, not the caller's possibly-stale HEAD.
@@ -387,7 +389,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     "Use Conventional Commits for your commit messages, write tests first, and make the repo's tests pass.\n\n" +
     ISSUE_CONVENTION;
   log("raw agent events (stream-json lines follow, interleaved with the sections below)");
-  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, setup, reviewerInstruction: ISSUE_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
+  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), setup, reviewerInstruction: ISSUE_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
   spent.usage = result.usage;
 
   for (const [i, r] of result.rounds.entries()) {
