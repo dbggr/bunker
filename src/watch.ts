@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { addSpend, DAY_MS, exceededCaps, formatSpend, type SpendCaps } from "./spend.ts";
 import { safePull } from "./pull.ts";
 import { runClean } from "./clean.ts";
-import { redact } from "./redact.ts";
+import { codeSpan, redact } from "./redact.ts";
+import { failureReason } from "./reason.ts";
+import { createStatusRecorder } from "./status.ts";
+import pkg from "../package.json" with { type: "json" };
 import { runAudit } from "./audit.ts";
 import type { Agent } from "./index.ts";
 import { countWaiting, runQueue, type QueueEntry, type QueueOptions } from "./issue.ts";
@@ -105,10 +108,17 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   mkdirSync(dir, { recursive: true });
   const exclude = join(gitCommonDir, "info", "exclude");
   const excluded = (await Bun.file(exclude).exists()) ? await Bun.file(exclude).text() : "";
-  const missing = ["/.bunker/watch.lock", "/.bunker/watch-spend.json", "/.bunker/watch-state.json"].filter((p) => !excluded.split("\n").includes(p));
+  const missing = ["/.bunker/watch.lock", "/.bunker/watch-spend.json", "/.bunker/watch-state.json", "/.bunker/watch-status.json"].filter((p) => !excluded.split("\n").includes(p));
   if (missing.length) await appendFile(exclude, `${excluded && !excluded.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
   const release = acquireLock(join(dir, "watch.lock"));
   if (cleanOnStart) await runClean({ cwd: repo, yes: true, auto: true, ...(logsDays === undefined ? {} : { logsDays }) });
+
+  const status = createStatusRecorder(dir, { pid: process.pid, version: pkg.version });
+  const userOnEvent = opts.onEvent;
+  opts.onEvent = (e) => {
+    status.event(e);
+    userOnEvent?.(e);
+  };
 
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
@@ -182,9 +192,13 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     }
     const edit = await $`gh issue edit ${e.issue} --remove-label bunker --add-label ${FAILED_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
     if (edit.exitCode !== 0) log(`bunker: could not relabel #${e.issue}: ${edit.stderr.toString().trim()}`);
-    notify(`bunker: #${e.issue} failed`, `status ${e.status}${e.prUrl ? ` · ${e.prUrl}` : ""}`);
+    const reason = failureReason(e.status, e.logPath, { ...(e.error ? { error: e.error } : {}), ...(e.verifyOutput ? { verifyOutput: e.verifyOutput } : {}) });
+    status.failed({ issue: e.issue, status: e.status, reason, ...(e.prUrl ? { prUrl: e.prUrl } : {}), ...(e.logPath ? { logPath: e.logPath } : {}) });
+    notify(`bunker: #${e.issue} failed`, `${e.status}: ${reason}${e.prUrl ? ` · ${e.prUrl}` : ""}`);
     const body = redact([
       `${mention ? `${mention} ` : ""}bunker --watch did not merge this issue: status \`${e.status}\`.`,
+      "",
+      `Reason: ${codeSpan(reason)}`,
       ...(e.error ? ["", "```", e.error.trimEnd(), "```"] : []),
       ...(e.verifyOutput ? ["", "Verify output:", "```", e.verifyOutput.trimEnd(), "```"] : []),
       ...(e.prUrl ? ["", `PR: ${e.prUrl}`] : []),
@@ -234,6 +248,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
           } else if (e.status === "merged") {
             merged++;
             summary.merged++;
+            status.merged({ issue: e.issue, ...(e.prUrl ? { prUrl: e.prUrl } : {}) });
           } else if (e.status === "already-in-progress") {
             giveUp(e.issue);
           } else if (e.status === "needs-review") {

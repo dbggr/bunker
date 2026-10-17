@@ -23,6 +23,9 @@ import { options } from "./options.ts";
 import { output } from "./output.ts";
 import { safePull } from "./pull.ts";
 import { runClean } from "./clean.ts";
+import { collectStatus, formatStatus } from "./status.ts";
+import { listQueued } from "./issue.ts";
+import { alive } from "./watch.ts";
 import { selfUpdate } from "./self-update.ts";
 import { buildLabel } from "./build-info.ts";
 import pkg from "../package.json" with { type: "json" };
@@ -88,6 +91,29 @@ if (!process.argv.slice(2).includes("--") && positionals.length === 1 && (positi
     process.exit(2);
   }
   process.exit(await runInit({ cwd: process.cwd(), yes: !!values.yes, io: terminalIo() }));
+}
+
+// `bunker status`: read-only summary of the watcher, its runs, the queue and the spend.
+if (positionals.length === 1 && positionals[0] === "status") {
+  const others = Object.entries(values).filter(([k, v]) => !["json", "verbose"].includes(k) && v !== false && v !== undefined);
+  if (others.length) {
+    console.error("bunker: status only takes --json");
+    process.exit(2);
+  }
+  const cwd = process.cwd();
+  const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.nothrow().quiet().text()).trim();
+  if (!repo) {
+    console.error("bunker: status must be run inside a git repository");
+    process.exit(2);
+  }
+  const cfg = (await loadRepoConfigOrExit(repo)).config;
+  const fileCaps = await loadSpendCaps().catch(() => ({}));
+  const caps = { ...(cfg.watch.max_cost_day === undefined ? {} : { day: cfg.watch.max_cost_day }), ...(cfg.watch.max_cost_month === undefined ? {} : { month: cfg.watch.max_cost_month }), ...fileCaps };
+  const token = process.env.BUNKER_GH_TOKEN;
+  const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
+  const report = await collectStatus({ repo, caps, alive, queue: () => listQueued(repo, env) });
+  console.log(values.json ? JSON.stringify(report, null, 2) : formatStatus(report));
+  process.exit(0);
 }
 
 // `bunker clean`: dry run unless --yes.

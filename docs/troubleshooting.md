@@ -36,7 +36,7 @@ Each entry is symptom, cause, fix. The run log (`.bunker/runs/<N>-<timestamp>.lo
 
 - **Symptom**: `--watch` removed `bunker` from an issue, added `bunker-failed` and left a comment.
 - **Cause**: the issue ended in anything other than `merged`. It is never retried automatically, so a broken issue can't burn budget in a loop.
-- **Fix**: read the comment and the run log, fix the cause (or the issue text), then relabel it `bunker` to retry.
+- **Fix**: read the one-line reason in the comment (or run `bunker status` for every failure with its reason, link and retry command) and the run log, fix the cause (or the issue text), then relabel it `bunker` to retry.
 
 ## `node_modules` or `tsc` missing in a worktree
 

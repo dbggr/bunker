@@ -524,6 +524,24 @@ describe("runWatch() notifications", () => {
     expect(await Bun.file(join(root, "comments.log")).text()).toContain("@paul");
   });
 
+  test("the failure notification, the issue comment and the status file all carry the one-line reason", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    const { notes, notify } = collect();
+    const ctl = new AbortController();
+    await runWatch({
+      ...base, cwd: repo, agent: fakeAgent({ failing: ["First"] }), notify, signal: ctl.signal,
+      log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); },
+    });
+    const note = notes.find((n) => /#1 failed/.test(n.title))!;
+    expect(note.body).toContain("agent exited with 1");
+    expect(await Bun.file(join(root, "comments.log")).text()).toContain("Reason:");
+    const st = JSON.parse(await Bun.file(join(repo, ".bunker", "watch-status.json")).text());
+    expect(st.pid).toBe(process.pid);
+    expect(st.failed).toHaveLength(1);
+    expect(st.failed[0].reason).toContain("agent exited with 1");
+    expect(st.current).toEqual([]);
+  });
+
   test("a pass that merged notifies a summary; the stop notifies too", async () => {
     const { repo } = await setup(three.slice(0, 2));
     const { notes, notify } = collect();

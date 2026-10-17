@@ -11,6 +11,7 @@ import { copyIntoWorktree, copyPatterns } from "./copy.ts";
 import { emit } from "./events.ts";
 import { output, tailLines, testCounts } from "./output.ts";
 import { hyperlink } from "./events.ts";
+import { failureReason } from "./reason.ts";
 import { modelLabel } from "./models.ts";
 import { AgentFailure, isolatedEnv, type Pause, emitStage, review, runSetup, stepLimits, timeoutMessage, worktreeAdmin, type Timeouts, type Agent, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
 
@@ -487,7 +488,10 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   const fail = (status: IssueResult["status"], extra: Partial<IssueResult> = {}): IssueResult => {
     log(`final status: ${status}`, [extra.error, extra.prUrl].filter(Boolean).join("\n"));
     if (status === "merged") emitStage({ onEvent }, "merged");
-    else if (status !== "pr-opened" && status !== "needs-review") emitStage({ onEvent }, "failed", status);
+    else if (status !== "pr-opened" && status !== "needs-review") {
+      const reason = failureReason(status, logPath, { ...(extra.error ? { error: extra.error } : {}), ...(extra.verifyOutput ? { verifyOutput: extra.verifyOutput } : {}) });
+      emit(onEvent, { type: "stage", name: "failed", text: status, reason });
+    }
     return finish(status, extra);
   };
   // The terminal gets the tail of a failed step's output and where the full log is; the rest lives in the log.
@@ -832,7 +836,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   return merge && mergeTurn ? mergeTurn(publish) : publish();
 }
 
-async function listQueued(cwd: string, env: Env): Promise<Queued[]> {
+export async function listQueued(cwd: string, env: Env): Promise<Queued[]> {
   const list = await $`gh issue list --label bunker --state open --limit 1000 --json number,title,createdAt,labels`.cwd(cwd).env(env).nothrow().quiet();
   // A transient failure of one list must not abort the queue; the other list may still succeed.
   if (list.exitCode !== 0) {

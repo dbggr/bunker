@@ -123,7 +123,7 @@ function onEvent(m) {
     s.className = "stage " + (e.name === "merged" || e.name === "done" ? "merged" : e.name === "failed" ? "failed" : "");
     i.stage = e.name;
     i.done = e.name === "merged" || e.name === "done" || e.name === "failed";
-    line(i, "stagel", "— " + e.name + (e.model ? " · " + e.model : "") + (e.text ? " (" + e.text + ")" : ""));
+    line(i, "stagel", "— " + e.name + (e.model ? " · " + e.model : "") + (e.text ? " (" + e.text + ")" : "") + (e.reason ? ": " + e.reason : ""));
   } else if (e.type === "meta") {
     if (e.logPath) q(".logpath").textContent = "log: " + e.logPath;
     if (e.url) { const a = document.createElement("a"); a.href = e.url; a.textContent = "PR"; a.target = "_blank"; a.rel = "noreferrer"; q(".pr").replaceChildren(a); }

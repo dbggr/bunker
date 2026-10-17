@@ -11,6 +11,7 @@ Usage:
   bunker --issue <n>                          GitHub issue -> reviewed PR
   bunker --queue                              work the \`bunker\` label queue
   bunker --watch                              keep working the queue unattended (implies --queue --merge)
+  bunker status [--json]                      read-only watch summary: watcher, current run, queue, merged/failed with reasons, spend
   bunker ui [--port <n>]                      shared live view: one tab per repo (default port 4321)
   bunker --audit                              file improvement ideas as \`discovered\` issues
   bunker clean [--yes] [--logs <days>] [--images] [--force]   remove leftover worktrees and branches (dry run unless --yes)
@@ -110,6 +111,13 @@ init and doctor:
                              (or make it longer than one word).
   --yes                      (init) accept every proposed default without asking; still never overwrites a file and skips the
                              steps that need a secret from you
+
+status:
+  bunker status              read-only, run in the repo. Prints whether \`bunker --watch\` is alive (from .bunker/watch.lock: pid, version,
+                             uptime), the run in flight and its stage, the queue in priority order, what merged and failed since the
+                             watcher started (each failure with a one-line reason from its run log, the PR or log, and the \`gh issue
+                             edit\` command that retries it), and spend in the last 24 h and 30 days against the caps. With no watcher
+                             running it shows the last run's results. --json prints the same as JSON
 
 clean:
   bunker clean               run from the repo's main checkout. Dry run by default: prints what it would remove and why.
