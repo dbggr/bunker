@@ -53,7 +53,7 @@ esac`,
     "issues.json": "[]",
     "pulls.json": "[]",
     "branch.json": "{}",
-    "labels.json": JSON.stringify(["bunker", "discovered", "bunker-failed", "bunker-blocked"].map((name) => ({ name }))),
+    "labels.json": JSON.stringify(["bunker", "discovered", "bunker-failed", "bunker-blocked", "priority:high", "priority:medium", "priority:low"].map((name) => ({ name }))),
     "protection.json": JSON.stringify({ contexts: ["test"], checks: [{ context: "test" }] }),
     ...opts.files,
   };

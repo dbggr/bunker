@@ -412,7 +412,8 @@ describe("blocked issues", () => {
     await Bun.write(join(root, "issue-51.json"), JSON.stringify({ number: 51, state: "OPEN", labels: [] }));
     await Bun.write(join(root, "blocked-list.json"), JSON.stringify([{ number: 1, title: "First", createdAt: "2026-01-01T00:00:00Z" }]));
     await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), listRetryMs: 10, limit: 1 });
-    expect(await Bun.file(join(root, "edits.log")).exists()).toBe(false);
+    const edits = (await Bun.file(join(root, "edits.log")).exists()) ? await Bun.file(join(root, "edits.log")).text() : "";
+    expect(edits).not.toContain("issue edit");
   });
 });
 
@@ -436,5 +437,136 @@ describe("structured follow-ups", () => {
     const r = await runIssue({ cwd: repo, issue: 7, sandbox: noSandbox(), agent: fakeAgent(APPROVE, report) });
     expect(r.status).toBe("blocked");
     expect(r.blockedBy?.title).toBe("Need the thing");
+  });
+});
+
+describe("queue order: priority, bug, age", () => {
+  type L = string[];
+  // [number, createdAt, labels]; titles are derived.
+  async function ordered(rows: [number, string, L][], extra: Record<number, object> = {}) {
+    const env = await setup(rows.map(([n, at]) => [n, `T${n}`, at]), "ff");
+    const root = join(env.repo, "..");
+    const list = rows.map(([number, createdAt, labels]) => ({ number, title: `T${number}`, createdAt, labels: labels.map((name) => ({ name })) }));
+    await Bun.write(join(root, "list.json"), JSON.stringify(list));
+    for (const [n, , labels] of rows) {
+      await Bun.write(join(root, `issue-${n}.json`), JSON.stringify({ number: n, title: `T${n}`, body: "Do it.", state: "OPEN", labels: ["bunker", ...labels].map((name) => ({ name })), ...extra[n] }));
+    }
+    return { ...env, root };
+  }
+  const run = (repo: string, more: object = {}) => runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10, listRetryMs: 10, limit: 10, ...more });
+
+  test("high before medium before none before low", async () => {
+    const { repo } = await ordered([
+      [1, "2026-01-01T00:00:00Z", ["priority:low"]],
+      [2, "2026-01-02T00:00:00Z", []],
+      [3, "2026-01-03T00:00:00Z", ["priority:high"]],
+      [4, "2026-01-04T00:00:00Z", ["priority:medium"]],
+    ]);
+    const rs = await run(repo);
+    expect(rs.map((r) => r.issue)).toEqual([3, 4, 2, 1]);
+  });
+
+  test("bug before enhancement at equal priority, but priority wins over bug; oldest first as tiebreak", async () => {
+    const { repo } = await ordered([
+      [1, "2026-01-01T00:00:00Z", ["enhancement"]],
+      [2, "2026-01-02T00:00:00Z", ["bug"]],
+      [3, "2026-01-03T00:00:00Z", ["bug"]],
+      [4, "2026-01-04T00:00:00Z", ["priority:high"]],
+      [5, "2026-01-05T00:00:00Z", ["bug", "priority:low"]],
+    ]);
+    const rs = await run(repo);
+    expect(rs.map((r) => r.issue)).toEqual([4, 2, 3, 1, 5]);
+  });
+
+  test("a blocked high-priority issue is skipped", async () => {
+    const { repo, root } = await ordered(
+      [
+        [1, "2026-01-01T00:00:00Z", []],
+        [2, "2026-01-02T00:00:00Z", ["priority:high"]],
+      ],
+      { 2: { body: "Blocked by #50" } },
+    );
+    await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "t", body: "", state: "OPEN", labels: [] }));
+    const rs = await run(repo);
+    expect(rs.map((r) => r.issue)).toEqual([1]);
+  });
+
+  test("announces the order with the reason per issue, as an event and in the run log", async () => {
+    const { repo } = await ordered([
+      [131, "2026-01-01T00:00:00Z", []],
+      [132, "2026-01-02T00:00:00Z", ["priority:low"]],
+      [160, "2026-01-03T00:00:00Z", ["bug", "priority:high"]],
+    ]);
+    const notes: string[] = [];
+    const rs = await run(repo, { onEvent: (e: { type: string; text?: string }) => e.type === "note" && notes.push(e.text ?? ""), limit: 1 });
+    expect(notes[0]).toBe("queue: #160 (high, bug) · #131 · #132 (low)");
+    expect(await Bun.file(rs[0]!.logPath!).text()).toContain("queue: #160 (high, bug) · #131 · #132 (low)");
+  });
+
+  test("creates the priority labels", async () => {
+    const { repo, root } = await ordered([[1, "2026-01-01T00:00:00Z", []]]);
+    await run(repo, { limit: 1 });
+    const edits = await Bun.file(join(root, "edits.log")).text();
+    expect(edits).toContain("label create priority:high --description bunker queue priority --color B60205");
+    expect(edits).toContain("label create priority:medium");
+    expect(edits).toContain("label create priority:low");
+  });
+
+  test("relist: an issue relabelled priority:high mid-pass runs next", async () => {
+    const { repo, root } = await ordered([
+      [1, "2026-01-01T00:00:00Z", []],
+      [2, "2026-01-02T00:00:00Z", []],
+      [3, "2026-01-03T00:00:00Z", []],
+    ]);
+    const inner = fakeAgent();
+    const agent: Agent = {
+      command(prompt, mode = "write") {
+        const cmd = inner.command(prompt, mode);
+        if (mode === "write" && /issue #1[:.]/.test(prompt)) {
+          const list = join(root, "list.json");
+          const edit = `sed -i 's/"number":3,\\("title":"T3","createdAt":"[^"]*"\\),"labels":\\[\\]/"number":3,\\1,"labels":[{"name":"priority:high"}]/' "${list}"`;
+          return ["sh", "-c", `${edit}; ${cmd[2]}`];
+        }
+        return cmd;
+      },
+    };
+    const rs = await runQueue({ cwd: repo, agent, sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10, listRetryMs: 10, limit: 10, relist: true });
+    expect(rs.map((r) => r.issue)).toEqual([1, 3, 2]);
+  });
+
+  test("without relist the order is fixed at the start of the pass", async () => {
+    const { repo, root } = await ordered([
+      [1, "2026-01-01T00:00:00Z", []],
+      [2, "2026-01-02T00:00:00Z", []],
+      [3, "2026-01-03T00:00:00Z", []],
+    ]);
+    const inner = fakeAgent();
+    const agent: Agent = {
+      command(prompt, mode = "write") {
+        const cmd = inner.command(prompt, mode);
+        if (mode === "write" && /issue #1[:.]/.test(prompt)) {
+          const edit = `sed -i 's/"number":3,\\("title":"T3","createdAt":"[^"]*"\\),"labels":\\[\\]/"number":3,\\1,"labels":[{"name":"priority:high"}]/' "${join(root, "list.json")}"`;
+          return ["sh", "-c", `${edit}; ${cmd[2]}`];
+        }
+        return cmd;
+      },
+    };
+    const rs = await runQueue({ cwd: repo, agent, sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10, listRetryMs: 10, limit: 10 });
+    expect(rs.map((r) => r.issue)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("agent-filed issues", () => {
+  test("never carry a priority label; a bug follow-up gets `bug`", async () => {
+    const { repo, createLog } = await setup([[7, "Add feature", "2026-01-01T00:00:00Z"]]);
+    const report = '<report>{"issues":[{"title":"Crash on empty","body":"boom","bug":true},{"title":"Nice to have","body":"later"}]}</report>';
+    const r = await runIssue({ cwd: repo, issue: 7, sandbox: noSandbox(), agent: fakeAgent(APPROVE, report) });
+    expect(r.filed.length).toBe(2);
+    const log = await Bun.file(createLog).text();
+    expect(log).not.toContain("priority");
+    const [first, second] = log.split("---\n");
+    expect(first).toContain("bug");
+    expect(second).not.toContain("bug");
+    expect(first).toContain("discovered");
   });
 });

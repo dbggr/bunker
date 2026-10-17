@@ -57,7 +57,7 @@ describe("init --yes", () => {
     expect(await Bun.file(join(w.repo, ".bunker/verify")).text()).toBe("bun test && bun run typecheck\n");
     expect(await Bun.file(join(w.repo, ".bunker/Dockerfile")).text()).toContain("FROM bunker-claude");
     const log = await w.log();
-    for (const l of ["discovered", "bunker-failed", "bunker-blocked"]) expect(log).toContain(`gh label create ${l}`);
+    for (const l of ["discovered", "bunker-failed", "bunker-blocked", "priority:high", "priority:medium", "priority:low"]) expect(log).toContain(`gh label create ${l}`);
     expect(log).not.toContain("gh label create bunker ");
     // only GETs: no repo-settings writes
     expect(log).not.toMatch(/--method|-X |--input|-f |-F |PATCH|PUT|POST/);
@@ -89,7 +89,7 @@ describe("init --yes", () => {
     expect(await runInit({ cwd: w.repo, env: w.env, yes: true, io: s.io })).toBe(1);
     expect(s.text()).not.toContain("bunker --issue");
     const w2 = await bunRepo();
-    await Bun.write(join(w2.data, "labels.json"), JSON.stringify(["bunker", "discovered", "bunker-failed", "bunker-blocked"].map((name) => ({ name }))));
+    await Bun.write(join(w2.data, "labels.json"), JSON.stringify(["bunker", "discovered", "bunker-failed", "bunker-blocked", "priority:high", "priority:medium", "priority:low"].map((name) => ({ name }))));
     const s2 = scripted();
     expect(await runInit({ cwd: w2.repo, env: w2.env, yes: true, io: s2.io })).toBe(0);
     expect(s2.text()).toContain("bunker --issue <n> --merge");

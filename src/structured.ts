@@ -52,6 +52,8 @@ export function extractOutput<T>(text: string, out: Output<T>): Extracted<T> {
 export interface FollowUp {
   title: string;
   body: string;
+  /** The follow-up is a defect; it is filed with the `bug` label. */
+  bug?: boolean;
 }
 
 export interface Report {
@@ -71,7 +73,8 @@ function followUps(v: unknown, field: string): FollowUp[] {
   if (!Array.isArray(v)) throw new Error(`"${field}" must be an array of {"title","body"}`);
   return v.map((x, i) => {
     if (!isObj(x) || typeof x.title !== "string" || typeof x.body !== "string") throw new Error(`"${field}[${i}]" must be {"title": string, "body": string}`);
-    return { title: x.title, body: x.body };
+    if (x.bug !== undefined && typeof x.bug !== "boolean") throw new Error(`"${field}[${i}].bug" must be a boolean`);
+    return { title: x.title, body: x.body, ...(x.bug === true ? { bug: true } : {}) };
   });
 }
 

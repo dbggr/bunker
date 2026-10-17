@@ -172,7 +172,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
       }
       let merged = 0;
       await runQueue({
-        ...opts, cwd, merge: true, limit: Infinity, keepGoing: true,
+        ...opts, cwd, merge: true, limit: Infinity, keepGoing: true, relist: true,
         skip: (n) => handled.has(n),
         shouldStop: () => stopped() || spentNow() >= maxCostUsd,
         onResult: async (e) => {
