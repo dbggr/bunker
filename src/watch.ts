@@ -185,7 +185,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       if (hit.length) {
         // Every exceeded window must free up before work resumes.
         const at = Math.max(...hit.map((h) => h.liftsAt));
-        for (const h of hit) log(`bunker: ${h.window === "day" ? "daily" : "monthly"} spend cap reached (${h.spent.toFixed(2)} of ${h.cap} in ${h.window === "day" ? "24 h" : "30 days"}); no new issues, sleeping until ${new Date(at).toISOString()}`);
+        for (const h of hit) log(`bunker: ${h.window === "day" ? "daily" : "monthly"} spend cap reached ($${h.spent.toFixed(2)} of $${h.cap} in ${h.window === "day" ? "24 h" : "30 days"}); no new issues, sleeping until ${new Date(at).toISOString()}`);
         // Re-check at least daily: a timer can't be that long.
         await sleep(Math.min(at - Date.now(), DAY_MS));
         continue;

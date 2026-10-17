@@ -398,6 +398,25 @@ describe("bunker --watch (CLI)", () => {
     }
   });
 
+  test("max-cost-day in the user config.toml caps the watch, and the log shows dollar amounts", async () => {
+    const { repo, root } = await setup([]);
+    const xdg = join(root, "xdg");
+    await Bun.write(join(xdg, "bunker", "config.toml"), "max-cost-day = 20\n");
+    await Bun.write(join(repo, ".bunker", "verify"), "true");
+    await Bun.write(join(repo, ".bunker", "watch-spend.json"), JSON.stringify([{ at: Date.now() - 1000, usd: 25 }]));
+    const p = Bun.spawn(["bun", join(import.meta.dir, "..", "src", "cli.ts"), "--watch", "--no-sandbox", "--interval", "0.01"], { cwd: repo, stdout: "pipe", stderr: "pipe", env: { ...process.env, XDG_CONFIG_HOME: xdg } });
+    const reader = p.stdout.getReader();
+    let seen = "";
+    while (!/cap reached/.test(seen)) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += new TextDecoder().decode(value);
+    }
+    p.kill("SIGINT");
+    await p.exited;
+    expect(seen).toContain("daily spend cap reached ($25.00 of $20 in 24 h)");
+  });
+
   test("SIGINT finishes cleanly and exits 0", async () => {
     const { repo } = await setup([]);
     await Bun.write(join(repo, ".bunker", "verify"), "true");
