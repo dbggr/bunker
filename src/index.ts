@@ -11,6 +11,12 @@ import { output, tailLines } from "./output.ts";
 import { emit, findSessionId, findUsageLimit, findStreamResult, parseClaudeStreamLine, type OnEvent, type Stage, type StreamEvent } from "./events.ts";
 export type { BunkerEvent, OnEvent } from "./events.ts";
 import { modelLabel } from "./models.ts";
+import { gitMountArgs, guardGit, hardenHostGit } from "./git-guard.ts";
+
+export { hardenHostGit } from "./git-guard.ts";
+
+// Every git bunker runs on the host ignores repo hooks and fsmonitor (see git-guard.ts).
+hardenHostGit();
 import baseDockerfile from "../images/base/Dockerfile" with { type: "text" };
 
 export type AgentMode = "write" | "review";
@@ -88,6 +94,8 @@ export interface ExecContext {
   prefix?: string;
   onLine?: (line: string) => void;
   limits?: ExecLimits;
+  /** Runs agent-written code that needs neither: no network and no Claude credentials (verify). */
+  isolate?: boolean;
 }
 
 export interface ExecResult {
@@ -340,17 +348,29 @@ export function noSandbox(): Sandbox {
     get projectsDir() {
       return join(process.env.HOME ?? tmpdir(), ".claude", "projects");
     },
-    exec: (cmd, { worktree, prefix, onLine, limits }) =>
-      // detached: own process group, so a terminal Ctrl-C reaches only bunker, which lets the step finish.
-      // Explicit env: Bun.spawn otherwise passes the startup environment, dropping
-      // anything set at runtime (e.g. the token loaded from .bunker/.env).
-      teeStdout(Bun.spawn(cmd, { cwd: worktree, env: agentEnv(), stdio: ["ignore", "pipe", "inherit"], detached: true }), prefix, onLine, limits),
+    exec: (cmd, { worktree, gitCommonDir, prefix, onLine, limits, isolate }) =>
+      guardGit(worktree, gitCommonDir, () =>
+        // detached: own process group, so a terminal Ctrl-C reaches only bunker, which lets the step finish.
+        // Explicit env: Bun.spawn otherwise passes the startup environment, dropping
+        // anything set at runtime (e.g. the token loaded from .bunker/.env).
+        teeStdout(Bun.spawn(cmd, { cwd: worktree, env: isolate ? isolatedEnv() : agentEnv(), stdio: ["ignore", "pipe", "inherit"], detached: true }), prefix, onLine, limits),
+      ),
   };
 }
 
 function agentEnv(): Record<string, string | undefined> {
   const env = { ...process.env };
   for (const name of GH_TOKEN_VARS) delete env[name];
+  return env;
+}
+
+/** Claude credentials: the agent needs them; code it wrote (verify) must not see them. */
+export const CLAUDE_CREDENTIAL_VARS = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] as const;
+
+/** Env for running agent-written code on the host (verify): no GitHub tokens, no Claude credentials. */
+export function isolatedEnv(): Record<string, string | undefined> {
+  const env = agentEnv();
+  for (const name of CLAUDE_CREDENTIAL_VARS) delete env[name];
   return env;
 }
 
@@ -442,7 +462,10 @@ function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions):
       }
       return store;
     },
-    async exec(cmd, { worktree, gitCommonDir, prefix, onLine, limits }) {
+    exec(cmd, ctx) {
+      // Arrow function: `this.projectsDir` below still means this sandbox.
+      return guardGit(ctx.worktree, ctx.gitCommonDir, async () => {
+      const { worktree, gitCommonDir, prefix, onLine, limits, isolate } = ctx;
       const [entrypoint, ...args] = cmd;
       if (!entrypoint) throw new Error("empty agent command");
       if (!images.has(gitCommonDir)) images.set(gitCommonDir, resolveImage(bin, opts, worktree, gitCommonDir));
@@ -461,11 +484,11 @@ function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions):
         bin, "run", "--rm", "--name", cname,
         ...userArgs,
         "-e", "HOME=/tmp",
-        ...env.flatMap((name) => ["-e", name]), // name only: value comes from our env, never argv
+        // Verify runs code the agent wrote: no network to send anything out, and no credentials to send.
+        ...(isolate ? ["--network", "none"] : env.flatMap((name) => ["-e", name])), // name only: value comes from our env, never argv
         ...identity,
         "-v", `${this.projectsDir}:/tmp/.claude/projects`,
-        "-v", `${worktree}:${worktree}`,
-        "-v", `${gitCommonDir}:${gitCommonDir}`,
+        ...gitMountArgs(worktree, gitCommonDir),
         "-w", worktree,
         "--entrypoint", entrypoint,
         image,
@@ -478,6 +501,7 @@ function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions):
         killGroup(proc);
       };
       return teeStdout(proc, prefix, onLine, limits, kill);
+      });
     },
   };
 }

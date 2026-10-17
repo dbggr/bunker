@@ -135,6 +135,7 @@ Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a sep
   Keys (tables: [models], [watch], [merge]):
   setup                  shell command run in each worktree before the agent (legacy: .bunker/setup)
   verify                 command that must pass before anything is pushed (legacy: .bunker/verify)
+  verify_network         let sandboxed verify use the network and Claude credentials (off: verify runs agent-written code) (default false)
   copy                   gitignored paths or globs copied into each worktree (legacy: .bunker/copy)
   models.implementer     model for the implementer role
   models.reviewer        model for the reviewer role
