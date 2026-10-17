@@ -1,6 +1,6 @@
 import { $ } from "bun";
-import { appendFileSync, mkdirSync } from "node:fs";
-import { appendFile } from "node:fs/promises";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { redact } from "./redact.ts";
 import { copyIntoWorktree, copyPatterns } from "./copy.ts";
@@ -59,7 +59,7 @@ export interface IssueOptions extends Timeouts {
 }
 
 export interface IssueResult {
-  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked" | "bad-output" | "idle-timeout";
+  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked" | "bad-output" | "idle-timeout" | "already-in-progress";
   /** With status `blocked`: the `discovered` issue filed for what this one waits on. */
   blockedBy?: { number: number; title: string };
   branch: string;
@@ -322,6 +322,37 @@ function commentsSection(comments: IssueInfo["comments"]): string {
   );
 }
 
+interface Live { repo: string; worktree: string; branch: string; base: string }
+const live = new Set<Live>();
+let hooked = false;
+
+/** Remove the worktree and branch of every run still in setup/implement that has committed nothing. Synchronous: safe in exit and signal handlers. */
+export function cleanupInterrupted(): void {
+  for (const l of live) {
+    const commits = Bun.spawnSync(["git", "-C", l.repo, "rev-list", "--count", `${l.base}..${l.branch}`]);
+    if (commits.exitCode === 0 && commits.stdout.toString().trim() !== "0") continue;
+    const dirty = Bun.spawnSync(["git", "-C", l.worktree, "status", "--porcelain"]);
+    if (dirty.exitCode === 0 && dirty.stdout.toString().trim()) continue;
+    Bun.spawnSync(["git", "-C", l.repo, "worktree", "remove", "--force", l.worktree]);
+    Bun.spawnSync(["git", "-C", l.repo, "worktree", "prune"]);
+    Bun.spawnSync(["git", "-C", l.repo, "branch", "-D", l.branch]);
+    live.delete(l);
+  }
+}
+
+function track(l: Live): () => void {
+  if (!hooked) {
+    hooked = true;
+    process.on("exit", cleanupInterrupted);
+    for (const sig of ["SIGINT", "SIGTERM"] as const) {
+      // The watch CLI installs its own handler (which exits through the "exit" hook above).
+      if (process.listenerCount(sig) === 0) process.on(sig, () => process.exit(130));
+    }
+  }
+  live.add(l);
+  return () => void live.delete(l);
+}
+
 /**
  * Issue → worktree on its own branch → review() → optional sandboxed verify →
  * push + PR. Throws only when the issue can't be used (gh failure, closed);
@@ -330,16 +361,68 @@ function commentsSection(comments: IssueInfo["comments"]): string {
  */
 export async function runIssue(opts: IssueOptions): Promise<IssueResult> {
   const spent: { usage?: Usage } = {};
+  let untrack = () => {};
   try {
-    return await runIssueInner(opts, spent);
+    return await runIssueInner(opts, spent, (u) => (untrack = u));
   } catch (e) {
     // Whatever the agents already spent must not vanish with the error.
     if (spent.usage && !(e instanceof AgentFailure)) throw new AgentFailure(e instanceof Error ? e.message : String(e), spent.usage);
     throw e;
+  } finally {
+    untrack();
   }
 }
 
-async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, ...timeouts }: IssueOptions, spent: { usage?: Usage }): Promise<IssueResult> {
+/**
+ * Deal with what an interrupted earlier run left for this issue's branch. Empty leftovers are deleted; work is kept
+ * under a `bunker/stale/<n>-<timestamp>` tag; an open PR on origin means the issue is already being handled.
+ * Only ever touches `{feature|fix}/<n>-<slug>` for this issue.
+ */
+async function reclaimLeftover(o: { repo: string; cwd: string; number: number; branch: string; worktree: string; baseSha: string; remote: string; gitCfg: string[]; env: Record<string, string>; log: (t: string, s?: string) => void; onEvent?: OnEvent }): Promise<{ prUrl?: string } | undefined> {
+  const { repo, number, branch, worktree, baseSha } = o;
+  if (!new RegExp(`^(feature|fix)/${number}-[a-z0-9-]*$`).test(branch)) return undefined;
+  const git = (...args: string[]) => $`git -C ${repo} ${args}`.nothrow().quiet();
+  const remoteHas = (await $`git ${o.gitCfg} -C ${repo} ls-remote --heads ${o.remote} ${`refs/heads/${branch}`}`.env(o.env).nothrow().quiet()).stdout.toString().trim() !== "";
+  if (remoteHas) {
+    const prs = await $`gh pr list --head ${branch} --state open --json url`.cwd(o.cwd).env(o.env).nothrow().quiet();
+    try {
+      const url = (JSON.parse(prs.stdout.toString()) as { url?: string }[])[0]?.url;
+      if (prs.exitCode === 0 && url) {
+        emit(o.onEvent, { type: "note", text: `#${number} is already in progress: ${url}` });
+        return { prUrl: url };
+      }
+    } catch {}
+  }
+  const hasBranch = (await git("rev-parse", "--verify", "-q", `refs/heads/${branch}`)).exitCode === 0;
+  const hasDir = existsSync(worktree);
+  if (!hasBranch && !hasDir) return undefined;
+
+  let dirty = false;
+  if (hasDir) {
+    const st = await $`git -C ${worktree} status --porcelain`.nothrow().quiet();
+    dirty = st.exitCode === 0 && st.stdout.toString().trim() !== "";
+  }
+  let commits = 0;
+  if (hasBranch) commits = Number((await git("rev-list", "--count", `${baseSha}..${branch}`)).stdout.toString().trim()) || 0;
+  if (commits > 0 || dirty) {
+    if (dirty) {
+      await $`git -C ${worktree} add -A`.nothrow().quiet();
+      await $`git -C ${worktree} -c user.name=bunker -c user.email=bunker@localhost commit -q -m ${"wip: uncommitted changes from an interrupted bunker run"}`.nothrow().quiet();
+    }
+    const tag = `bunker/stale/${number}-${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z")}`;
+    const tagged = await git("tag", tag, hasBranch ? branch : "HEAD");
+    if (tagged.exitCode !== 0) throw new Error(`could not keep the leftover work of #${number} as ${tag}:\n${tagged.stderr}`);
+    o.log("stale leftover kept", tag);
+    emit(o.onEvent, { type: "note", text: `#${number}: kept an interrupted attempt's work as tag ${tag}` });
+  }
+  await worktreeAdmin(() => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
+  if (existsSync(worktree)) await rm(worktree, { recursive: true, force: true });
+  await worktreeAdmin(() => $`git -C ${repo} worktree prune`.nothrow().quiet());
+  if (hasBranch) await worktreeAdmin(() => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
+  return undefined;
+}
+
+async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -431,8 +514,12 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   } catch (e) {
     return fail("failed", { error: e instanceof Error ? e.message : String(e) });
   }
+  // A restart can leave this issue's branch (and worktree) behind; reclaim it, or defer to its open PR.
+  const leftover = await reclaimLeftover({ repo, cwd, number, branch, worktree, baseSha, remote, gitCfg, env, log, onEvent });
+  if (leftover) return fail("already-in-progress", { prUrl: leftover.prUrl });
   const add = await worktreeAdmin(() => $`git -C ${repo} worktree add -q -b ${branch} ${worktree} ${baseSha}`.nothrow().quiet());
   if (add.exitCode !== 0) return fail("failed", { error: `could not create worktree:\n${add.stderr}` });
+  setUntrack(track({ repo, worktree, branch, base: baseSha }));
   try {
     await copyIntoWorktree(repo, worktree, patterns);
   } catch (e) {

@@ -4,7 +4,7 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { noSandbox, type Agent } from "../src/index.ts";
-import { issueBranch, runIssue } from "../src/issue.ts";
+import { cleanupInterrupted, issueBranch, runIssue } from "../src/issue.ts";
 import { output } from "../src/output.ts";
 import { createProgress, type BunkerEvent } from "../src/events.ts";
 
@@ -163,6 +163,7 @@ if [ "$1" = "api" ]; then
   echo "$*" >> "${root}/api.log"
   exit 0
 fi
+if [ "$1 $2" = "pr list" ] && [ -f "${root}/prlist.json" ]; then cat "${root}/prlist.json"; exit 0; fi
 exit 1
 `,
   );
@@ -748,5 +749,80 @@ describe("quiet output", () => {
     await runIssue({ cwd: repo, issue: 7, agent, sandbox: noSandbox(), verify: "echo VERIFYTEXT" });
     expect(sink.join("")).toContain("AGENTTEXT");
     expect(sink.join("")).toContain("VERIFYTEXT");
+  });
+});
+
+describe("runIssue() with a leftover branch", () => {
+  const BRANCH = "feature/7-add-feature";
+  const run = (repo: string) => runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() });
+  const tags = async (repo: string) => (await $`git -C ${repo} tag --list ${"bunker/stale/*"}`.text()).trim().split("\n").filter(Boolean);
+
+  test("stale empty branch and worktree are removed and the run proceeds", async () => {
+    const { repo } = await setup(issue());
+    await $`git -C ${repo} worktree add -q -b ${BRANCH} ${join(repo, ".worktrees", "7-add-feature")} main`;
+    const r = await run(repo);
+    expect(r.status).toBe("pr-opened");
+    expect(await tags(repo)).toEqual([]);
+  });
+
+  test("a stale branch with a commit is tagged, then the run starts fresh", async () => {
+    const { repo } = await setup(issue());
+    const wt = join(repo, ".worktrees", "7-add-feature");
+    await $`git -C ${repo} worktree add -q -b ${BRANCH} ${wt} main`;
+    await Bun.write(join(wt, "old.txt"), "old");
+    await $`git -C ${wt} add . && git -C ${wt} commit -q -m "feat: old work"`;
+    const old = (await $`git -C ${repo} rev-parse ${BRANCH}`.text()).trim();
+    const r = await run(repo);
+    expect(r.status).toBe("pr-opened");
+    const t = await tags(repo);
+    expect(t).toHaveLength(1);
+    expect(t[0]).toMatch(/^bunker\/stale\/7-/);
+    expect((await $`git -C ${repo} rev-parse ${`${t[0]}^{commit}`}`.text()).trim()).toBe(old);
+    expect(await Bun.file(join(r.worktree, "old.txt")).exists()).toBe(false);
+  });
+
+  test("uncommitted changes in a leftover worktree are kept under a tag", async () => {
+    const { repo } = await setup(issue());
+    const wt = join(repo, ".worktrees", "7-add-feature");
+    await $`git -C ${repo} worktree add -q -b ${BRANCH} ${wt} main`;
+    await Bun.write(join(wt, "wip.txt"), "wip");
+    const r = await run(repo);
+    expect(r.status).toBe("pr-opened");
+    const t = await tags(repo);
+    expect(t).toHaveLength(1);
+    expect(await $`git -C ${repo} show ${`${t[0]}:wip.txt`}`.text()).toBe("wip");
+  });
+
+  test("a remote branch with an open PR is already-in-progress", async () => {
+    const { repo, origin } = await setup(issue());
+    await $`git -C ${repo} push -q origin main:refs/heads/${BRANCH}`;
+    await $`git -C ${repo} branch ${BRANCH} main`;
+    await Bun.write(join(dirname(origin), "prlist.json"), JSON.stringify([{ url: "https://github.com/o/r/pull/55" }]));
+    const r = await run(repo);
+    expect(r.status).toBe("already-in-progress");
+    expect(r.prUrl).toBe("https://github.com/o/r/pull/55");
+    expect((await $`git -C ${repo} branch --list ${BRANCH}`.text()).trim()).toContain(BRANCH);
+  });
+
+  test("an interrupted run with no commits leaves nothing behind", async () => {
+    const { repo } = await setup(issue());
+    const agent: Agent = { command: () => ["sh", "-c", "sleep 2"] };
+    const p = runIssue({ cwd: repo, issue: 7, agent, sandbox: noSandbox() });
+    const wt = join(repo, ".worktrees", "7-add-feature");
+    for (let i = 0; i < 100 && !(await Bun.file(join(wt, ".git")).exists()); i++) await Bun.sleep(50);
+    cleanupInterrupted();
+    expect(await Bun.file(join(wt, ".git")).exists()).toBe(false);
+    expect((await $`git -C ${repo} branch --list ${BRANCH}`.text()).trim()).toBe("");
+    await p.catch(() => {});
+  });
+
+  test("other branches are never touched", async () => {
+    const { repo } = await setup(issue());
+    await $`git -C ${repo} branch feature/70-other main`;
+    await $`git -C ${repo} branch feature/7-different-slug main`;
+    await run(repo);
+    const list = await $`git -C ${repo} branch --list`.text();
+    expect(list).toContain("feature/70-other");
+    expect(list).toContain("feature/7-different-slug");
   });
 });
