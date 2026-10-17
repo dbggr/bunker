@@ -25,6 +25,17 @@ bunker --queue --merge              # everything labelled `bunker`
 - Read-only `--audit` that files improvement ideas
 - Starts each run with a safe `git pull --ff-only` of your checkout (clean, default branch only; `--no-pull` disables it), and `bunker self-update` rebuilds the binary from its own checkout
 
+## Scope
+
+Before v1.0 bunker will not build:
+
+- other agent providers (Claude only)
+- an interactive mode
+- cloud or reusable sandboxes
+- prompt templating
+- host hooks
+- npm publishing (the package stays `@dbggr/bunker` and private)
+
 ## Docs
 
 - [Getting started](docs/getting-started.md)
@@ -35,3 +46,5 @@ bunker --queue --merge              # everything labelled `bunker`
 - [Releasing](docs/release.md)
 
 Develop with `bun test` and `bun run typecheck`.
+
+Licensed under the [MIT License](LICENSE).

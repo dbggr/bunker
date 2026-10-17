@@ -9,7 +9,7 @@ import { redact } from "./redact.ts";
 import { parseConfig } from "./config.ts";
 import { copyIntoWorktree, copyPatterns } from "./copy.ts";
 import { emit } from "./events.ts";
-import { tailLines, testCounts } from "./output.ts";
+import { output, tailLines, testCounts } from "./output.ts";
 import { hyperlink } from "./events.ts";
 import { modelLabel } from "./models.ts";
 import { AgentFailure, type Pause, emitStage, review, runSetup, stepLimits, timeoutMessage, worktreeAdmin, type Timeouts, type Agent, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
@@ -106,21 +106,19 @@ const REVIEWER_CONVENTION =
   "Out-of-scope problems you find go in the verdict's \"issues\" (do not ask for them to be fixed). " +
   'If this issue cannot be done until something else is done, put that in "blocked_by".';
 
-/** Follow-ups from the agents' structured output; the old tag scan applies only to a text whose structured block is absent or invalid. */
+/** Follow-ups from the agents' structured `<report>` / `<verdict>` output. */
 function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: string; body: string; bug?: boolean; severity?: Severity }[]; blocker?: { title: string; body: string } } {
   const real = (f: { title: string }) => !isPlaceholder(f.title.trim());
   const seen = new Map<string, { body: string; bug: boolean; severity?: Severity }>();
   const blocked: { title: string; body: string }[] = [];
   for (const r of rounds) {
     const sources = [
-      { structured: r.report, text: r.output },
-      { structured: r.verdict, text: r.feedback },
+      { structured: r.report },
+      { structured: r.verdict },
     ];
-    for (const { structured, text } of sources) {
-      // A present-but-invalid <report> is never rescued by the regex scan: that would re-open quoted-example bugs.
-      const scan = !structured && !(text === r.output && r.reportError);
-      const issues = structured ? structured.issues : scan ? parseIssueBlocks(text) : [];
-      const blocks = structured ? structured.blocked_by : scan ? [parseBlockedBy(text)].filter((b) => b !== undefined) : [];
+    for (const { structured } of sources) {
+      const issues = structured ? structured.issues : [];
+      const blocks = structured ? structured.blocked_by : [];
       for (const i of issues) if (real(i) && !seen.has(i.title.trim())) seen.set(i.title.trim(), { body: i.body.trim(), bug: "bug" in i && i.bug === true, ...(((i as { severity?: Severity }).severity) ? { severity: (i as { severity?: Severity }).severity } : {}) });
       for (const b of blocks) if (real(b)) blocked.push({ title: b.title.trim(), body: b.body.trim() });
     }
@@ -128,35 +126,7 @@ function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: st
   return { issues: [...seen].map(([title, f]) => ({ title, body: f.body, ...(f.bug ? { bug: true } : {}), ...(f.severity ? { severity: f.severity } : {}) })), ...(blocked[0] ? { blocker: blocked[0] } : {}) };
 }
 
-/**
- * `text` with fenced code and inline code spans blanked out (same length, so offsets line up with the original):
- * blocks an agent merely quotes are not findings. Match on this, then read titles and bodies from the original.
- */
-function prose(text: string): string {
-  const blank = (s: string) => s.replace(/[^\n]/g, "\0");
-  return text
-    .replace(/^ *(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^ *\1[`~]*[ \t]*$|(?![\s\S]))/gm, blank)
-    .replace(/(?<!`)(`+)(?!`)[^\n]*?(?<!`)\1(?!`)/g, blank);
-}
-
-/** Capture groups of every match of `re` (which needs the `d` flag) in the prose of `text`, re-read from the original text. */
-function* proseMatches(text: string, re: RegExp): Generator<string[]> {
-  for (const m of prose(text).matchAll(re)) {
-    const [, ...groups] = (m as RegExpMatchArray & { indices: [number, number][] }).indices;
-    yield groups.map(([from, to]) => text.slice(from, to));
-  }
-}
-
 const isPlaceholder = (title: string) => !/[\p{L}\p{N}]/u.test(title) || title.toLowerCase() === "short title";
-
-/** The first real `<blocked-by title="...">body</blocked-by>` block in `text`, if any. */
-export function parseBlockedBy(text: string): { title: string; body: string } | undefined {
-  for (const m of proseMatches(text, /<blocked-by\s+title="([^"]*)"\s*>([\s\S]*?)<\/blocked-by>/dg)) {
-    const title = m[0]!.trim();
-    if (!isPlaceholder(title)) return { title, body: m[1]!.trim() };
-  }
-  return undefined;
-}
 
 const isObj = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === "object";
 
@@ -176,16 +146,6 @@ export function blockerRefs(issue: Pick<IssueInfo, "body" | "comments">): number
   const refs = new Set<number>();
   for (const t of texts) for (const m of t.matchAll(/\b(?:blocked\s+by|depends\s+on)\s+#(\d+)/gi)) refs.add(Number(m[1]));
   return [...refs];
-}
-
-/** Every `<issue title="...">body</issue>` block in `text`, deduped by title (first wins). */
-export function parseIssueBlocks(text: string): { title: string; body: string }[] {
-  const seen = new Map<string, string>();
-  for (const m of proseMatches(text, /<issue\s+title="([^"]*)"\s*>([\s\S]*?)<\/issue>/dg)) {
-    const title = m[0]!.trim();
-    if (!isPlaceholder(title) && !seen.has(title)) seen.set(title, m[1]!.trim());
-  }
-  return [...seen].map(([title, body]) => ({ title, body }));
 }
 
 /** `fix/<N>-<slug>` for a bug-labelled issue, else `feature/<N>-<slug>`. */
@@ -223,7 +183,7 @@ type Env = Record<string, string>;
 async function markBlocked(issue: number, blocker: { number: number; title: string }, cwd: string, env: Env, mention?: string): Promise<void> {
   await $`gh label create ${BLOCKED_LABEL} --description ${"waiting on another issue; bunker relabels it `bunker` once that is closed"} --color FBCA04`.cwd(cwd).env(env).nothrow().quiet();
   const edit = await $`gh issue edit ${issue} --remove-label bunker --add-label ${BLOCKED_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
-  if (edit.exitCode !== 0) console.warn(`bunker: could not relabel #${issue}: ${edit.stderr.toString().trim()}`);
+  if (edit.exitCode !== 0) output.warn(`bunker: could not relabel #${issue}: ${edit.stderr.toString().trim()}`);
   await $`gh issue comment ${issue} --body ${`${mention ? `${mention} ` : ""}Blocked by #${blocker.number}: ${blocker.title}`}`.cwd(cwd).env(env).nothrow().quiet();
 }
 
@@ -240,17 +200,17 @@ async function isDone(n: number, cwd: string, env: Env): Promise<boolean | undef
 }
 
 /** Open issues labelled `bunker-blocked` whose blockers are all closed go back to `bunker`. Best effort. */
-export async function resumeBlocked(cwd: string, env: Env): Promise<number[]> {
-  const list = await $`gh issue list --label ${BLOCKED_LABEL} --state open --limit 1000 --json number`.cwd(cwd).env(env).nothrow().quiet();
+export async function resumeBlocked(cwd: string, env: Env): Promise<Queued[]> {
+  const list = await $`gh issue list --label ${BLOCKED_LABEL} --state open --limit 1000 --json number,title,createdAt`.cwd(cwd).env(env).nothrow().quiet();
   if (list.exitCode !== 0) return [];
-  let numbers: number[];
+  let found: { number: number; title?: unknown; createdAt?: unknown }[];
   try {
-    numbers = (JSON.parse(list.stdout.toString()) as { number: number }[]).map((i) => i.number);
+    found = JSON.parse(list.stdout.toString());
   } catch {
     return [];
   }
-  const resumed: number[] = [];
-  for (const n of numbers) {
+  const resumed: Queued[] = [];
+  for (const { number: n, title, createdAt } of found) {
     const v = await $`gh issue view ${n} --json body,comments,state,labels`.cwd(cwd).env(env).nothrow().quiet();
     if (v.exitCode !== 0) continue;
     let info: IssueInfo;
@@ -267,7 +227,7 @@ export async function resumeBlocked(cwd: string, env: Env): Promise<number[]> {
     const edit = await $`gh issue edit ${n} --remove-label ${BLOCKED_LABEL} --add-label bunker`.cwd(cwd).env(env).nothrow().quiet();
     if (edit.exitCode !== 0) continue;
     await $`gh issue comment ${n} --body ${`Unblocked: ${refs.map((r) => `#${r}`).join(", ")} ${refs.length === 1 ? "is" : "are"} closed`}`.cwd(cwd).env(env).nothrow().quiet();
-    resumed.push(n);
+    resumed.push({ number: n, title: typeof title === "string" ? title : "", createdAt: typeof createdAt === "string" ? createdAt : "", labels: [{ name: "bunker" }] });
   }
   return resumed;
 }
@@ -393,10 +353,15 @@ export async function runIssue(opts: IssueOptions): Promise<IssueResult> {
  * under a `bunker/stale/<n>-<timestamp>` tag; an open PR on origin means the issue is already being handled.
  * Only ever touches `{feature|fix}/<n>-<slug>` for this issue.
  */
-async function reclaimLeftover(o: { repo: string; cwd: string; number: number; branch: string; worktree: string; baseSha: string; remote: string; gitCfg: string[]; env: Record<string, string>; log: (t: string, s?: string) => void; onEvent?: OnEvent }): Promise<{ prUrl?: string; remoteSha?: string }> {
-  const { repo, number, branch, worktree, baseSha } = o;
+type LeftoverOpts = { repo: string; cwd: string; number: number; branch: string; worktree: string; baseSha: string; remote: string; gitCfg: string[]; env: Record<string, string>; log: (t: string, s?: string) => void; onEvent?: OnEvent };
+
+/**
+ * Deal with origin's copy of this issue's branch: an open PR means the issue is already being handled; otherwise the
+ * remote tip is kept under a tag and its sha returned, so the push can replace it with a lease on exactly that sha.
+ */
+async function claimRemoteBranch(o: LeftoverOpts): Promise<{ prUrl?: string; remoteSha?: string }> {
+  const { repo, number, branch } = o;
   if (!new RegExp(`^(feature|fix)/${number}-[a-z0-9-]*$`).test(branch)) return {};
-  const git = (...args: string[]) => $`git -C ${repo} ${args}`.nothrow().quiet();
   const remoteSha = (await $`git ${o.gitCfg} -C ${repo} ls-remote --heads ${o.remote} ${`refs/heads/${branch}`}`.env(o.env).nothrow().quiet()).stdout.toString().trim().split(/\s+/)[0] || undefined;
   if (remoteSha) {
     const prs = await $`gh pr list --head ${branch} --state open --json url`.cwd(o.cwd).env(o.env).nothrow().quiet();
@@ -418,6 +383,15 @@ async function reclaimLeftover(o: { repo: string; cwd: string; number: number; b
     o.log("stale remote branch kept", tag);
     emit(o.onEvent, { type: "note", text: `#${number}: origin already has ${branch} without an open PR; kept it as tag ${tag} and will replace it` });
   }
+  return { remoteSha };
+}
+
+async function reclaimLeftover(o: LeftoverOpts): Promise<{ prUrl?: string; remoteSha?: string }> {
+  const { repo, number, branch, worktree, baseSha } = o;
+  if (!new RegExp(`^(feature|fix)/${number}-[a-z0-9-]*$`).test(branch)) return {};
+  const git = (...args: string[]) => $`git -C ${repo} ${args}`.nothrow().quiet();
+  const { prUrl, remoteSha } = await claimRemoteBranch(o);
+  if (prUrl) return { prUrl };
   const hasBranch = (await git("rev-parse", "--verify", "-q", `refs/heads/${branch}`)).exitCode === 0;
   const hasDir = existsSync(worktree);
   if (!hasBranch && !hasDir) return { remoteSha };
@@ -440,14 +414,14 @@ async function reclaimLeftover(o: { repo: string; cwd: string; number: number; b
     o.log("stale leftover kept", tag);
     emit(o.onEvent, { type: "note", text: `#${number}: kept an interrupted attempt's work as tag ${tag}` });
   }
-  await worktreeAdmin(() => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
+  await worktreeAdmin(repo, () => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
   if (existsSync(worktree)) await rm(worktree, { recursive: true, force: true });
-  await worktreeAdmin(() => $`git -C ${repo} worktree prune`.nothrow().quiet());
-  if (hasBranch) await worktreeAdmin(() => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
+  await worktreeAdmin(repo, () => $`git -C ${repo} worktree prune`.nothrow().quiet());
+  if (hasBranch) await worktreeAdmin(repo, () => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
   return { remoteSha };
 }
 
-const stamp = () => new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+export const stamp = () => new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 
 async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, mention, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
@@ -570,6 +544,9 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   }
   if (paused) {
     baseSha = paused.issueBaseSha;
+    const remoteState = await claimRemoteBranch({ repo, cwd, number, branch, worktree, baseSha, remote, gitCfg, env, log, onEvent });
+    if (remoteState.prUrl) return fail("already-in-progress", { prUrl: remoteState.prUrl });
+    remoteSha = remoteState.remoteSha;
     setUntrack(track({ repo, worktree, branch, base: baseSha }));
     log("resuming after the usage limit", `session ${paused.sessionId ?? "(none)"}, ${paused.role} round ${paused.round}`);
     emit(onEvent, { type: "note", text: `#${number}: resuming after the usage limit (session ${paused.sessionId ?? "none"})` });
@@ -578,7 +555,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   const leftover = await reclaimLeftover({ repo, cwd, number, branch, worktree, baseSha, remote, gitCfg, env, log, onEvent });
   remoteSha = leftover.remoteSha;
   if (leftover.prUrl) return fail("already-in-progress", { prUrl: leftover.prUrl });
-  const add = await worktreeAdmin(() => $`git -C ${repo} worktree add -q -b ${branch} ${worktree} ${baseSha}`.nothrow().quiet());
+  const add = await worktreeAdmin(repo, () => $`git -C ${repo} worktree add -q -b ${branch} ${worktree} ${baseSha}`.nothrow().quiet());
   if (add.exitCode !== 0) return fail("failed", { error: `could not create worktree:\n${add.stderr}` });
   setUntrack(track({ repo, worktree, branch, base: baseSha }));
   try {
@@ -653,8 +630,8 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     } else {
       const blockedBy = { number: Number(m[1]), title: blocker.title };
       await markBlocked(number, blockedBy, cwd, env, mention);
-      await worktreeAdmin(() => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
-      await worktreeAdmin(() => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
+      await worktreeAdmin(repo, () => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
+      await worktreeAdmin(repo, () => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
       emit(onEvent, { type: "note", text: `blocked by #${blockedBy.number}: ${blockedBy.title}` });
       return fail("blocked", { review: result, blockedBy });
     }
@@ -789,8 +766,8 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
       return fail("merge-unverified", { ...opened, error: `merged, but ${target} differs from ${branch} in:\n${differing.join("\n")}` });
     }
 
-    await worktreeAdmin(() => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
-    await worktreeAdmin(() => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
+    await worktreeAdmin(repo, () => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
+    await worktreeAdmin(repo, () => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
     return fail("merged", opened);
   };
   return merge && mergeTurn ? mergeTurn(publish) : publish();
@@ -800,7 +777,7 @@ async function listQueued(cwd: string, env: Env): Promise<Queued[]> {
   const list = await $`gh issue list --label bunker --state open --limit 1000 --json number,title,createdAt,labels`.cwd(cwd).env(env).nothrow().quiet();
   // A transient failure of one list must not abort the queue; the other list may still succeed.
   if (list.exitCode !== 0) {
-    console.warn(`bunker: gh issue list failed:\n${list.stderr}`);
+    output.warn(`bunker: gh issue list failed:\n${list.stderr}`);
     return [];
   }
   try {
@@ -808,7 +785,7 @@ async function listQueued(cwd: string, env: Env): Promise<Queued[]> {
     if (!Array.isArray(parsed)) throw new Error("not an array");
     return parsed.filter((i): i is Queued => i !== null && typeof i === "object" && typeof i.number === "number" && typeof i.title === "string" && typeof i.createdAt === "string").map((i) => ({ ...i, labels: Array.isArray(i.labels) ? i.labels.filter((l) => l !== null && typeof l === "object" && typeof l.name === "string") : [] }));
   } catch {
-    console.warn("bunker: gh issue list returned unparseable output");
+    output.warn("bunker: gh issue list returned unparseable output");
     return [];
   }
 }
@@ -863,6 +840,8 @@ export interface QueueOptions extends Omit<IssueOptions, "issue"> {
   parallel?: number;
   /** GitHub logins besides repo admins and maintainers whose `bunker` label may queue work. */
   allowLabelers?: string[];
+  /** Called with an issue whose labeler check refused it (lookup failed or not permitted), so a long-lived caller can stop re-checking it. */
+  onRefused?: (issue: number) => void;
 }
 
 export interface QueueEntry extends IssueResult {
@@ -877,25 +856,36 @@ export interface QueueEntry extends IssueResult {
  * stops after the first PR opens; with `merge` continues only after `merged`.
  * Stops starting issues at the first other outcome, or after `limit` issues.
  */
-export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shouldStop, skip, onResult, parallel = 1, relist, allowLabelers, ...opts }: QueueOptions): Promise<QueueEntry[]> {
+export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shouldStop, skip, onResult, parallel = 1, relist, allowLabelers, onRefused, ...opts }: QueueOptions): Promise<QueueEntry[]> {
   const cwd = opts.cwd ?? process.cwd();
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
   const listIssues = () => listQueued(cwd, env);
-  await resumeBlocked(cwd, env);
+  // `gh issue list` lags the label swap, so the issues just relabelled go straight into the queue.
+  const resumedNow = new Map<number, Queued>();
+  const addResumed = (qs: Queued[]) => qs.forEach((q) => resumedNow.set(q.number, q));
+  addResumed(await resumeBlocked(cwd, env));
   for (const p of PRIORITY_LABELS) await $`gh label create ${p.name} --description ${"bunker queue priority"} --color ${p.color}`.cwd(cwd).env(env).nothrow().quiet();
   // The list can lag with a partial result too, so always list twice and merge.
   const first = await listIssues();
   await Bun.sleep(listRetryMs);
   const merged = new Map([...first, ...(await listIssues())].map((q) => [q.number, q]));
+  for (const q of resumedNow.values()) if (!merged.has(q.number)) merged.set(q.number, q);
   let queue = orderQueue([...merged.values()]);
   const seen = new Set<number>();
   let announced = "";
+  let announcedOrder: number[] = [];
   const announce = (reason?: string) => {
     const rest = queue.filter((c) => !seen.has(c.number));
     const text = describeQueue(rest);
     if (!rest.length || text === announced) return;
     announced = text;
+    // Only a change in the relative order of issues listed both times counts; started and newly listed ones don't.
+    const now = rest.map((c) => c.number);
+    const kept = announcedOrder.filter((n) => now.includes(n));
+    const nowKept = now.filter((n) => kept.includes(n));
+    announcedOrder = now;
+    if (reason === "re-ordered" && kept.every((n, i) => n === nowKept[i])) reason = undefined;
     const order = reason ? `${text} (${reason})` : text;
     emit(opts.onEvent, { type: "note", text: order });
     orderNote = text;
@@ -906,8 +896,8 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
   const next = async () => {
     if (relist && seen.size) {
       const fresh = await listIssues();
-      if (fresh.length) {
-        queue = orderQueue(fresh);
+      if (fresh.length || resumedNow.size) {
+        queue = orderQueue([...fresh, ...[...resumedNow.values()].filter((r) => !fresh.some((f) => f.number === r.number))]);
         announce("re-ordered");
       }
     }
@@ -940,7 +930,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       let result = await attempt(1);
       let priorCostUsd = 0;
       if (result.stale) {
-        console.log(`bunker: #${q.number} ${result.status} after updating to the latest main; trying once more from the new base`);
+        output.warn(`bunker: #${q.number} ${result.status} after updating to the latest main; trying once more from the new base`);
         priorCostUsd = cost(result);
         result = await attempt(2);
       }
@@ -953,7 +943,12 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
         stop = true;
         return;
       }
-      if (result.status === "merged") await resumeBlocked(cwd, env);
+      if (result.status === "merged") {
+        const more = await resumeBlocked(cwd, env);
+        addResumed(more);
+        const known = new Set(queue.map((c) => c.number));
+        queue = orderQueue([...queue, ...more.filter((m) => !known.has(m.number))]);
+      }
       else if (result.status === "blocked") return;
       if (!keepGoing && (!opts.merge || result.status !== "merged")) stop = true;
     } catch (e) {
@@ -975,7 +970,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
     const view = await $`gh issue view ${q.number} --json state,labels,body,comments`.cwd(cwd).env(env).nothrow().quiet();
     if (view.exitCode !== 0) {
       // A transient API error on one candidate must not discard the results already collected.
-      console.warn(`bunker: skipping #${q.number}, gh issue view failed:\n${view.stderr}`);
+      output.warn(`bunker: skipping #${q.number}, gh issue view failed:\n${view.stderr}`);
       continue;
     }
     let live: Pick<IssueInfo, "state" | "labels" | "body" | "comments">;
@@ -983,7 +978,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       live = JSON.parse(view.stdout.toString());
       if (live === null || typeof live !== "object" || !isLiveShape(live)) throw new Error("unexpected shape");
     } catch {
-      console.warn(`bunker: skipping #${q.number}, gh issue view returned unparseable output`);
+      output.warn(`bunker: skipping #${q.number}, gh issue view returned unparseable output`);
       continue;
     }
     if (live.state !== "OPEN" || !live.labels.some((l) => l.name === "bunker")) continue;
@@ -995,10 +990,10 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       }
     }
     if (waiting !== undefined) {
-      console.log(`bunker: #${q.number} waiting on #${waiting}`);
+      output.warn(`bunker: #${q.number} waiting on #${waiting}`);
       continue;
     }
-    if (!(await enforceLabeler(q.number, { cwd, env, ...(allowLabelers ? { allow: allowLabelers } : {}) }))) continue;
+    if (!(await enforceLabeler(q.number, { cwd, env, ...(allowLabelers ? { allow: allowLabelers } : {}), onRefused: () => onRefused?.(q.number) }))) continue;
     counted++;
     const before = previous;
     let release!: () => void;

@@ -1,6 +1,5 @@
 import { $ } from "bun";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { readUserConfig } from "./user-config.ts";
 
 type Env = Record<string, string>;
 
@@ -17,7 +16,7 @@ export async function checkLabeler(issue: number, opts: { cwd: string; env: Env;
   const events = await $`gh api repos/{owner}/{repo}/issues/${issue}/events --paginate --jq ${'.[] | select(.event == "labeled" and .label.name == "bunker") | .actor.login'}`.cwd(cwd).env(env).nothrow().quiet();
   if (events.exitCode !== 0) return { ok: false, denied: false, reason: `could not read the label events of #${issue}: ${events.stderr.toString().trim()}` };
   const adder = events.stdout.toString().split("\n").map((l) => l.trim()).filter(Boolean).pop();
-  if (!adder) return { ok: false, denied: false, reason: `no \`bunker\` label event found on #${issue}` };
+  if (!adder) return { ok: false, denied: false, reason: `no \`bunker\` label event found on #${issue} (add the label first: --issue checks who labeled it)` };
   if (opts.allow?.some((a) => a.toLowerCase() === adder.toLowerCase())) return { ok: true, adder };
   const perm = await $`gh api repos/{owner}/{repo}/collaborators/${adder}/permission --jq .role_name`.cwd(cwd).env(env).nothrow().quiet();
   if (perm.exitCode !== 0) return { ok: false, adder, denied: false, reason: `could not look up @${adder}'s permission (the token needs to read it): ${perm.stderr.toString().trim()}` };
@@ -27,11 +26,12 @@ export async function checkLabeler(issue: number, opts: { cwd: string; env: Env;
 }
 
 /** Checks the labeler; when refused for lack of permission, removes the label and says why on the issue. True if the issue may be worked. */
-export async function enforceLabeler(issue: number, opts: { cwd: string; env: Env; allow?: string[]; log?: (text: string) => void }): Promise<boolean> {
+export async function enforceLabeler(issue: number, opts: { cwd: string; env: Env; allow?: string[]; log?: (text: string) => void; onRefused?: () => void }): Promise<boolean> {
   const log = opts.log ?? ((t: string) => console.warn(t));
   const r = await checkLabeler(issue, opts);
   if (r.ok) return true;
   log(`bunker: skipping #${issue}: ${r.reason}`);
+  opts.onRefused?.();
   if (r.denied) {
     const { cwd, env } = opts;
     const edit = await $`gh issue edit ${issue} --remove-label bunker`.cwd(cwd).env(env).nothrow().quiet();
@@ -43,9 +43,7 @@ export async function enforceLabeler(issue: number, opts: { cwd: string; env: En
 
 /** `allow-labelers = ["login", ...]` from ~/.config/bunker/config.toml (user-level only: a repo file could widen its own gate). */
 export async function configAllowedLabelers(env: Record<string, string | undefined> = process.env): Promise<string[]> {
-  const file = Bun.file(join(env.XDG_CONFIG_HOME || join(env.HOME ?? homedir(), ".config"), "bunker", "config.toml"));
-  if (!(await file.exists())) return [];
-  const parsed = Bun.TOML.parse(await file.text()) as { "allow-labelers"?: unknown };
+  const parsed = await readUserConfig(env);
   const v = parsed["allow-labelers"];
   if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) {
     if (v !== undefined) throw new Error("config.toml: allow-labelers must be a list of GitHub logins");

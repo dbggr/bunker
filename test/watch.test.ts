@@ -16,7 +16,7 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
-const APPROVE = "<review>APPROVE</review>";
+const APPROVE = "<verdict>{\"approved\":true,\"required_changes\":[]}</verdict>";
 
 interface FakeOpts {
   /** Issue titles whose implementer run fails. */
@@ -62,7 +62,7 @@ async function setup(issues: [number, string, string][]) {
     join(bin, "gh"),
     `#!/bin/sh
 echo "$*" >> "${root}/gh.log"
-if [ "$1" = "api" ]; then case "$*" in *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
+if [ "$1" = "api" ]; then case "$*" in *"/events"*) [ -f "${root}/events-fail" ] && { echo "api down" >&2; exit 1; }; echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
 if [ "$1 $2" = "issue list" ]; then
   printf '['; sep=''
   hide=0; case "$*" in *"--label bunker --state"*) [ -f "${root}/hide-2" ] && hide=$(cat "${root}/hide-2");; esac
@@ -74,6 +74,7 @@ if [ "$1 $2" = "issue view" ]; then cat "${root}/issue-$3.json"; exit 0; fi
 if [ "$1 $2" = "issue edit" ] && [ -f "${root}/edit-fails" ]; then echo "network down" >&2; exit 1; fi
 if [ "$1 $2" = "issue edit" ]; then rm -f "${root}/q/$3.json"; exit 0; fi
 if [ "$1 $2" = "issue comment" ]; then shift 3; echo "COMMENT: $*" >> "${root}/comments.log"; exit 0; fi
+if [ "$1 $2" = "pr list" ] && [ -f "${root}/prlist.json" ]; then cat "${root}/prlist.json"; exit 0; fi
 if [ "$1 $2" = "label create" ]; then exit 0; fi
 if [ "$1 $2" = "issue create" ]; then echo "https://github.com/o/r/issues/100"; exit 0; fi
 if [ "$1 $2" = "pr create" ]; then echo "https://github.com/o/r/pull/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"; exit 0; fi
@@ -281,6 +282,13 @@ describe("runWatch()", () => {
     expect(s.merged).toBe(1);
   });
 
+  test("when --for expires during a pass, that pass's summary is still logged", async () => {
+    const { repo } = await setup(three);
+    const lines: string[] = [];
+    await runWatch({ ...base, cwd: repo, agent: fakeAgent({ slow: 1 }), forMs: 300, log: (l) => lines.push(l) });
+    expect(lines.some((l) => /pass 1 · 1 merged · stopping · /.test(l))).toBe(true);
+  });
+
   test("a live lock refuses a second watcher; a stale lock is taken over", async () => {
     const { repo } = await setup([]);
     await Bun.write(join(repo, ".bunker", "watch.lock"), String(process.pid));
@@ -334,6 +342,16 @@ describe("runWatch() next pass", () => {
     expect(lines.find((l) => /pass 1 /.test(l))).toMatch(/next pass in 10 min/);
   });
 
+  test("an already-in-progress issue is not re-attempted on later passes", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    await $`git -C ${repo} push -q origin main:refs/heads/feature/1-first`;
+    await Bun.write(join(root, "prlist.json"), JSON.stringify([{ url: "https://github.com/o/r/pull/55" }]));
+    const ctl = new AbortController();
+    await runWatch({ ...base, cwd: repo, agent: fakeAgent(), signal: ctl.signal, log: (l) => { if (/pass 4 /.test(l)) ctl.abort(); } });
+    const calls = (await Bun.file(join(root, "gh.log")).text()).split("\n").filter((l) => l.startsWith("pr list"));
+    expect(calls).toHaveLength(1);
+  });
+
   test("a queue holding only blocked issues sleeps and does not spin", async () => {
     const { repo, root } = await setup(three.slice(0, 1));
     await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Blocked by #99", state: "OPEN", labels: [{ name: "bunker" }] }));
@@ -346,14 +364,17 @@ describe("runWatch() next pass", () => {
     expect(lines.find((l) => /pass 1 /.test(l))).toMatch(/next pass in 10 min/);
   });
 
-  test("two passes that do nothing sleep even if issues still look waiting", async () => {
-    // A held-open issue that is never started (skipped as already handled would not count; this one is simply unstartable).
+  test("an issue whose labeler lookup fails is checked once, then skipped for the run", async () => {
     const { repo, root } = await setup(three.slice(0, 1));
-    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Do it.", state: "OPEN", labels: [] })); // list lags: view says no longer labelled
+    await Bun.write(join(root, "events-fail"), "");
     const lines: string[] = [];
     const s = await runWatch({ ...long, cwd: repo, agent: fakeAgent(), forMs: 1500, log: (l) => lines.push(l) });
-    expect(s.passes).toBeLessThanOrEqual(2);
-    expect(lines.filter((l) => /next pass in/.test(l))).toHaveLength(1);
+    expect(s.merged).toBe(0);
+    expect(s.failed).toBe(0);
+    const calls = (await Bun.file(join(root, "gh.log")).text()).split("\n").filter((l) => /issues\/1\/events/.test(l));
+    expect(calls).toHaveLength(1);
+    expect(lines.filter((l) => /next pass now/.test(l))).toHaveLength(0); // countWaiting no longer counts it
+    expect(lines.find((l) => /pass 1 /.test(l))).toMatch(/next pass in 10 min/);
   });
 });
 
@@ -375,6 +396,25 @@ describe("bunker --watch (CLI)", () => {
     for (const a of [["--for", "5x"], ["--interval", "0"], ["--max-cost", "-1"], ["--max-cost-day", "0"], ["--max-cost-month", "abc"]]) {
       expect(run(repo, "--watch", "--no-sandbox", "--verify", "true", ...a).code).toBe(2);
     }
+  });
+
+  test("max-cost-day in the user config.toml caps the watch, and the log shows dollar amounts", async () => {
+    const { repo, root } = await setup([]);
+    const xdg = join(root, "xdg");
+    await Bun.write(join(xdg, "bunker", "config.toml"), "max-cost-day = 20\n");
+    await Bun.write(join(repo, ".bunker", "verify"), "true");
+    await Bun.write(join(repo, ".bunker", "watch-spend.json"), JSON.stringify([{ at: Date.now() - 1000, usd: 25 }]));
+    const p = Bun.spawn(["bun", join(import.meta.dir, "..", "src", "cli.ts"), "--watch", "--no-sandbox", "--interval", "0.01"], { cwd: repo, stdout: "pipe", stderr: "pipe", env: { ...process.env, XDG_CONFIG_HOME: xdg } });
+    const reader = p.stdout.getReader();
+    let seen = "";
+    while (!/cap reached/.test(seen)) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += new TextDecoder().decode(value);
+    }
+    p.kill("SIGINT");
+    await p.exited;
+    expect(seen).toContain("daily spend cap reached ($25.00 of $20 in 24 h)");
   });
 
   test("SIGINT finishes cleanly and exits 0", async () => {

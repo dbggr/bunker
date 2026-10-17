@@ -1,5 +1,5 @@
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
-import { changelogSection, prependSection } from "../scripts/changelog.ts";
+import { changelogSection, prependSection, previousTag } from "../scripts/changelog.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -19,5 +19,13 @@ describe("changelog", () => {
     const b = prependSection(a, changelogSection("1.1.0", "d", ["y (#2)"]), "1.1.0");
     expect(b.indexOf("## v1.1.0")).toBeLessThan(b.indexOf("## v1.0.0"));
     expect(prependSection(b, changelogSection("1.1.0", "d", ["z (#3)"]), "1.1.0")).toBe(b);
+  });
+
+  test("previous tag is the highest release below the version, even when its own tag exists", () => {
+    const tags = ["v1.0.0", "v1.2.0", "v1.10.0", "v2.0.0-rc1", "nightly"];
+    expect(previousTag(tags, "1.10.0")).toBe("v1.2.0");
+    expect(previousTag(tags, "1.3.0")).toBe("v1.2.0");
+    expect(previousTag(tags, "1.0.0")).toBeUndefined();
+    expect(previousTag([], "1.0.0")).toBeUndefined();
   });
 });

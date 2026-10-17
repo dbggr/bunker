@@ -1,6 +1,6 @@
 import { $ } from "bun";
 import { loadRepoConfig } from "./config.ts";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -103,7 +103,7 @@ export interface ExecResult {
 export interface Timeouts {
   /** An agent or reviewer with no stdout for this long is killed and the step fails as `idle-timeout`. Defaults to 10 minutes. */
   idleTimeoutMs?: number;
-  /** After the final stream `result` event, how long the process may linger before it is killed and counted as done. Defaults to 60 s. */
+  /** After the final stream `result` event or a closing signal, how long the process may linger before it is killed and counted as done. Defaults to 60 s. */
   completionTimeoutMs?: number;
   /** Setup and verify may be quiet: they get this overall limit instead. Defaults to 30 minutes. */
   stepTimeoutMs?: number;
@@ -116,12 +116,22 @@ export const DEFAULT_STEP_MS = 30 * 60_000;
 /** Thrown when an agent or setup/verify step is killed for being quiet or running too long. */
 export class IdleTimeout extends Error {}
 
-/** The limits for an agent step; it counts as finished once it prints a stream `result` event. A signal alone doesn't start the grace timer: an agent may merely mention one and go quiet. */
-export function agentLimits(t: Timeouts): ExecLimits {
+/**
+ * The limits for an agent step; it counts as finished once it prints a stream `result` event, or ends its output with a
+ * completion signal on its own line or a closing `</verdict>`. A signal merely mentioned mid-line doesn't count, and any
+ * later output cancels the grace timer.
+ */
+export function agentLimits(t: Timeouts, signals: string[] = []): ExecLimits {
   return {
     idleMs: t.idleTimeoutMs ?? DEFAULT_IDLE_MS,
     graceMs: t.completionTimeoutMs ?? DEFAULT_COMPLETION_MS,
-    done: (recent) => /"type"\s*:\s*"result"/.test(recent),
+    done: (recent) => {
+      if (/"type"\s*:\s*"result"/.test(recent)) return true;
+      const tail = recent.trimEnd();
+      if (tail.endsWith("</verdict>")) return true;
+      const last = tail.slice(tail.lastIndexOf("\n") + 1).trim();
+      return signals.includes(last);
+    },
   };
 }
 
@@ -348,7 +358,7 @@ const BASE_IMAGE = "bunker-claude";
 
 /** Builds the base image from the Dockerfile embedded in the bundle (it has no COPY, so stdin needs no context). */
 export async function buildBaseImage(tag = BASE_IMAGE, dockerBin = "docker") {
-  console.error(`bunker: building ${tag}`);
+  output.warn(`bunker: building ${tag}`);
   const proc = Bun.spawn([dockerBin, "build", "-q", "-t", tag, "-"], {
     stdin: new TextEncoder().encode(baseDockerfile),
     stdout: "ignore",
@@ -359,7 +369,7 @@ export async function buildBaseImage(tag = BASE_IMAGE, dockerBin = "docker") {
 }
 
 async function dockerBuild(bin: string, tag: string, context: string, dockerfile = join(context, "Dockerfile")) {
-  console.error(`bunker: building ${tag}`);
+  output.warn(`bunker: building ${tag}`);
   const code = await Bun.spawn([bin, "build", "-q", "-t", tag, "-f", dockerfile, context], {
     stdio: ["ignore", "ignore", "inherit"],
   }).exited;
@@ -496,7 +506,8 @@ async function repoInfo(cwd: string) {
 
 /**
  * Runs the setup step in `worktree`, inside `sandbox`: `setup` if given, else the repo's
- * `.bunker/setup` script if present. Returns undefined on success (or no setup), else the failure text.
+ * `.bunker/setup` script if present. Returns undefined when there is no setup, else the command result.
+ * Rejects with ConfigError if `.bunker/config.toml` is invalid.
  */
 export async function runSetup(
   sandbox: Sandbox,
@@ -504,7 +515,7 @@ export async function runSetup(
   setup?: string,
   timeouts: Timeouts = {},
 ): Promise<{ cmd: string; code: number; stdout: string; timedOut?: "idle" | "step" } | undefined> {
-  const cmd = setup ?? (await loadRepoConfig(ctx.worktree).then((c) => c.config.setup ?? c.legacy.setup, () => undefined));
+  const cmd = setup ?? (await loadRepoConfig(ctx.worktree).then((c) => c.config.setup ?? c.legacy.setup));
   if (!cmd) return undefined;
   const out = await sandbox.exec(["sh", "-c", `(${cmd}) 2>&1`], { ...ctx, limits: stepLimits(timeouts) });
   return { cmd, ...out };
@@ -512,21 +523,88 @@ export async function runSetup(
 
 let worktreeAdminTail: Promise<unknown> = Promise.resolve();
 
+/** Path of the lock file that serializes worktree admin commands across bunker processes on `repo`. */
+export async function worktreeAdminLockPath(repo: string): Promise<string> {
+  const common = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
+  return join(common, "bunker-worktree-admin.lock");
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function acquireWorktreeLock(lock: string): Promise<void> {
+  for (;;) {
+    try {
+      writeFileSync(lock, String(process.pid), { flag: "wx" });
+      return;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+    const pid = Number.parseInt(await Bun.file(lock).text().catch(() => ""), 10);
+    // An unreadable or half-written lock is left alone; only a dead owner's lock is taken over.
+    if (Number.isInteger(pid) && pid !== process.pid && !pidAlive(pid)) rmSync(lock, { force: true });
+    else await Bun.sleep(50);
+  }
+}
+
 /**
- * Runs `fn` (git worktree add/remove, branch -D) after this process's earlier such commands. They read every worktree's
- * admin dir under .git/worktrees, so one running beside a `worktree add` can read it half-written and fail
- * ("failed to read .../commondir"), as parallel queue slots did.
+ * Runs `fn` (git worktree add/remove, branch -D) after earlier such commands on `repo`, in this process and in any other
+ * bunker process (a lock file under the git common dir). They read every worktree's admin dir under .git/worktrees, so
+ * one running beside a `worktree add` can read it half-written and fail ("failed to read .../commondir").
  */
-export function worktreeAdmin<T>(fn: () => Promise<T>): Promise<T> {
-  const run = worktreeAdminTail.then(fn);
+export function worktreeAdmin<T>(repo: string, fn: () => Promise<T>): Promise<T> {
+  const run = worktreeAdminTail.then(async () => {
+    const lock = await worktreeAdminLockPath(repo);
+    await acquireWorktreeLock(lock);
+    try {
+      return await fn();
+    } finally {
+      rmSync(lock, { force: true });
+    }
+  });
   worktreeAdminTail = run.catch(() => {});
   return run;
+}
+
+/** This process's `/tmp/bunker-*` worktrees that are still live, by path. */
+const tmpWorktrees = new Map<string, { repo: string; base: string; branch: string }>();
+let tmpHooked = false;
+
+/** Remove each live /tmp worktree and its branch if it has no commits and no changes. Synchronous: runs in exit and signal handlers. */
+function cleanupTmpWorktrees(): void {
+  for (const [path, w] of tmpWorktrees) {
+    const commits = Bun.spawnSync(["git", "-C", w.repo, "rev-list", "--count", `${w.base}..${w.branch}`]);
+    if (commits.exitCode !== 0 || commits.stdout.toString().trim() !== "0") continue;
+    if (existsSync(path)) {
+      const dirty = Bun.spawnSync(["git", "-C", path, "status", "--porcelain"]);
+      if (dirty.exitCode !== 0 || dirty.stdout.toString().trim()) continue;
+      Bun.spawnSync(["git", "-C", w.repo, "worktree", "remove", "--force", path]);
+    }
+    Bun.spawnSync(["git", "-C", w.repo, "worktree", "prune"]);
+    Bun.spawnSync(["git", "-C", w.repo, "branch", "-D", w.branch]);
+    tmpWorktrees.delete(path);
+  }
 }
 
 async function addWorktree(cwd: string, base: string): Promise<Worktree> {
   const id = crypto.randomUUID().slice(0, 8);
   const wt = { branch: `bunker/${id}`, path: join(tmpdir(), `bunker-${id}`) };
-  await worktreeAdmin(() => $`git -C ${cwd} worktree add -q -b ${wt.branch} ${wt.path} ${base}`);
+  await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree add -q -b ${wt.branch} ${wt.path} ${base}`);
+  tmpWorktrees.set(wt.path, { repo: cwd, base, branch: wt.branch });
+  if (!tmpHooked) {
+    tmpHooked = true;
+    process.on("exit", cleanupTmpWorktrees);
+    for (const sig of ["SIGINT", "SIGTERM"] as const) {
+      // The watch CLI installs its own handler (which exits through the "exit" hook above).
+      if (process.listenerCount(sig) === 0) process.on(sig, () => process.exit(130));
+    }
+  }
   return wt;
 }
 
@@ -535,8 +613,8 @@ async function copyInto(cwd: string, wt: Worktree, patterns: string[]): Promise<
   try {
     return await copyIntoWorktree(cwd, wt.path, patterns);
   } catch (e) {
-    await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.nothrow().quiet());
-    await worktreeAdmin(() => $`git -C ${cwd} branch -D ${wt.branch}`.nothrow().quiet());
+    await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree remove --force ${wt.path}`.nothrow().quiet());
+    await worktreeAdmin(cwd, () => $`git -C ${cwd} branch -D ${wt.branch}`.nothrow().quiet());
     throw e;
   }
 }
@@ -552,7 +630,7 @@ export interface EventTarget {
 }
 
 /** The exec `onLine` hook for `agent`: parsed events to onEvent, raw lines to onRaw. Undefined if nobody listens or the agent doesn't stream. */
-function lineHook(agent: Agent, t: EventTarget): ((line: string) => void) | undefined {
+export function lineHook(agent: Agent, t: EventTarget): ((line: string) => void) | undefined {
   if (!agent.parseLine || (!t.onEvent && !t.onRaw)) return undefined;
   const label = { ...(t.task !== undefined ? { task: t.task } : {}), ...(t.round !== undefined ? { round: t.round } : {}), ...(t.role ? { role: t.role } : {}) };
   return (line) => {
@@ -589,7 +667,7 @@ export interface Pause {
 }
 
 /** Thrown inside a step when the agent hit the usage limit. */
-class UsageLimit extends Error {
+export class UsageLimit extends Error {
   constructor(readonly resetAt: number | undefined, readonly session: Session | undefined) {
     super("claude usage limit reached");
   }
@@ -653,10 +731,12 @@ async function agentStep(o: {
   target: Pick<EventTarget, "onEvent" | "task" | "round" | "role">;
   dest: string;
   timeouts?: Timeouts;
+  /** Completion signals; one alone on the last output line marks the agent as finished. */
+  signals?: string[];
 }): Promise<{ code: number; stdout: string; session?: Session }> {
   const timeouts = o.timeouts ?? {};
   const label = { ...(o.target.task !== undefined ? { task: o.target.task } : {}), ...(o.target.round !== undefined ? { round: o.target.round } : {}), ...(o.target.role ? { role: o.target.role } : {}) };
-  const ctx: ExecContext = { ...o.ctx, limits: agentLimits(timeouts) };
+  const ctx: ExecContext = { ...o.ctx, limits: agentLimits(timeouts, o.signals) };
   /** Runs the command; a killed one throws IdleTimeout, a hung-but-finished one is noted and counts as done. */
   const exec = async (cmd: string[]) => {
     const r = await o.sandbox.exec(cmd, ctx);
@@ -730,7 +810,7 @@ async function runAgent(
       const step = await agentStep({
         agent, sandbox, mode: "write", prompt, prev: resume ? prev : undefined, target,
         ctx: { worktree: wt.path, gitCommonDir, ...(prefix ? { prefix } : {}), ...(onLine ? { onLine } : {}) },
-        dest: join(store.dir, `implementer-${i + 1}.jsonl`), timeouts,
+        dest: join(store.dir, `implementer-${i + 1}.jsonl`), timeouts, signals,
       });
       const { code, stdout } = step;
       prev = step.session;
@@ -749,7 +829,7 @@ async function runAgent(
     return { commits, iterations, ...totalUsage(iterations) };
   } finally {
     await store.done();
-    await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
+    await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
   }
 }
 
@@ -823,10 +903,19 @@ export async function runAll({ tasks, cwd = process.cwd(), copyToWorktree, ...op
   const patterns = await copyPatterns(cwd, copyToWorktree);
   const worktrees: Worktree[] = [];
   const copies: string[][] = [];
-  for (const _ of tasks) {
-    const wt = await addWorktree(cwd, base);
-    worktrees.push(wt);
-    copies.push(await copyInto(cwd, wt, patterns));
+  try {
+    for (const _ of tasks) {
+      const wt = await addWorktree(cwd, base);
+      worktrees.push(wt);
+      copies.push(await copyInto(cwd, wt, patterns));
+    }
+  } catch (e) {
+    // A failing copyInto already removed its own worktree; drop the earlier, fully set up ones.
+    for (const wt of worktrees.slice(0, copies.length)) {
+      await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree remove --force ${wt.path}`.nothrow().quiet());
+      await worktreeAdmin(cwd, () => $`git -C ${cwd} branch -D ${wt.branch}`.nothrow().quiet());
+    }
+    throw e;
   }
 
   const outcomes = await Promise.allSettled(
@@ -863,8 +952,6 @@ export interface ReviewOptions extends Timeouts {
   cwd?: string;
   /** Max implement → review rounds. Defaults to 2. */
   maxRounds?: number;
-  /** Legacy fallback, used only when the reviewer printed no `<verdict>` at all: stdout containing this approves. Defaults to "<review>APPROVE</review>". */
-  approveSignal?: string;
   /** Times to re-ask the reviewer (resuming its session) for a missing or invalid `<verdict>`. Defaults to 2. */
   maxRetries?: number;
   /** Extra instruction appended to every reviewer prompt. */
@@ -893,7 +980,7 @@ export interface ReviewRound {
   approved: boolean;
   /** The reviewer's stdout. */
   feedback: string;
-  /** The reviewer's structured verdict, absent when only the legacy approve signal was used. */
+  /** The reviewer's structured verdict. */
   verdict?: Verdict;
   /** The implementer's structured `<report>`, if it printed a valid one. */
   report?: Report;
@@ -917,22 +1004,19 @@ export interface ReviewResult {
   error?: string;
 }
 
-const DEFAULT_APPROVE = "<review>APPROVE</review>";
-
 const VERDICT_FORMAT =
   'end your answer with <verdict>{"approved": true|false, "required_changes": ["…"], "issues": [{"title": "…", "body": "…", "severity": "high|medium|low"}], "blocked_by": [{"title": "…", "body": "…"}]}</verdict>: ' +
-  SEVERITY_HELP + " Valid JSON,`approved` true only if the change is acceptable, `required_changes` what must change otherwise. " +
+  SEVERITY_HELP + " Valid JSON, `approved` true only if the change is acceptable, `required_changes` what must change otherwise. " +
   "Only the last <verdict> in your answer counts.";
 
 class BadOutput extends Error {}
 
-function reviewerPrompt(task: string, diff: string, extra?: string, approveSignal = DEFAULT_APPROVE): string {
+function reviewerPrompt(task: string, diff: string, extra?: string): string {
   return (
     `You are reviewing a change made for this task:\n\n${task}\n\n` +
     `Here is the full diff of the change:\n\n${diff}\n\n` +
     "Do not modify any files and do not commit anything. " +
     `Review it, then ${VERDICT_FORMAT}` +
-    (approveSignal !== DEFAULT_APPROVE ? ` If you approve, you may instead print ${approveSignal} on its own.` : "") +
     (extra ? `\n\n${extra}` : "")
   );
 }
@@ -951,7 +1035,6 @@ export async function review({
   reviewer = agent,
   sandbox,
   maxRounds = 2,
-  approveSignal = DEFAULT_APPROVE,
   maxRetries = 2,
   reviewerInstruction,
   setup,
@@ -968,7 +1051,7 @@ export async function review({
   if (resumeFrom) {
     wt = { branch: resumeFrom.branch, path: resumeFrom.worktree };
     // A cleaned-up temp dir loses uncommitted work, but the branch's commits are still there.
-    if (!existsSync(wt.path)) await worktreeAdmin(() => $`git -C ${cwd} worktree add -q ${wt.path} ${wt.branch}`);
+    if (!existsSync(wt.path)) await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree add -q ${wt.path} ${wt.branch}`);
   } else {
     wt = await addWorktree(cwd, base);
   }
@@ -1038,7 +1121,7 @@ export async function review({
       emitStage(revTarget, "review", undefined, modelLabel(reviewer));
       const revHook = lineHook(reviewer, revTarget);
       // Reviewers never resume: each review is independent.
-      const revPrompt = reviewerPrompt(prompt, diff, reviewerInstruction, approveSignal);
+      const revPrompt = reviewerPrompt(prompt, diff, reviewerInstruction);
       const revResumed = resuming?.role === "reviewer" ? savedSession : undefined;
       resuming = undefined;
       let rev = await agentStep({
@@ -1050,9 +1133,7 @@ export async function review({
       let revOut = interpret(reviewer, rev.stdout);
       const attempts: (Usage | undefined)[] = [];
       let parsed = extractOutput(revOut.text, verdictOutput);
-      // A reviewer that never heard of <verdict> may still say the old approve signal; that stays a fallback.
-      const legacy = (text: string, p: typeof parsed) => !p.ok && !p.present && text.includes(approveSignal);
-      for (let k = 1; rev.code === 0 && !parsed.ok && !legacy(revOut.text, parsed) && k <= maxRetries; k++) {
+      for (let k = 1; rev.code === 0 && !parsed.ok && k <= maxRetries; k++) {
         attempts.push(revOut.usage);
         const ask = `Your answer had no usable verdict (${parsed.error}). Reply again, ${VERDICT_FORMAT}`;
         rev = await agentStep({
@@ -1069,10 +1150,10 @@ export async function review({
       attempts.push(revOut.usage);
       usages.push(...attempts);
       if (rev.code !== 0) throw new Error(`reviewer exited with ${rev.code}; work kept on ${wt.branch}`);
-      if (!parsed.ok && !legacy(revOut.text, parsed)) throw new BadOutput(`reviewer gave bad output after ${maxRetries} retries: ${parsed.error}; work kept on ${wt.branch}`);
+      if (!parsed.ok) throw new BadOutput(`reviewer gave bad output after ${maxRetries} retries: ${parsed.error}; work kept on ${wt.branch}`);
 
       const verdict = parsed.ok ? parsed.value : undefined;
-      const approved = verdict ? verdict.approved : true;
+      const approved = verdict?.approved === true;
       const reported = extractOutput(implOut.text, reportOutput);
       const reportError = reported.ok || !reported.present ? undefined : reported.error;
       if (reportError) emit(onEvent, { type: "note", round: i + 1, role: "implementer", text: `ignoring the implementer's <report>: ${reportError}` });
@@ -1103,7 +1184,8 @@ export async function review({
   } finally {
     await store.done();
     // A paused run keeps its worktree: whatever the agent had not committed yet is the work.
-    if (!pause) await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
+    if (pause) tmpWorktrees.delete(wt.path); // kept for the resume
+    else await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
   }
   if (status === "approved") {
     error = await mergeBack(cwd, wt.branch, commits);

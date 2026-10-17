@@ -1,6 +1,23 @@
 import { $ } from "bun";
 import { join } from "node:path";
-import { latestTag } from "../src/self-update.ts";
+
+const SEMVER = /^v(\d+)\.(\d+)\.(\d+)$/;
+const parse = (t: string) => SEMVER.exec(t)?.slice(1).map(Number);
+const cmp = (a: number[], b: number[]) => a[0]! - b[0]! || a[1]! - b[1]! || a[2]! - b[2]!;
+
+/** The highest `vX.Y.Z` tag strictly below `version`, so re-running after tagging still diffs against the prior release. */
+export function previousTag(tags: string[], version: string): string | undefined {
+  const cur = parse(`v${version}`);
+  if (!cur) return undefined;
+  return tags
+    .map((t) => t.trim())
+    .flatMap((t) => {
+      const n = parse(t);
+      return n && cmp(n, cur) < 0 ? [{ t, n }] : [];
+    })
+    .sort((a, b) => cmp(a.n, b.n))
+    .at(-1)?.t;
+}
 
 /** One `## vX.Y.Z` section listing the merged PR titles (commit subjects ending in `(#N)`). */
 export function changelogSection(version: string, date: string, subjects: string[]): string {
@@ -20,8 +37,9 @@ if (import.meta.main) {
   const root = join(import.meta.dir, "..");
   const arg = process.argv[2]?.replace(/^v/, "");
   const version = arg || (await Bun.file(join(root, "package.json")).json()).version;
-  const prev = await latestTag(root);
-  const range = prev && prev !== `v${version}` ? `${prev}..HEAD` : "HEAD";
+  const tags = (await $`git -C ${root} tag --list ${"v*"}`.nothrow().quiet().text()).split("\n");
+  const prev = previousTag(tags, version);
+  const range = prev ? `${prev}..HEAD` : "HEAD";
   const log = await $`git -C ${root} log --first-parent --format=%s ${range}`.text();
   const section = changelogSection(version, new Date().toISOString().slice(0, 10), log.split("\n").filter(Boolean));
   const file = Bun.file(join(root, "CHANGELOG.md"));

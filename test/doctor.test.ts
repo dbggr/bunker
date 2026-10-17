@@ -47,6 +47,12 @@ describe("doctor", () => {
     expect(out).toContain("✗");
     expect(out).toContain("claude setup-token");
     expect(out).toContain("gh label create discovered");
+    for (const id of ["label-severity:high", "label-severity:medium"]) {
+      const c = r.checks.find((c) => c.id === id);
+      expect(c?.ok).toBe(false);
+      expect(c?.required).toBe(false);
+      expect(c?.fix).toContain(`gh label create ${id.slice(6)}`);
+    }
   });
 
   test("names the token permission gaps", async () => {

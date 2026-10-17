@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { afterEach, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
 import { mkdir, mkdtemp, rm, symlink, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -59,6 +59,25 @@ describe("copyToWorktree", () => {
     const agent = sh("cat .env > $$.seen; git add -A && git commit -qm x");
     const res = await runAll({ cwd: repo, tasks: [{ prompt: "a" }, { prompt: "b" }], agent, sandbox: noSandbox(), copyToWorktree: [".env"] });
     expect(res.map((r) => r.status)).toEqual(["merged", "merged"]);
+  });
+
+  test("runAll removes earlier worktrees and branches when a later copy fails", async () => {
+    const repo = await makeRepo();
+    const before = (await $`git -C ${repo} worktree list --porcelain`.text()).trim();
+    let calls = 0;
+    // A missing pattern warns once per copy; make the second copy throw.
+    const warn = spyOn(console, "warn").mockImplementation(() => {
+      if (++calls === 2) throw new Error("copy boom");
+    });
+    try {
+      await expect(
+        runAll({ cwd: repo, tasks: [{ prompt: "a" }, { prompt: "b" }, { prompt: "c" }], agent: sh("true"), sandbox: noSandbox(), copyToWorktree: ["missing.txt"] }),
+      ).rejects.toThrow("copy boom");
+    } finally {
+      warn.mockRestore();
+    }
+    expect((await $`git -C ${repo} worktree list --porcelain`.text()).trim()).toBe(before);
+    expect((await $`git -C ${repo} branch --list ${"bunker/*"}`.text()).trim()).toBe("");
   });
 
   test("setup sees the copied file (review)", async () => {

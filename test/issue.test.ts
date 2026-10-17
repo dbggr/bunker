@@ -63,7 +63,7 @@ describe("issueBranch()", () => {
   });
 });
 
-const APPROVE = "<review>APPROVE</review>";
+const APPROVE = "<verdict>{\"approved\":true,\"required_changes\":[]}</verdict>";
 
 // Implementer commits one file; reviewer prints `verdict`. Records the prompts.
 function fakeAgent(verdict: string, prompts: string[] = []): Agent {
@@ -179,6 +179,28 @@ async function originBranches(origin: string): Promise<string[]> {
 }
 
 describe("runIssue()", () => {
+  test("copied files are excluded in the worktree only, not the shared info/exclude", async () => {
+    const { repo } = await setup(issue());
+    await Bun.write(join(repo, ".env"), "TOKEN=abc\n");
+    const out = dirname(repo);
+    const agent: Agent = {
+      command(_p, mode = "write") {
+        if (mode === "write") return ["sh", "-c", `git status --porcelain > ${out}/status.out; cat .env > ${out}/env.out; echo hi > feature.txt && git add feature.txt && git commit -qm "feat: impl"`];
+        return ["sh", "-c", `echo '${APPROVE}'`];
+      },
+    };
+    const r = await runIssue({ cwd: repo, issue: 7, agent, sandbox: noSandbox(), verify: "true", copyToWorktree: [".env"] });
+    expect(r.status).toBe("pr-opened");
+    const shared = await Bun.file(join(repo, ".git", "info", "exclude")).text().catch(() => "");
+    expect(shared).not.toContain(".env");
+    expect(await Bun.file(join(out, "env.out")).text()).toBe("TOKEN=abc\n");
+    expect(await Bun.file(join(out, "status.out")).text()).not.toContain(".env");
+    const other = join(repo, ".worktrees", "other");
+    await $`git -C ${repo} worktree add -q -b other ${other}`;
+    await Bun.write(join(other, ".env"), "x");
+    expect(await $`git -C ${other} status --porcelain`.text()).toContain(".env");
+  });
+
   test("approved + verify passes → pushed, PR opened", async () => {
     const { repo, origin, prLog } = await setup(issue());
     const prompts: string[] = [];
@@ -414,6 +436,22 @@ describe("runIssue()", () => {
     expect(r.error).toContain("verify timed out");
     expect(r.verifyOutput).toContain("STARTED");
     expect(Date.now() - t0).toBeLessThan(20_000);
+  });
+
+  test("a sandboxed verify that hangs → idle-timeout with a reason, and a failed stage event", async () => {
+    const { repo } = await setup(issue());
+    const inner = noSandbox();
+    const sandbox = {
+      exec: async (cmd: string[], ctx: Parameters<typeof inner.exec>[1]) =>
+        cmd.join(" ").includes("HANGME") ? { code: 137, stdout: "STARTED\n", timedOut: "idle" as const } : inner.exec(cmd, ctx),
+    };
+    const events: BunkerEvent[] = [];
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox, verify: "echo HANGME", idleTimeoutMs: 1234, onEvent: (e: BunkerEvent) => events.push(e) });
+    expect(r.status).toBe("idle-timeout");
+    expect(r.error).toContain("verify produced no output");
+    expect(r.error).toContain("idle timeout");
+    expect(r.verifyOutput).toContain("STARTED");
+    expect(events.some((e) => e.type === "stage" && e.name === "failed" && e.text === "idle-timeout")).toBe(true);
   });
 
   test("setup runs in the sandbox before the agent; agent sees its output", async () => {
@@ -861,6 +899,21 @@ describe("runIssue() with a leftover branch", () => {
     expect(await Bun.file(join(wt, ".git")).exists()).toBe(false);
     expect((await $`git -C ${repo} branch --list ${BRANCH}`.text()).trim()).toBe("");
     await p.catch(() => {});
+  });
+
+  test.each(["SIGINT", "SIGTERM"] as const)("%s exits with 130 so the exit hook can clean up", async (sig) => {
+    const { repo } = await setup(issue());
+    await run(repo); // installs the hooks on first use
+    expect(process.listenerCount(sig)).toBeGreaterThan(0);
+    const real = process.exit;
+    const codes: unknown[] = [];
+    process.exit = ((c?: number) => void codes.push(c)) as typeof process.exit;
+    try {
+      process.emit(sig, sig);
+    } finally {
+      process.exit = real;
+    }
+    expect(codes).toEqual([130]);
   });
 
   test("other branches are never touched", async () => {

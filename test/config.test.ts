@@ -29,9 +29,6 @@ audit_every = 30
 [merge]
 ci_timeout = 45
 
-[queue]
-allow_labelers = ["alice", "bob"]
-
 [notify]
 enabled = false
 github_user = "carol"
@@ -48,13 +45,12 @@ describe("parseConfig", () => {
       models: { implementer: "m-impl", reviewer: "m-rev", auditor: "m-aud", default: "m-def" },
       watch: { interval: 5, parallel: 3, max_cost_day: 10, max_cost_month: 100.5, audit_every: 30 },
       merge: { ci_timeout: 45 },
-      queue: { allow_labelers: ["alice", "bob"] },
       notify: { enabled: false, github_user: "carol" },
     });
   });
 
   test("empty file is an empty config", () => {
-    expect(parseConfig("").config).toEqual({ models: {}, watch: {}, merge: {}, queue: {}, notify: {} });
+    expect(parseConfig("").config).toEqual({ models: {}, watch: {}, merge: {}, notify: {} });
   });
 
   test("unknown keys warn, naming the key", () => {
@@ -75,7 +71,6 @@ describe("parseConfig", () => {
     ["[watch]\nparallel = 1.5", "watch.parallel", "positive integer"],
     ["[watch]\nmax_cost_day = -1", "watch.max_cost_day", "positive number"],
     ["[merge]\nci_timeout = 'a'", "merge.ci_timeout", "positive number"],
-    ["[queue]\nallow_labelers = 'a'", "queue.allow_labelers", "array of strings"],
     ["watch = 1", "watch", "table"],
   ])("bad type %p throws naming key and type", (text, key, type) => {
     let err: unknown;
@@ -87,6 +82,13 @@ describe("parseConfig", () => {
     expect(err).toBeInstanceOf(ConfigError);
     expect((err as Error).message).toContain(key);
     expect((err as Error).message).toContain(type);
+  });
+
+  test("queue.allow_labelers in a repo file is ignored with a warning pointing at the user-level file", () => {
+    const { config, warnings } = parseConfig('[queue]\nallow_labelers = ["mallory"]\n');
+    expect(JSON.stringify(config)).not.toContain("mallory");
+    expect(warnings.join("\n")).toContain("queue.allow_labelers");
+    expect(warnings.join("\n")).toContain("~/.config/bunker/config.toml");
   });
 
   test("invalid TOML is a ConfigError", () => {

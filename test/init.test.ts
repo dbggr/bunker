@@ -49,6 +49,15 @@ describe("detectToolchain", () => {
 });
 
 describe("init --yes", () => {
+  test("redacts secrets in gh label create stderr", async () => {
+    const w = await bunRepo({ files: { "label-create-err.txt": "denied for token github_pat_leakyleaky123", "labels.json": JSON.stringify([{ name: "bunker" }]) } });
+    const s = scripted();
+    await runInit({ cwd: w.repo, env: w.env, yes: true, io: s.io });
+    expect(s.text()).toContain("could not create");
+    expect(s.text()).not.toContain("github_pat_leakyleaky123");
+    expect(s.text()).toContain("[REDACTED]");
+  });
+
   test("bun repo: writes setup/verify defaults, creates missing labels, changes no repo settings", async () => {
     const w = await bunRepo({ files: { "repo.json": JSON.stringify({ default_branch: "main", allow_auto_merge: false }), "labels.json": JSON.stringify([{ name: "bunker" }]) } });
     const s = scripted();
@@ -59,7 +68,7 @@ describe("init --yes", () => {
     expect(await exists(join(w.repo, ".bunker/verify"))).toBe(false);
     expect(await Bun.file(join(w.repo, ".bunker/Dockerfile")).text()).toContain("FROM bunker-claude");
     const log = await w.log();
-    for (const l of ["discovered", "bunker-failed", "bunker-blocked", "priority:high", "priority:medium", "priority:low"]) expect(log).toContain(`gh label create ${l}`);
+    for (const l of ["discovered", "bunker-failed", "bunker-blocked", "priority:high", "priority:medium", "priority:low", "severity:high", "severity:medium"]) expect(log).toContain(`gh label create ${l}`);
     expect(log).not.toContain("gh label create bunker ");
     // only GETs: no repo-settings writes
     expect(log).not.toMatch(/--method|-X |--input|-f |-F |PATCH|PUT|POST/);
@@ -91,7 +100,7 @@ describe("init --yes", () => {
     expect(await runInit({ cwd: w.repo, env: w.env, yes: true, io: s.io })).toBe(1);
     expect(s.text()).not.toContain("bunker --issue");
     const w2 = await bunRepo();
-    await Bun.write(join(w2.data, "labels.json"), JSON.stringify(["bunker", "discovered", "bunker-failed", "bunker-blocked", "priority:high", "priority:medium", "priority:low"].map((name) => ({ name }))));
+    await Bun.write(join(w2.data, "labels.json"), JSON.stringify(["bunker", "discovered", "bunker-failed", "bunker-blocked", "priority:high", "priority:medium", "priority:low", "severity:high", "severity:medium"].map((name) => ({ name }))));
     const s2 = scripted();
     expect(await runInit({ cwd: w2.repo, env: w2.env, yes: true, io: s2.io })).toBe(0);
     expect(s2.text()).toContain("bunker --issue <n> --merge");
@@ -131,6 +140,17 @@ describe("init interactive", () => {
     await runInit({ cwd: w.repo, env, yes: false, io: s.io });
     expect(await exists(join(w.home, ".config/bunker/.env"))).toBe(false);
     expect(s.text()).toContain("Issues");
+  });
+
+  test("a GitHub token is not stored unvalidated when there is no GitHub origin", async () => {
+    const w = await bunRepo();
+    await Bun.$`git -C ${w.repo} remote remove origin`.quiet().nothrow();
+    const env = { ...w.env };
+    delete (env as Record<string, string | undefined>).BUNKER_GH_TOKEN;
+    const s = scripted({ secrets: ["github_pat_unvalidated123"] });
+    await runInit({ cwd: w.repo, env, yes: false, io: s.io });
+    expect(await exists(join(w.home, ".config/bunker/.env"))).toBe(false);
+    expect(s.text()).toContain("GitHub origin");
   });
 
   test("declining a file writes nothing; models go to the repo's .bunker/.env", async () => {

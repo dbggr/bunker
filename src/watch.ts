@@ -4,13 +4,16 @@ import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { addSpend, DAY_MS, exceededCaps, formatSpend, type SpendCaps } from "./spend.ts";
 import { safePull } from "./pull.ts";
+import { runClean } from "./clean.ts";
 import { redact } from "./redact.ts";
 import { runAudit } from "./audit.ts";
 import type { Agent } from "./index.ts";
 import { countWaiting, runQueue, type QueueEntry, type QueueOptions } from "./issue.ts";
 import { noNotify, type Notify } from "./notify.ts";
 
-export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult"> {
+export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult" | "onRefused"> {
+  /** Remove leftover worktrees and branches (as `bunker clean --yes`) once the lock is held. */
+  cleanOnStart?: boolean;
   /** Sleep between passes. Defaults to 10 minutes. */
   intervalMs?: number;
   /** Spend cap in notional USD per rolling 24 h. Defaults to no cap. */
@@ -91,7 +94,7 @@ function acquireLock(file: string): () => void {
  * Works the `bunker` queue with auto-merge, pass after pass, until aborted or `forMs` is up.
  * Any outcome other than `merged` relabels the issue `bunker-failed` so it is never retried by itself.
  */
-export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, auditor, maxIssues, log = console.log, notify = noNotify, mention, ...opts }: WatchOptions): Promise<WatchSummary> {
+export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, auditor, maxIssues, cleanOnStart, log = console.log, notify = noNotify, mention, ...opts }: WatchOptions): Promise<WatchSummary> {
   const cwd = opts.cwd ?? process.cwd();
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
@@ -102,6 +105,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   const missing = ["/.bunker/watch.lock", "/.bunker/watch-spend.json", "/.bunker/watch-state.json"].filter((p) => !excluded.split("\n").includes(p));
   if (missing.length) await appendFile(exclude, `${excluded && !excluded.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
   const release = acquireLock(join(dir, "watch.lock"));
+  if (cleanOnStart) await runClean({ cwd: repo, yes: true, auto: true });
 
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
@@ -153,7 +157,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     }
   };
 
-  /** Issues this watcher already gave up on; a failed relabel must not let one be retried. */
+  /** Issues this watcher gave up on (a failed relabel must not let one be retried) found already in progress (an open PR) or refused by the labeler check (e.g. a failed permission lookup); skipped for the rest of the run. */
   const handled = new Set<number>();
   let labelReady = false;
   const markFailed = async (e: QueueEntry) => {
@@ -186,7 +190,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
         // Every exceeded window must free up before work resumes.
         const at = Math.max(...hit.map((h) => h.liftsAt));
         notify("bunker: spend cap reached", `${hit.map((h) => `${h.window === "day" ? "daily" : "monthly"} $${h.spent.toFixed(2)} of $${h.cap}`).join(", ")}; no new issues until ${new Date(at).toLocaleString()}`);
-        for (const h of hit) log(`bunker: ${h.window === "day" ? "daily" : "monthly"} spend cap reached (${h.spent.toFixed(2)} of ${h.cap} in ${h.window === "day" ? "24 h" : "30 days"}); no new issues, sleeping until ${new Date(at).toISOString()}`);
+        for (const h of hit) log(`bunker: ${h.window === "day" ? "daily" : "monthly"} spend cap reached ($${h.spent.toFixed(2)} of $${h.cap} in ${h.window === "day" ? "24 h" : "30 days"}); no new issues, sleeping until ${new Date(at).toISOString()}`);
         // Re-check at least daily: a timer can't be that long.
         await sleep(Math.min(at - Date.now(), DAY_MS));
         continue;
@@ -203,6 +207,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       await runQueue({
         ...opts, cwd, mention, merge: true, limit: Infinity, keepGoing: true, relist: true,
         skip: (n) => handled.has(n),
+        onRefused: (n) => handled.add(n),
         shouldStop: () => stopped() || capped().length > 0,
         onResult: async (e) => {
           const usd = ((e.review?.usage ?? e.usage)?.costUsd ?? 0) + (e.priorCostUsd ?? 0);
@@ -215,16 +220,21 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
           } else if (e.status === "merged") {
             merged++;
             summary.merged++;
+          } else if (e.status === "already-in-progress") {
+            handled.add(e.issue);
           } else if (e.status === "blocked") {
             notify(`bunker: #${e.issue} blocked`, e.error ?? "waiting on another issue");
-          } else if (e.status !== "already-in-progress") {
+          } else {
             summary.failed++;
             await markFailed(e);
           }
         },
       });
       summary.passes++;
-      if (stopped()) break;
+      if (stopped()) {
+        log(`bunker: pass ${summary.passes} · ${merged} merged · stopping · ${formatSpend(spendFile, caps)}`);
+        break;
+      }
       if (paused) {
         const wait = pausedUntil !== undefined ? Math.max(0, pausedUntil - Date.now()) : intervalMs;
         const until = new Date(Date.now() + wait).toISOString();

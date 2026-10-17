@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
-import { AgentFailure, claudeCode, formatDuration, formatUsage, docker, noSandbox, review, run, runAll } from "./index.ts";
+import { $ } from "bun";
+import { AgentFailure, UsageLimit, claudeCode, formatDuration, formatUsage, docker, noSandbox, review, run, runAll, worktreeAdmin } from "./index.ts";
 import { loadRepoConfigOrExit } from "./config.ts";
-import { modelLabel, resolveModels } from "./models.ts";
+import { resolveModels } from "./models.ts";
 import { formatChecks, runDoctor } from "./doctor.ts";
 import { runInit, terminalIo } from "./init.ts";
 import { runAudit } from "./audit.ts";
@@ -21,6 +22,7 @@ import { HELP } from "./help.ts";
 import { options } from "./options.ts";
 import { output } from "./output.ts";
 import { safePull } from "./pull.ts";
+import { runClean } from "./clean.ts";
 import { selfUpdate } from "./self-update.ts";
 import { buildLabel } from "./build-info.ts";
 import pkg from "../package.json" with { type: "json" };
@@ -68,8 +70,8 @@ if (positionals.length === 1 && positionals[0] === "self-update") {
   process.exit(await selfUpdate({ channel: values.channel }));
 }
 
-// `bunker doctor` (read-only checks) and `bunker init` (interactive onboarding).
-if (positionals.length === 1 && (positionals[0] === "doctor" || positionals[0] === "init")) {
+// `bunker doctor` (read-only checks) and `bunker init` (interactive onboarding). `bunker -- init` is the prompt "init".
+if (!process.argv.slice(2).includes("--") && positionals.length === 1 && (positionals[0] === "doctor" || positionals[0] === "init")) {
   const cmd = positionals[0];
   const others = Object.entries(values).filter(([k, v]) => !(k === "yes" && cmd === "init") && k !== "verbose" && v !== false && v !== undefined);
   if (others.length) {
@@ -88,8 +90,28 @@ if (positionals.length === 1 && (positionals[0] === "doctor" || positionals[0] =
   process.exit(await runInit({ cwd: process.cwd(), yes: !!values.yes, io: terminalIo() }));
 }
 
+// `bunker clean`: dry run unless --yes.
+if (positionals.length === 1 && positionals[0] === "clean") {
+  const others = Object.entries(values).filter(([k, v]) => !["yes", "logs", "images", "force", "verbose"].includes(k) && v !== false && v !== undefined);
+  if (others.length) {
+    console.error("bunker: clean only takes --yes, --logs <days>, --images and --force");
+    process.exit(2);
+  }
+  const logsDays = values.logs === undefined ? undefined : Number(values.logs);
+  if (logsDays !== undefined && !(logsDays >= 0 && Number.isFinite(logsDays))) {
+    console.error("bunker: --logs must be a number of days");
+    process.exit(2);
+  }
+  const r = await runClean({ cwd: process.cwd(), yes: values.yes, logsDays, images: values.images, force: values.force });
+  process.exit(r.code);
+}
+
 if (values.yes) {
-  console.error("bunker: --yes only applies to init");
+  console.error("bunker: --yes only applies to init and clean");
+  process.exit(2);
+}
+if (values.logs !== undefined || values.images || values.force) {
+  console.error("bunker: --logs, --images and --force only apply to clean");
   process.exit(2);
 }
 
@@ -326,14 +348,14 @@ process.on("exit", () => clearProgress());
 const startedAt = Date.now();
 process.on("exit", () => console.log(`bunker: elapsed ${formatDuration(Date.now() - startedAt)} (wall-clock)`));
 
-const allowLabelers = [...(values["allow-labeler"] ?? []), ...(repoCfg.queue.allow_labelers ?? []), ...(values.issue !== undefined || values.queue ? await configAllowedLabelers().catch((e) => (console.error(`bunker: ${e instanceof Error ? e.message : e}`), process.exit(2))) : [])];
+const allowLabelers = [...(values["allow-labeler"] ?? []), ...(values.issue !== undefined || values.queue ? await configAllowedLabelers().catch((e) => (console.error(`bunker: ${e instanceof Error ? e.message : e}`), process.exit(2))) : [])];
 const tty = !!process.stdout.isTTY;
 const progress = createProgress({ write: (s) => output.write(redact(s)), tty, columns: process.stdout.columns ?? 100 });
 // Publish to the shared hub when one is up; --ui makes sure there is one. No hub, no publishing, no errors.
 let hub: Hub | undefined;
 let publisher: Publisher | undefined;
 const hubUrl = `http://127.0.0.1:${uiPort}`;
-if (values.ui || values.queue || values.issue !== undefined) {
+if (values.ui || values.audit || values.queue || values.issue !== undefined) {
   try {
     if (values.ui && !(await hubReachable(uiPort, readToken()))) {
       hub = startHub({ port: uiPort, token: readToken() });
@@ -357,6 +379,8 @@ if (pull) {
   const r = await safePull(process.cwd());
   if (!r.pulled) console.log(r.message);
 }
+// Leftovers of earlier interrupted runs; --watch does the same once it holds its lock.
+if (!watchOpts && (values.queue || values.issue !== undefined)) await runClean({ cwd: process.cwd(), yes: true, auto: true });
 const models = resolveModels(values, process.env, repoCfg.models);
 const agent = claudeCode({ model: models.implementer, json: true });
 const reviewerAgent = () => (models.reviewer === models.implementer ? agent : claudeCode({ model: models.reviewer, json: true }));
@@ -366,8 +390,7 @@ if (values.audit) {
   let result;
   try {
     const auditor = claudeCode({ model: models.auditor, json: true });
-    emit(onEvent, { type: "stage", name: "audit", role: "auditor", model: modelLabel(auditor) });
-    result = await runAudit({ agent: auditor, sandbox, maxIssues, focus: values.focus, setup: values.setup, ...timeouts });
+    result = await runAudit({ agent: auditor, sandbox, maxIssues, focus: values.focus, setup: values.setup, onEvent, ...timeouts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -394,7 +417,7 @@ if (values.audit) {
   const ghToken = process.env.BUNKER_GH_TOKEN;
   const mention = await resolveMention(process.cwd(), (ghToken ? { ...process.env, GH_TOKEN: ghToken } : process.env) as Record<string, string>, repoCfg.notify.github_user);
   try {
-    await runWatch({ notify, mention, onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, ...timeouts, parallel, allowLabelers, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
+    await runWatch({ notify, mention, onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -469,12 +492,24 @@ if (values.audit) {
   for (const c of result.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
   if (result.error) console.log(`  ${result.error.trimEnd().replaceAll("\n", "\n  ")}`);
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
+  if (result.status === "paused-usage-limit") {
+    // Nothing resumes a plain --review, so don't leak the kept worktree; the branch keeps the committed work.
+    if (result.pause) await worktreeAdmin(process.cwd(), () => $`git -C ${process.cwd()} worktree remove --force ${result.pause!.worktree}`.nothrow().quiet());
+    console.log(`bunker: paused on the Claude usage limit; work kept on ${result.branch}; ${rerunHint(result.pause?.resetAt)}`);
+    await publisher?.flush();
+    process.exit(3);
+  }
   if (result.status !== "approved") { await publisher?.flush(); process.exit(1); }
 } else if (prompt) {
   let result;
   try {
     result = await run({ onEvent, prompt, agent, sandbox, maxIterations, resume, ...timeouts });
   } catch (e) {
+    if (e instanceof UsageLimit) {
+      console.log(`\nbunker: paused on the Claude usage limit; ${rerunHint(e.resetAt)}`);
+      await publisher?.flush();
+      process.exit(3);
+    }
     console.error(`\nbunker: ${e instanceof Error ? e.message : e}`);
     if (e instanceof AgentFailure && e.usage) console.log(`bunker: cost ${formatUsage(e.usage)}`);
     await publisher?.flush();

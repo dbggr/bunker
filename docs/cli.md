@@ -16,6 +16,7 @@ Usage:
   bunker --watch                              keep working the queue unattended (implies --queue --merge)
   bunker ui [--port <n>]                      shared live view: one tab per repo (default port 4321)
   bunker --audit                              file improvement ideas as `discovered` issues
+  bunker clean [--yes] [--logs <days>] [--images] [--force]   remove leftover worktrees and branches (dry run unless --yes)
   bunker self-update [--channel main]         build and install the latest v* release tag (--channel main: pull main instead)
 
 Common options (all modes):
@@ -51,7 +52,8 @@ Single prompt and --task:
                              (no PR, doesn't count toward --limit); it returns to `bunker` once the blockers close
   --allow-labeler <login>    (--issue, --queue, --watch; repeatable) also accept the `bunker` label from this GitHub user. By
                              default only repo admins and maintainers may queue work: otherwise the issue is skipped, the label
-                             removed and a comment left. Also: allow-labelers = ["login"] in ~/.config/bunker/config.toml.
+                             removed and a comment left. An issue never labeled "bunker" is refused too (no label
+                             event to check): add the label first. Also: allow-labelers = ["login"] in ~/.config/bunker/config.toml.
                              If the permission lookup fails the issue is skipped (fail closed)
   --limit <n>                (--queue) max issues per run (default 5; blocked issues don't count)
   --parallel <n>             (--queue --merge, --watch) work up to n issues at once, one worktree + container each (default 1).
@@ -65,11 +67,11 @@ Single prompt and --task:
   --ci-timeout <min>         (--merge) minutes to wait for the merge (default 30)
   --idle-timeout <min>       kill an agent or reviewer that prints nothing for this long; the step fails as
                              idle-timeout, worktree and branch kept (default 10)
-  --completion-timeout <s>   seconds an agent may linger after its final result event before it is
+  --completion-timeout <s>   seconds an agent may linger after its final result event or closing signal before it is
                              killed and the step counts as done, with a warning (default 60)
   --step-timeout <min>       overall limit for setup and verify, which can be quiet for long (default 30)
 
---issue, --queue, --watch, live view:
+--issue, --queue, --watch, --audit, live view:
   Every run publishes to a bunker hub (bunker ui) if one is reachable on 127.0.0.1:4321,
   tagged with the repo (owner/repo from origin); with no hub it just carries on.
   --ui                       make sure a hub is up (start one for this run if not), publish, print the URL
@@ -107,14 +109,30 @@ init and doctor:
                              .bunker/config.toml (setup, verify) and Dockerfile for the detected toolchain (asks before each write, never
                              overwrites), models, and the four labels. It never changes repo settings (auto-merge, branch
                              protection, required checks): it prints what to set. Ends with doctor and the first command to run
+  A one-word prompt "init" or "doctor" is read as the subcommand; to use it as a prompt put -- first: bunker -- init
+                             (or make it longer than one word).
   --yes                      (init) accept every proposed default without asking; still never overwrites a file and skips the
                              steps that need a secret from you
+
+clean:
+  bunker clean               run from the repo's main checkout. Dry run by default: prints what it would remove and why.
+                             Worktrees: .worktrees/<n>-* whose issue is closed or whose PR is merged/closed; /tmp/bunker-*
+                             worktrees of this repo that no running process uses. Branches: bunker/<id> without a worktree;
+                             {feature|fix}/<n>-<slug> whose PR is merged/closed or that have no commits beyond origin/<default>.
+                             Anything with commits not on origin/<default>, or uncommitted changes, is first kept as the tag
+                             bunker/stale/<name>-<timestamp> (printed). Only bunker's own names are touched. Ends with git worktree prune
+  --yes                      (clean) really remove
+  --logs <days>              (clean) also remove .bunker/runs/*.log older than this (default: keep all)
+  --images                   (clean) also remove bunker-repo-* docker images no running container uses (bunker-claude is kept)
+  --force                    (clean) go ahead although a --watch lock for this repo is held by a live process (otherwise exit 2)
+  --issue, --queue and --watch run the same worktree and branch cleanup at start-up, and Ctrl-C/SIGTERM removes the
+  current run's /tmp/bunker-* worktree and bunker/<id> branch if it has no commits.
 
 Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a separate file):
   Precedence: CLI flag > env var > config.toml > legacy files (.bunker/setup, verify, copy) > built-in default.
   Legacy files keep working but are deprecated (a note is printed when both exist). Unknown keys warn; a key of
-  the wrong type exits 2. queue.allow_labelers is read from the checkout you run in, so only list people you trust.
-  Keys (tables: [models], [watch], [merge], [queue]):
+  the wrong type exits 2.
+  Keys (tables: [models], [watch], [merge]):
   setup                  shell command run in each worktree before the agent (legacy: .bunker/setup)
   verify                 command that must pass before anything is pushed (legacy: .bunker/verify)
   copy                   gitignored paths or globs copied into each worktree (legacy: .bunker/copy)
@@ -128,7 +146,6 @@ Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a sep
   watch.max_cost_month   USD cap per rolling 30 days for --watch
   watch.audit_every      days between periodic --audit runs in --watch
   merge.ci_timeout       minutes --merge waits for CI (default 30)
-  queue.allow_labelers   GitHub logins besides maintainers who may add the `bunker` label
   notify.enabled         desktop notifications from --watch (notify-send / osascript) (default true)
   notify.github_user     login @-mentioned when an issue becomes bunker-failed / bunker-blocked (default: the repo owner, if a user)
 

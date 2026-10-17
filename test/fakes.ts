@@ -42,7 +42,7 @@ case "$*" in
   "api repos/o/r/pulls?per_page=1") f pulls.json;;
   "api repos/o/r/branches/main") f branch.json;;
   "label list"*) f labels.json;;
-  "label create"*) exit 0;;
+  "label create"*) if [ -f "$d/label-create-err.txt" ]; then cat "$d/label-create-err.txt" >&2; exit 1; fi; exit 0;;
   "api repos/o/r/branches/main/protection/required_status_checks") f protection.json;;
   "api repos/o/r/rules/branches/main") f rules.json;;
   *) echo "fake gh: unhandled $*" >&2; exit 1;;

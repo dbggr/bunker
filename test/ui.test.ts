@@ -72,6 +72,20 @@ describe("startHub()", () => {
     late.ws.close();
   });
 
+  test("history evicts the least recently active repo past the repo cap", async () => {
+    hub = startHub({ port: 0, token: TOKEN, repoLimit: 2 });
+    const ev = (name: string) => ({ type: "stage", issue: 1, name, at: 1 });
+    await publish(hub.url, { repo: "a/one", event: ev("a1") }, TOKEN);
+    await publish(hub.url, { repo: "b/two", event: ev("b1") }, TOKEN);
+    await publish(hub.url, { repo: "a/one", event: ev("a2") }, TOKEN);
+    await publish(hub.url, { repo: "c/three", event: ev("c1") }, TOKEN);
+    const late = await connect(hub.url);
+    await until(() => late.messages.length === 3);
+    await Bun.sleep(50);
+    expect(late.messages.map((m) => m.event.name)).toEqual(["a1", "a2", "c1"]);
+    late.ws.close();
+  });
+
   test("publish without or with a wrong token is rejected and not broadcast", async () => {
     hub = startHub({ port: 0, token: TOKEN });
     const c = await connect(hub.url);

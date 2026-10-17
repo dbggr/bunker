@@ -1,4 +1,5 @@
-import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test, setDefaultTimeout } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { output } from "../src/output.ts";
 import { $ } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -195,9 +196,10 @@ describe.skipIf(!dockerUp)("run() with docker", () => {
     await Bun.write(join(repo, ".bunker/Dockerfile"), `FROM ${GIT_IMAGE}\n`);
     await $`git -C ${repo} add .bunker && git -C ${repo} commit -qm bunker-image`;
     const builds: string[] = [];
-    const spy = spyOn(console, "error").mockImplementation((msg: unknown) => {
-      if (String(msg).includes("building")) builds.push(String(msg));
-    });
+    const origWarn = output.warn;
+    output.warn = (msg) => {
+      if (msg.includes("building")) builds.push(msg);
+    };
 
     try {
       const results = await runAll({
@@ -208,7 +210,7 @@ describe.skipIf(!dockerUp)("run() with docker", () => {
       });
       expect(results.map((r) => r.status)).toEqual(["merged", "merged", "merged"]);
     } finally {
-      spy.mockRestore();
+      output.warn = origWarn;
     }
 
     expect(builds).toHaveLength(1);

@@ -4,7 +4,7 @@ export type StreamEvent =
   | { type: "toolCall"; name: string; summary: string }
   | { type: "result"; text: string; usage?: { costUsd: number; durationMs: number } };
 
-export type Stage = "setup" | "audit" | "implement" | "review" | "verify" | "PR" | "waiting for merge" | "merged" | "failed";
+export type Stage = "setup" | "audit" | "implement" | "review" | "verify" | "PR" | "waiting for merge" | "merged" | "done" | "failed";
 
 /** Progress from a run. `name` is the stage, or the tool call (e.g. "Edit src/cli.ts"). */
 export interface BunkerEvent {
@@ -122,7 +122,9 @@ export function createProgress({ write, tty, columns = 100 }: ProgressOptions): 
   let tool = "";
   let startedAt: number | undefined;
   let where = "";
-  let url = "";
+  // PR urls by issue or task, so concurrent runs never borrow each other's.
+  const urls = new Map<string, string>();
+  const key = (e: BunkerEvent) => (e.issue !== undefined ? `#${e.issue}` : e.task !== undefined ? `[${e.task}]` : "");
   // After merged/failed the run is over: late events must not bring the live line back.
   let done = false;
   const clear = () => {
@@ -130,12 +132,12 @@ export function createProgress({ write, tty, columns = 100 }: ProgressOptions): 
     live = false;
   };
   const who = (e: BunkerEvent) =>
-    [e.issue !== undefined ? `#${e.issue}` : e.task !== undefined ? `[${e.task}]` : "", e.round !== undefined ? `round ${e.round}` : "", e.role ?? ""]
+    [key(e), e.round !== undefined ? `round ${e.round}` : "", e.role ?? ""]
       .filter(Boolean)
       .join(" ");
   const onEvent: OnEvent = (e) => {
     if (e.type === "meta") {
-      if (e.url) url = e.url;
+      if (e.url) urls.set(key(e), e.url);
       return;
     }
     startedAt ??= e.at;
@@ -150,9 +152,9 @@ export function createProgress({ write, tty, columns = 100 }: ProgressOptions): 
       tool = "";
       tools = 0;
       where = who(e);
-      done = e.name === "merged" || e.name === "failed";
-      write(`bunker: ${[where, e.name, e.model, e.text && e.name === "failed" ? `(${e.text})` : "", e.name === "merged" && url ? `PR ${url}` : ""].filter(Boolean).join(" · ")}\n`);
-      if (done) url = "";
+      done = e.name === "merged" || e.name === "done" || e.name === "failed";
+      write(`bunker: ${[where, e.name, e.model, e.text && e.name === "failed" ? `(${e.text})` : "", e.name === "merged" && urls.get(key(e)) ? `PR ${urls.get(key(e))}` : ""].filter(Boolean).join(" · ")}\n`);
+      if (done) urls.delete(key(e));
       return;
     }
     if (done) return;

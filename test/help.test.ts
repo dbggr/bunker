@@ -59,3 +59,15 @@ describe("--ui flags", () => {
     expect(cli("--help").out).toContain("bunker ui [--port <n>]");
   });
 });
+
+describe("reserved one-word prompts", () => {
+  for (const word of ["init", "doctor"]) {
+    test(`${word} is a subcommand, but -- ${word} is a prompt`, () => {
+      expect(cli("--watch", word).err).toContain(`${word} only takes`);
+      expect(cli("--watch", "--", word).err).toContain("can't be combined with a prompt");
+    });
+  }
+  test("help documents the -- escape", () => {
+    expect(cli("--help").out).toContain("bunker -- init");
+  });
+});
