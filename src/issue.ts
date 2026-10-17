@@ -238,17 +238,17 @@ async function isDone(n: number, cwd: string, env: Env): Promise<boolean | undef
 }
 
 /** Open issues labelled `bunker-blocked` whose blockers are all closed go back to `bunker`. Best effort. */
-export async function resumeBlocked(cwd: string, env: Env): Promise<number[]> {
-  const list = await $`gh issue list --label ${BLOCKED_LABEL} --state open --limit 1000 --json number`.cwd(cwd).env(env).nothrow().quiet();
+export async function resumeBlocked(cwd: string, env: Env): Promise<Queued[]> {
+  const list = await $`gh issue list --label ${BLOCKED_LABEL} --state open --limit 1000 --json number,title,createdAt`.cwd(cwd).env(env).nothrow().quiet();
   if (list.exitCode !== 0) return [];
-  let numbers: number[];
+  let found: { number: number; title?: unknown; createdAt?: unknown }[];
   try {
-    numbers = (JSON.parse(list.stdout.toString()) as { number: number }[]).map((i) => i.number);
+    found = JSON.parse(list.stdout.toString());
   } catch {
     return [];
   }
-  const resumed: number[] = [];
-  for (const n of numbers) {
+  const resumed: Queued[] = [];
+  for (const { number: n, title, createdAt } of found) {
     const v = await $`gh issue view ${n} --json body,comments,state,labels`.cwd(cwd).env(env).nothrow().quiet();
     if (v.exitCode !== 0) continue;
     let info: IssueInfo;
@@ -265,7 +265,7 @@ export async function resumeBlocked(cwd: string, env: Env): Promise<number[]> {
     const edit = await $`gh issue edit ${n} --remove-label ${BLOCKED_LABEL} --add-label bunker`.cwd(cwd).env(env).nothrow().quiet();
     if (edit.exitCode !== 0) continue;
     await $`gh issue comment ${n} --body ${`Unblocked: ${refs.map((r) => `#${r}`).join(", ")} ${refs.length === 1 ? "is" : "are"} closed`}`.cwd(cwd).env(env).nothrow().quiet();
-    resumed.push(n);
+    resumed.push({ number: n, title: typeof title === "string" ? title : "", createdAt: typeof createdAt === "string" ? createdAt : "", labels: [{ name: "bunker" }] });
   }
   return resumed;
 }
@@ -880,12 +880,16 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
   const listIssues = () => listQueued(cwd, env);
-  await resumeBlocked(cwd, env);
+  // `gh issue list` lags the label swap, so the issues just relabelled go straight into the queue.
+  const resumedNow = new Map<number, Queued>();
+  const addResumed = (qs: Queued[]) => qs.forEach((q) => resumedNow.set(q.number, q));
+  addResumed(await resumeBlocked(cwd, env));
   for (const p of PRIORITY_LABELS) await $`gh label create ${p.name} --description ${"bunker queue priority"} --color ${p.color}`.cwd(cwd).env(env).nothrow().quiet();
   // The list can lag with a partial result too, so always list twice and merge.
   const first = await listIssues();
   await Bun.sleep(listRetryMs);
   const merged = new Map([...first, ...(await listIssues())].map((q) => [q.number, q]));
+  for (const q of resumedNow.values()) if (!merged.has(q.number)) merged.set(q.number, q);
   let queue = orderQueue([...merged.values()]);
   const seen = new Set<number>();
   let announced = "";
@@ -904,8 +908,8 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
   const next = async () => {
     if (relist && seen.size) {
       const fresh = await listIssues();
-      if (fresh.length) {
-        queue = orderQueue(fresh);
+      if (fresh.length || resumedNow.size) {
+        queue = orderQueue([...fresh, ...[...resumedNow.values()].filter((r) => !fresh.some((f) => f.number === r.number))]);
         announce("re-ordered");
       }
     }
@@ -951,7 +955,12 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
         stop = true;
         return;
       }
-      if (result.status === "merged") await resumeBlocked(cwd, env);
+      if (result.status === "merged") {
+        const more = await resumeBlocked(cwd, env);
+        addResumed(more);
+        const known = new Set(queue.map((c) => c.number));
+        queue = orderQueue([...queue, ...more.filter((m) => !known.has(m.number))]);
+      }
       else if (result.status === "blocked") return;
       if (!keepGoing && (!opts.merge || result.status !== "merged")) stop = true;
     } catch (e) {

@@ -479,6 +479,17 @@ describe("blocked issues", () => {
     expect(edits).toContain("issue comment 1 --body Unblocked: #50 is closed");
   });
 
+  test("auto-resume queues the resumed issue even when the label-filtered list lags", async () => {
+    const { repo } = await setup(issues, "ff");
+    const root = join(repo, "..");
+    await Bun.write(join(root, "list.json"), "[]");
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Do it.", state: "OPEN", labels: [{ name: "bunker-blocked" }], comments: [{ authorAssociation: "OWNER", body: "Blocked by #50: thing" }] }));
+    await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "thing", body: "", state: "CLOSED", stateReason: "COMPLETED", labels: [] }));
+    await Bun.write(join(root, "blocked-list.json"), JSON.stringify([{ number: 1, title: "First", createdAt: "2026-01-01T00:00:00Z" }]));
+    const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10, listRetryMs: 10 });
+    expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"]]);
+  });
+
   test("auto-resume leaves an issue blocked while any blocker is open", async () => {
     const { repo } = await setup(issues);
     const root = join(repo, "..");
