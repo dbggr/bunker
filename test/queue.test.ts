@@ -83,6 +83,7 @@ if [ "$1 $2" = "issue view" ]; then
 fi
 if [ "$1 $2" = "issue create" ]; then
   shift 2
+  if [ -f "${root}/no-bug-label" ] && echo " $* " | grep -q -- " bug "; then echo "could not add label: 'bug' not found" >&2; exit 1; fi
   for a in "$@"; do printf '%s\\n' "$a"; done >> "${createLog}"
   echo "---" >> "${createLog}"
   echo "https://github.com/o/r/issues/100"
@@ -167,6 +168,19 @@ describe("filing discovered issues", () => {
     expect(log).toContain("first\n\nFound while working on #7.");
     expect(prompts.some((p) => p.startsWith("REVIEW:") && p.includes("<verdict>"))).toBe(true);
     expect(prompts[0]).toContain("<report>");
+  });
+});
+
+describe("filing a bug follow-up", () => {
+  test("retries without the bug label when the repo has none", async () => {
+    const { repo, createLog } = await setup([[7, "Add feature", "2026-01-01T00:00:00Z"]]);
+    await Bun.write(join(repo, "..", "no-bug-label"), "");
+    const report = '<report>{"issues": [{"title": "Broken thing", "body": "rb", "bug": true}]}</report>';
+    const r = await runIssue({ cwd: repo, issue: 7, sandbox: noSandbox(), agent: fakeAgent(APPROVE, report) });
+    expect(r.filed).toEqual([{ number: 100, title: "Broken thing" }]);
+    const log = await Bun.file(createLog).text();
+    expect(log).toContain("discovered");
+    expect(log).not.toMatch(/^bug$/m);
   });
 });
 
