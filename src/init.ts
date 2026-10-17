@@ -2,7 +2,7 @@ import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { formatChecks, exec, LABELS, probeGhToken, runDoctor, userEnv, TOKEN_FIX, type Check, type RepoInfo } from "./doctor.ts";
-import { addSecrets } from "./redact.ts";
+import { addSecrets, redact } from "./redact.ts";
 import { PRIORITY_LABELS } from "./priority.ts";
 
 type Env = Record<string, string | undefined>;
@@ -190,7 +190,7 @@ export async function runInit(opts: { cwd: string; env?: Env; yes: boolean; io: 
     if (await io.confirm(`Create the missing labels (${missingLabels.join(", ")}) with gh label create?`, true)) {
       for (const l of missingLabels) {
         const r = await exec(["gh", "label", "create", l, "--repo", repo.slug, "--description", `bunker: ${l}`, ...(PRIORITY_LABELS.find((p) => p.name === l) ? ["--color", PRIORITY_LABELS.find((p) => p.name === l)!.color] : [])], { env: userEnv(env) });
-        io.say(r.code === 0 ? `created label ${l}` : `could not create ${l}: ${r.err.trim()}`);
+        io.say(r.code === 0 ? `created label ${l}` : `could not create ${l}: ${redact(r.err.trim())}`);
       }
     }
   }
