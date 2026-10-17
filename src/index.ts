@@ -266,6 +266,12 @@ async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">, pref
     const text = decoder.decode(chunk, { stream: true });
     stdout += text;
     pending += text;
+    // Real output after a "done" match means the match was a mention, not the end: back to idle watching.
+    if (graceTimer && text.trim()) {
+      clearTimeout(graceTimer);
+      graceTimer = undefined;
+      window = "";
+    }
     if (!graceTimer) {
       armIdle();
       if (limits.done) {

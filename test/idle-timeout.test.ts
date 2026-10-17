@@ -3,7 +3,8 @@ import { $ } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { noSandbox, review, run, runSetup, type Agent } from "../src/index.ts";
+import { chmod } from "node:fs/promises";
+import { docker, noSandbox, review, run, runSetup, type Agent } from "../src/index.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -103,6 +104,39 @@ describe("completion grace", () => {
     const res = await run({ cwd: repo, prompt: "x", agent, sandbox: noSandbox(), completionTimeoutMs: 400, idleTimeoutMs: 20_000, onEvent: (e) => { if (e.type === "note") notes.push(e.text ?? ""); } });
     expect(res.iterations[0]!.exitCode).toBe(0);
     expect(notes.join("\n")).toMatch(/grace|did not exit/i);
+  });
+});
+
+describe("grace is cancelled by later output", () => {
+  test("quoted signal mid-run does not get a working agent killed", async () => {
+    const repo = await makeRepo();
+    const res = await run({
+      cwd: repo, prompt: "x", sandbox: noSandbox(), completionTimeoutMs: 500, idleTimeoutMs: 20_000,
+      agent: script("echo '<promise>COMPLETE</promise>'; sleep 0.2; echo more; sleep 1.2; echo finished"),
+    });
+    expect(res.iterations[0]!.exitCode).toBe(0);
+    expect(res.iterations[0]!.commits).toEqual([]);
+    expect(res.completionSignal).toBe("<promise>COMPLETE</promise>");
+  });
+});
+
+describe("container kill", () => {
+  test("idle timeout runs '<bin> kill <name>' for the container", async () => {
+    const repo = await makeRepo();
+    const log = join(repo, "..", `fakebin-${crypto.randomUUID()}.log`);
+    const bin = join(repo, "..", `fakebin-${crypto.randomUUID()}`);
+    await Bun.write(bin, `#!/bin/sh\necho "$@" >> ${log}\ncase "$1" in run) sleep 30;; esac\n`);
+    await chmod(bin, 0o755);
+    const git = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
+    const out = await docker({ bin, image: "img" }).exec(["sleep", "30"], { worktree: repo, gitCommonDir: git, limits: { idleMs: 300 } });
+    expect(out.timedOut).toBe("idle");
+    await Bun.sleep(200);
+    const lines = (await Bun.file(log).text()).split("\n");
+    const name = /--name (\S+)/.exec(lines.find((l) => l.startsWith("run")) ?? "")?.[1];
+    expect(name).toBeTruthy();
+    expect(lines).toContain(`kill ${name}`);
+    await rm(log, { force: true });
+    await rm(bin, { force: true });
   });
 });
 
