@@ -91,7 +91,7 @@ describe("safePull", () => {
 });
 
 describe("cli", () => {
-  const selfUpdate = (repo: string) => Bun.spawnSync(["bun", CLI, "self-update"], { cwd: repo, env: { ...process.env, BUNKER_HOME: repo } });
+  const selfUpdate = (repo: string) => Bun.spawnSync(["bun", CLI, "self-update", "--channel", "main"], { cwd: repo, env: { ...process.env, BUNKER_HOME: repo } });
 
   test("--no-pull is documented in --help", () => {
     const p = Bun.spawnSync(["bun", CLI, "--help"]);
@@ -100,7 +100,7 @@ describe("cli", () => {
 
   test("--version prints the version and commit", () => {
     const p = Bun.spawnSync(["bun", CLI, "--version"]);
-    expect(p.stdout.toString()).toMatch(/^\d+\.\d+\.\d+ \(\w+\)/);
+    expect(p.stdout.toString()).toMatch(/^\d+\.\d+\.\d+ \((v\d+\.\d+\.\d+|main@\w+)\)/);
   });
 
   // `--issue 0` fails validation right after the pull step, so nothing else (agent, gh, docker) runs.

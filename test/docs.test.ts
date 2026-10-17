@@ -6,7 +6,7 @@ import { HELP } from "../src/help.ts";
 setDefaultTimeout(60_000); // see test/setup.ts
 
 const root = import.meta.dir + "/..";
-const docs = ["getting-started", "concepts", "security", "troubleshooting", "cli"].map((n) => `docs/${n}.md`);
+const docs = ["getting-started", "concepts", "security", "troubleshooting", "cli", "release"].map((n) => `docs/${n}.md`);
 const read = (p: string) => Bun.file(`${root}/${p}`).text();
 
 describe("docs", () => {

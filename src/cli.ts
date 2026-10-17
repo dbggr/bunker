@@ -21,7 +21,7 @@ import { options } from "./options.ts";
 import { output } from "./output.ts";
 import { safePull } from "./pull.ts";
 import { selfUpdate } from "./self-update.ts";
-import { buildCommit } from "./build-info.ts";
+import { buildLabel } from "./build-info.ts";
 import pkg from "../package.json" with { type: "json" };
 
 /** When to re-run after a usage-limit pause (exit code 3). */
@@ -59,12 +59,12 @@ if (values.help) {
 }
 
 if (values.version) {
-  console.log(`${pkg.version} (${await buildCommit()})`);
+  console.log(`${pkg.version} (${await buildLabel()})`);
   process.exit(0);
 }
 
 if (positionals.length === 1 && positionals[0] === "self-update") {
-  process.exit(await selfUpdate());
+  process.exit(await selfUpdate({ channel: values.channel }));
 }
 
 // `bunker doctor` (read-only checks) and `bunker init` (interactive onboarding).
