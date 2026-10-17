@@ -6,6 +6,8 @@ export const options = {
   "no-sandbox": { type: "boolean", default: false },
   image: { type: "string" },
   model: { type: "string" },
+  "implementer-model": { type: "string" },
+  "auditor-model": { type: "string" },
   task: { type: "string", multiple: true },
   "max-iterations": { type: "string" },
   review: { type: "boolean", default: false },

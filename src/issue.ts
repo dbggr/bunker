@@ -6,6 +6,7 @@ import { redact } from "./redact.ts";
 import { emit } from "./events.ts";
 import { tailLines, testCounts } from "./output.ts";
 import { hyperlink } from "./events.ts";
+import { modelLabel } from "./models.ts";
 import { AgentFailure, emitStage, review, runSetup, type Agent, type OnEvent, type ReviewResult, type Sandbox, type Usage } from "./index.ts";
 
 export interface IssueInfo {
@@ -161,9 +162,9 @@ export function issueBranch(issue: Pick<IssueInfo, "number" | "title" | "labels"
   return { branch: `${type}/${issue.number}-${slug}`, slug };
 }
 
-function reviewLines(result: ReviewResult): string {
+function reviewLines(result: ReviewResult, agent: Agent, reviewer: Agent): string {
   return result.rounds
-    .map((r, i) => `Round ${i + 1}: ${r.commits.length} commit(s), ${r.approved ? "approved" : "changes requested"}`)
+    .map((r, i) => `Round ${i + 1}: ${r.commits.length} commit(s), ${r.approved ? "approved" : "changes requested"} (implementer: ${modelLabel(agent)}, reviewer: ${modelLabel(reviewer)})`)
     .join("\n");
 }
 
@@ -388,6 +389,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     commentsSection(issue.comments) +
     "Use Conventional Commits for your commit messages, write tests first, and make the repo's tests pass.\n\n" +
     ISSUE_CONVENTION;
+  log("models", `implementer: ${modelLabel(agent)}\nreviewer: ${modelLabel(reviewer ?? agent)}`);
   log("raw agent events (stream-json lines follow, interleaved with the sections below)");
   const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), setup, reviewerInstruction: ISSUE_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
   spent.usage = result.usage;
@@ -496,7 +498,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     const push = await $`git ${gitCfg} -C ${worktree} push -q ${token ? [] : ['-u']} ${remote} ${branch}`.env(env).nothrow().quiet();
     if (push.exitCode !== 0) return fail("failed", { review: result, error: `git push failed:\n${push.stderr}` });
 
-    const body = [`Closes #${number}`, reviewLines(result), ...(verify ? [`Verify: \`${verify}\` passed (${verifySource})`] : [])].join("\n\n");
+    const body = [`Closes #${number}`, reviewLines(result, agent, reviewer ?? agent), ...(verify ? [`Verify: \`${verify}\` passed (${verifySource})`] : [])].join("\n\n");
     const pr = await $`gh pr create --head ${branch} --title ${issue.title} --body ${body}`.cwd(worktree).env(env).nothrow().quiet();
     if (pr.exitCode !== 0) return fail("failed", { review: result, error: `gh pr create failed:\n${pr.stderr}` });
     const prUrl = pr.stdout.toString().trim().split("\n").at(-1);

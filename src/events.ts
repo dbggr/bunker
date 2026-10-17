@@ -14,6 +14,8 @@ export interface BunkerEvent {
   task?: number;
   round?: number;
   role?: "implementer" | "reviewer";
+  /** On a "stage" that starts an agent: the model it runs ("Claude default" when none is set). */
+  model?: string;
   name?: string;
   /** Agent text, the failure status on a "failed" stage, or the message of a "note" (a permanent line, may span lines). */
   text?: string;
@@ -149,7 +151,7 @@ export function createProgress({ write, tty, columns = 100 }: ProgressOptions): 
       tools = 0;
       where = who(e);
       done = e.name === "merged" || e.name === "failed";
-      write(`bunker: ${[where, e.name, e.text && e.name === "failed" ? `(${e.text})` : "", e.name === "merged" && url ? `PR ${url}` : ""].filter(Boolean).join(" · ")}\n`);
+      write(`bunker: ${[where, e.name, e.model, e.text && e.name === "failed" ? `(${e.text})` : "", e.name === "merged" && url ? `PR ${url}` : ""].filter(Boolean).join(" · ")}\n`);
       if (done) url = "";
       return;
     }

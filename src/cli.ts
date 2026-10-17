@@ -2,6 +2,7 @@
 import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
 import { AgentFailure, claudeCode, formatDuration, formatUsage, docker, noSandbox, review, run, runAll } from "./index.ts";
+import { modelLabel, resolveModels } from "./models.ts";
 import { runAudit } from "./audit.ts";
 import { runIssue, runQueue } from "./issue.ts";
 import { parseDuration, runWatch } from "./watch.ts";
@@ -279,13 +280,17 @@ if (pull) {
   const r = await safePull(process.cwd());
   if (!r.pulled) console.log(r.message);
 }
-const agent = claudeCode({ model: values.model, json: true });
+const models = resolveModels(values);
+const agent = claudeCode({ model: models.implementer, json: true });
+const reviewerAgent = () => (models.reviewer === models.implementer ? agent : claudeCode({ model: models.reviewer, json: true }));
 const sandbox = values["no-sandbox"] ? noSandbox() : docker({ image: values.image });
 
 if (values.audit) {
   let result;
   try {
-    result = await runAudit({ agent, sandbox, maxIssues, focus: values.focus, setup: values.setup });
+    const auditor = claudeCode({ model: models.auditor, json: true });
+    console.log(`bunker: audit · ${modelLabel(auditor)}`);
+    result = await runAudit({ agent: auditor, sandbox, maxIssues, focus: values.focus, setup: values.setup });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -297,7 +302,7 @@ if (values.audit) {
   for (const f of result.filed) console.log(`filed #${f.number}: ${f.title}`);
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
 } else if (watchOpts) {
-  const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
+  const reviewer = reviewerAgent();
   const ctl = new AbortController();
   // The first signal finishes the current step and exits 0; a second one quits now.
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
@@ -315,7 +320,7 @@ if (values.audit) {
     process.exit(2);
   }
 } else if (values.queue) {
-  const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
+  const reviewer = reviewerAgent();
   let results;
   try {
     results = await runQueue({ onEvent, agent, reviewer, sandbox, maxRounds, resume, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin, parallel });
@@ -341,7 +346,7 @@ if (values.audit) {
     await publisher?.flush();
     process.exit(2);
   }
-  const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
+  const reviewer = reviewerAgent();
   let result;
   try {
     result = await runIssue({ onEvent, issue, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], merge: values.merge, ciTimeoutMin });
@@ -361,7 +366,7 @@ if (values.audit) {
   if (result.logPath) console.log(`bunker: log ${tty ? hyperlink(result.logPath) : result.logPath}`);
   if (result.status !== (values.merge ? "merged" : "pr-opened")) process.exitCode = 1;
 } else if (values.review) {
-  const reviewer = values["reviewer-model"] ? claudeCode({ model: values["reviewer-model"], json: true }) : agent;
+  const reviewer = reviewerAgent();
   const result = await review({ onEvent, prompt, agent, reviewer, sandbox, maxRounds, resume });
   console.log();
   for (const [i, r] of result.rounds.entries()) {

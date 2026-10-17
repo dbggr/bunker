@@ -17,7 +17,9 @@ Usage:
   bunker self-update                          pull, rebuild and reinstall bunker itself (BUNKER_HOME or build checkout)
 
 Common options (all modes):
-  --model <id>               agent model
+  --model <id>               model for every role (implementer, reviewer, auditor)
+  --implementer-model <id>   model for the implementer
+  --auditor-model <id>       model for the --audit agent
   --image <name>             use this docker image as-is
   --no-sandbox               run the agent on the host instead of in docker
   -h, --help                 show this help (wins over every other flag)
@@ -33,7 +35,7 @@ Single prompt and --task:
 --review, --issue, --queue:
   --review                   implement -> review -> fix a single prompt
   --max-rounds <n>           review rounds before giving up (default 2)
-  --reviewer-model <id>      model for the reviewer (default: --model)
+  --reviewer-model <id>      model for the reviewer
   --no-resume                start every implementer round (and --max-iterations pass) in a fresh agent session instead of
                              resuming the previous one with the reviewer feedback
 
@@ -73,6 +75,13 @@ Single prompt and --task:
   --max-issues <n>           max issues to file (default 5)
   --focus "<text>"           steer the audit toward a topic
   --setup "<cmd>"            run in the worktree before the agent
+
+Models:
+  Per role (implementer, reviewer, auditor), highest first: role flag (--implementer-model, --reviewer-model,
+  --auditor-model) > --model > role env (BUNKER_IMPLEMENTER_MODEL, BUNKER_REVIEWER_MODEL, BUNKER_AUDITOR_MODEL)
+  > BUNKER_MODEL > Claude Code's own default (no --model is passed). Env vars follow the Auth precedence below,
+  so a repo's .bunker/.env can set its own defaults. The model in use is shown when each role starts, in the run
+  log, the PR body and --ui; "Claude default" when none is set.
 
 Auth:
   Put CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) in ~/.config/bunker/.env,

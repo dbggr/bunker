@@ -17,6 +17,8 @@ claude setup-token
 
 Copy [`.env.example`](../.env.example) to `~/.config/bunker/.env` and set `CLAUDE_CODE_OAUTH_TOKEN` to the token it printed. One file covers every repo. A repo can override it in its own `.bunker/.env` (gitignored). Precedence: exported variables > `<repo>/.bunker/.env` > `~/.config/bunker/.env`.
 
+Models are chosen per role (implementer, reviewer, auditor): `BUNKER_MODEL` sets all of them, `BUNKER_IMPLEMENTER_MODEL` / `BUNKER_REVIEWER_MODEL` / `BUNKER_AUDITOR_MODEL` one role, in the same `.env` files. Flags win: `--implementer-model`, `--reviewer-model`, `--auditor-model`, and `--model` for all. Per role: role flag > `--model` > role env > `BUNKER_MODEL` > Claude Code's default. The model is shown when each role starts, in the run log, in the PR body and in `--ui`.
+
 ## 3. Create a scoped GitHub token
 
 Set `BUNKER_GH_TOKEN` in the same `.env`. bunker's own `gh` and `git` calls use it instead of your login. Create a fine-grained token (GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens), restricted to the one repository, with a short expiry and exactly these permissions:
