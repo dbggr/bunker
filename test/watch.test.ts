@@ -151,6 +151,43 @@ describe("runWatch() --audit-every", () => {
   });
 });
 
+describe("runWatch() --triage-every", () => {
+  const triager = (calls: string[]): Agent => ({
+    command(prompt) {
+      calls.push(prompt);
+      return ["sh", "-c", `echo '<triage>{"verdicts": [{"issue": 1, "verdict": "fixed", "evidence": "gone"}]}</triage>'`];
+    },
+  });
+  const run = async (repo: string, calls: string[], triageEveryHours?: number) => {
+    const ctl = new AbortController();
+    return runWatch({
+      ...base, cwd: repo, agent: fakeAgent(), auditor: triager(calls), ...(triageEveryHours === undefined ? {} : { triageEveryHours }), signal: ctl.signal,
+      log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); },
+    });
+  };
+
+  test("comments and closes once per period, never labels, and records it", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    const calls: string[] = [];
+    await run(repo, calls, 12);
+    expect(calls).toHaveLength(1);
+    const log = await Bun.file(join(root, "gh.log")).text();
+    expect(log).toMatch(/issue close 1 --comment/);
+    expect(log).not.toMatch(/--add-label (bunker|priority)/);
+    const state = JSON.parse(await Bun.file(join(repo, ".bunker", "watch-state.json")).text());
+    expect(Date.now() - state.lastTriageAt).toBeLessThan(60_000);
+    await run(repo, calls, 12);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("is off by default", async () => {
+    const { repo } = await setup(three.slice(0, 1));
+    const calls: string[] = [];
+    await run(repo, calls);
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("runWatch()", () => {
   test("runs passes until stopped, one line per pass", async () => {
     const { repo } = await setup(three.slice(0, 2));

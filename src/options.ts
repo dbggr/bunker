@@ -35,6 +35,7 @@ export const options = {
   "max-cost-day": { type: "string" },
   "max-cost-month": { type: "string" },
   "audit-every": { type: "string" },
+  "triage-every": { type: "string" },
   audit: { type: "boolean", default: false },
   "max-issues": { type: "string" },
   focus: { type: "string" },
