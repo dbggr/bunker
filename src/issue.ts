@@ -784,6 +784,17 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
       return fail("needs-review", { ...opened, error: `the PR changes ${shown}, which a human must review: bunker left auto-merge off${labelled.exitCode === 0 ? "" : " (could not add the needs-human-review label: " + labelled.stderr.toString().trim() + ")"}` });
     }
 
+    // Without a required status check GitHub merges an already-mergeable PR the moment auto-merge is armed.
+    // Reads the repository ruleset endpoint only; a failed or unreadable lookup refuses too.
+    const rules = await $`gh api repos/{owner}/{repo}/rules/branches/${defaultBranch}`.cwd(worktree).env(env).nothrow().quiet();
+    if (rules.exitCode !== 0) return fail("merge-failed", { ...opened, error: `could not read the required status checks of ${defaultBranch}, so bunker will not arm auto-merge (gh api exit ${rules.exitCode}):\n${rules.stderr.toString().trim()}` });
+    let hasRequiredCheck = false;
+    try {
+      const list = JSON.parse(rules.stdout.toString()) as { type?: string; parameters?: { required_status_checks?: unknown[] } }[];
+      hasRequiredCheck = list.some((r) => r.type === "required_status_checks" && (r.parameters?.required_status_checks?.length ?? 0) > 0);
+    } catch {}
+    if (!hasRequiredCheck) return fail("merge-failed", { ...opened, error: `${defaultBranch} has no required status check in its rulesets, so bunker will not arm auto-merge (the PR would merge immediately, gated only by the agent reviewer). Require a status check on ${defaultBranch} (\`bunker doctor\` checks this).` });
+
     // GitHub merges once the required checks pass (and refuses if they fail), so bunker never reads CI.
     // No --delete-branch: gh would also switch/delete the local branch, which fails in a worktree.
     const armed = await $`gh pr merge ${prUrl} --auto --squash`.cwd(worktree).env(env).nothrow().quiet();

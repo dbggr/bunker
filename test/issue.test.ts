@@ -105,6 +105,7 @@ async function setup(issue: object, mergeMode: "ff" | "drop" | "fail" | "none" |
   const { authorAssociation, ...viewable } = issue as { authorAssociation?: string };
   // `gh issue view --json` has no authorAssociation field for issues; reject it like the real gh does.
   await Bun.write(join(root, "issue.json"), JSON.stringify(viewable));
+  await Bun.write(join(root, "rules.json"), JSON.stringify([{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "test" }] } }]));
   await Bun.write(join(root, "perm-bob"), "maintain");
   await Bun.write(join(root, "perm-alice"), "admin");
   await Bun.write(join(root, "perm-triager"), "triage");
@@ -164,6 +165,11 @@ if [ "$1 $2" = "api repos/{owner}/{repo}/issues/7" ]; then
   echo "$*" >> "${root}/assoc.log"
   if [ -f "${root}/assoc.fail" ]; then echo "boom" >&2; exit 1; fi
   cat "${root}/assoc.txt"; exit 0
+fi
+if [ "$1 $2" = "api repos/{owner}/{repo}/rules/branches/main" ]; then
+  echo "$*" >> "${root}/rules.log"
+  if [ -f "${root}/rules.fail" ]; then echo "HTTP 403" >&2; exit 1; fi
+  cat "${root}/rules.json"; exit 0
 fi
 if [ "$1" = "api" ]; then
   case "$*" in *"/permission"*) l="$*"; l=\${l#*collaborators/}; l=\${l%%/*}; if [ -f "${root}/perm-$l" ]; then cat "${root}/perm-$l"; exit 0; fi; echo "HTTP 404" >&2; exit 1;; esac
@@ -772,6 +778,37 @@ describe("runIssue() --merge", () => {
     expect(r.error).toContain("bunker doctor");
     expect((await Bun.file(mergeLog).text()).trim().split("\n")).toEqual(["|pr merge https://github.com/o/r/pull/99 --auto --squash"]);
     expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
+  });
+
+  test.each([
+    ["no rules at all", "[]"],
+    ["a status-check rule with no checks", JSON.stringify([{ type: "required_status_checks", parameters: { required_status_checks: [] } }])],
+    ["unrelated rules only", JSON.stringify([{ type: "deletion" }])],
+    ["unparseable output", "not json"],
+  ])("%s on the default branch → merge-failed, auto-merge never armed", async (_name, rules) => {
+    const { repo, mergeLog } = await setup(issue(), "ff");
+    await Bun.write(join(dirname(mergeLog), "rules.json"), rules);
+    const r = await run(repo);
+    expect(r.status).toBe("merge-failed");
+    expect(r.error).toMatch(/required status check/i);
+    expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
+    expect(await Bun.file(mergeLog).exists()).toBe(false);
+  });
+
+  test("failed rules lookup → merge-failed, auto-merge never armed", async () => {
+    const { repo, mergeLog } = await setup(issue(), "ff");
+    await Bun.write(join(dirname(mergeLog), "rules.fail"), "");
+    const r = await run(repo);
+    expect(r.status).toBe("merge-failed");
+    expect(r.error).toMatch(/could not read/i);
+    expect(await Bun.file(mergeLog).exists()).toBe(false);
+  });
+
+  test("required checks come from the rules endpoint only, no classic protection lookup", async () => {
+    const { repo, mergeLog } = await setup(issue(), "ff");
+    const r = await run(repo);
+    expect(r.status).toBe("merged");
+    expect((await Bun.file(join(dirname(mergeLog), "rules.log")).text()).trim()).toBe("api repos/{owner}/{repo}/rules/branches/main");
   });
 
   test.each([".bunker/verify", ".github/workflows/ci.yml"])("a PR touching %s → no auto-merge, labelled needs-human-review, needs-review", async (path) => {

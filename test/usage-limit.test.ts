@@ -69,7 +69,7 @@ async function setup() {
     join(bin, "gh"),
     `#!/bin/sh
 echo "$*" >> "${root}/gh.log"
-if [ "$1" = "api" ]; then case "$*" in *graphql*|*renamed*) exit 0;; *created_at*) echo 2020-01-01T00:00:00Z; exit 0;; *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
+if [ "$1" = "api" ]; then case "$*" in *"/rules/branches/"*) echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]'; exit 0;; *graphql*|*renamed*) exit 0;; *created_at*) echo 2020-01-01T00:00:00Z; exit 0;; *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
 if [ "$1 $2" = "issue list" ]; then printf '['; [ -f "${root}/q.json" ] && cat "${root}/q.json"; printf ']'; exit 0; fi
 if [ "$1 $2" = "issue view" ]; then cat "${root}/issue.json"; exit 0; fi
 if [ "$1 $2" = "issue edit" ]; then rm -f "${root}/q.json"; exit 0; fi

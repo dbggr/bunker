@@ -23,7 +23,7 @@ After approval, `.bunker/verify` (or `--verify "<cmd>"`) runs in the worktree in
 
 ## PR, auto-merge and the landing check
 
-bunker pushes the branch and opens a PR with `Closes #N`. With `--merge` it asks GitHub for auto-merge (squash), so GitHub merges once the required checks pass. bunker never reads CI itself. It polls the PR until it is merged or closed, or `--ci-timeout` minutes pass. After the merge it checks that the files the branch changed are identical on `origin/<default>` and the branch tip (the landing check), then cleans up.
+bunker pushes the branch and opens a PR with `Closes #N`. With `--merge` it first reads the default branch's repository rulesets and refuses (`merge-failed`) unless a required status check is set (or if the lookup fails), because without one GitHub merges at once. Then it asks GitHub for auto-merge (squash), so GitHub merges once the required checks pass. bunker never reads CI itself. It polls the PR until it is merged or closed, or `--ci-timeout` minutes pass. After the merge it checks that the files the branch changed are identical on `origin/<default>` and the branch tip (the landing check), then cleans up.
 
 Outcomes: `idle-timeout` (an agent went quiet, or setup/verify ran too long; worktree and branch kept), `merged`, `ci-timeout` (PR left open, auto-merge still armed), `merge-failed`, `merge-unverified` (merged, but files differ on the default branch), plus `rejected`, `failed`, `conflict`, `verify-failed` and `pr-opened` (no `--merge`).
 

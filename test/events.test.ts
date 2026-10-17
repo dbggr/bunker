@@ -202,6 +202,7 @@ describe("onEvent", () => {
 if [ "$1 $2" = "issue view" ]; then echo '{"number":7,"title":"feat: Add","body":"x","state":"OPEN","labels":[],"author":{"login":"o"}}'; exit 0; fi
 if [ "$1 $2" = "pr create" ]; then echo https://github.com/o/r/pull/9; exit 0; fi
 if [ "$1 $2" = "pr view" ]; then echo '{"state":"MERGED"}'; exit 0; fi
+case "$*" in *"/rules/branches/"*) echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]'; exit 0;; esac
 if [ "$1" = "api" ]; then echo OWNER; exit 0; fi
 exit 0
 `,
