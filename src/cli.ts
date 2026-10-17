@@ -446,7 +446,7 @@ if (values.audit) {
   if (pausedRun) {
     console.log(`bunker: paused on the Claude usage limit (#${pausedRun.issue}); ${rerunHint(pausedRun.pause?.resetAt)}`);
     process.exitCode = 3;
-  } else if (results.some((r) => r.status !== "blocked" && r.status !== "already-in-progress" && r.status !== (values.merge ? "merged" : "pr-opened"))) process.exitCode = 1;
+  } else if (results.some((r) => r.status !== "blocked" && r.status !== "already-in-progress" && r.status !== "needs-review" && r.status !== (values.merge ? "merged" : "pr-opened"))) process.exitCode = 1;
 } else if (values.issue !== undefined) {
   const issue = Number(values.issue);
   if (!Number.isInteger(issue) || issue < 1) {
@@ -480,7 +480,7 @@ if (values.audit) {
   if (result.review?.usage) console.log(`bunker: cost ${formatUsage(result.review.usage)}`);
   if (result.logPath) console.log(`bunker: log ${tty ? hyperlink(result.logPath) : result.logPath}`);
   if (result.status === "paused-usage-limit") process.exitCode = 3;
-  else if (result.status !== (values.merge ? "merged" : "pr-opened")) process.exitCode = 1;
+  else if (result.status !== (values.merge ? "merged" : "pr-opened") && result.status !== "needs-review") process.exitCode = 1;
 } else if (values.review) {
   const reviewer = reviewerAgent();
   const result = await review({ onEvent, prompt, agent, reviewer, sandbox, maxRounds, resume, ...timeouts });

@@ -53,6 +53,34 @@ describe("run() with noSandbox", () => {
     expect(await $`git -C ${repo} log -1 --format=%s`.text()).toBe("agent: add a\n");
   });
 
+  test("the agent sees a temporary empty HOME, not the real one, and a warning is printed", async () => {
+    const repo = await makeRepo();
+    const realHome = await mkdtemp(join(tmpdir(), "bunker-realhome-"));
+    dirs.push(realHome);
+    await $`mkdir -p ${realHome}/.config/bunker ${realHome}/.ssh`;
+    await Bun.write(join(realHome, ".config/bunker/.env"), "BUNKER_GH_TOKEN=secret\n");
+    await Bun.write(join(realHome, ".claude.json"), "{}");
+    const origHome = process.env.HOME;
+    const origWarn = output.warn;
+    const warned: string[] = [];
+    output.warn = (s) => void warned.push(s);
+    process.env.HOME = realHome;
+    try {
+      const probe = fakeAgent(`echo "$HOME" > seen-home.txt; ls -A "$HOME" > seen-ls.txt; test -e "$HOME/.config/bunker/.env" && echo LEAK > leak.txt; git add -A; git commit -qm probe`);
+      const result = await run({ cwd: repo, prompt: "x", agent: probe, sandbox: noSandbox() });
+      expect(result.commits).toHaveLength(1);
+      const seen = (await $`git -C ${repo} show HEAD:seen-home.txt`.text()).trim();
+      expect(seen).not.toBe(realHome);
+      expect(seen).toContain("bunker-home-");
+      expect(await $`git -C ${repo} show HEAD:seen-ls.txt`.text()).not.toContain(".ssh");
+      expect(await $`git -C ${repo} ls-tree --name-only HEAD`.text()).not.toContain("leak.txt");
+      expect(warned.join("")).toMatch(/--no-sandbox.*no isolation/i);
+    } finally {
+      process.env.HOME = origHome;
+      output.warn = origWarn;
+    }
+  });
+
   test("removes the worktree and the bunker branch afterwards", async () => {
     const repo = await makeRepo();
 
