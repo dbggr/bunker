@@ -83,6 +83,8 @@ exit 1
 `,
   );
   await chmod(join(bin, "gh"), 0o755);
+  await Bun.write(join(bin, "notify-send"), `#!/bin/sh\nshift\necho "$*" >> "${root}/notify.log"\n`);
+  await chmod(join(bin, "notify-send"), 0o755);
   process.env.PATH = `${bin}:${origPath}`;
   return { repo, root };
 }
@@ -185,6 +187,33 @@ describe("runWatch()", () => {
     expect(comments).toContain("agent exited with 1");
     expect(comments).toMatch(/\.bunker\/runs\//);
     expect(prompts.filter((p) => p.includes("Title: First"))).toHaveLength(1);
+  });
+
+  test("notifies on a failed issue, a merging pass and the stop; the failed comment @-mentions the user", async () => {
+    const { repo, root } = await setup(three.slice(0, 2));
+    const ctl = new AbortController();
+    await runWatch({
+      ...base, cwd: repo, agent: fakeAgent({ failing: ["First"] }), signal: ctl.signal, notify: true, githubUser: "alice",
+      log: (l) => { if (/pass 2 /.test(l)) ctl.abort(); },
+    });
+    const lines = (await Bun.file(join(root, "notify.log")).text()).trim().split("\n");
+    expect(lines.filter((l) => /issue failed/.test(l))).toHaveLength(1);
+    expect(lines.filter((l) => /pass merged PRs/.test(l))).toHaveLength(1);
+    expect(lines.filter((l) => /watcher stopped/.test(l))).toHaveLength(1);
+    expect(lines).toHaveLength(3);
+    expect(await Bun.file(join(root, "comments.log")).text()).toContain("COMMENT: --body @alice");
+  });
+
+  test("notify: false silences everything, and the owner (a user) is @-mentioned by default", async () => {
+    const { repo, root } = await setup(three.slice(0, 2));
+    await Bun.write(join(root, "bin", "gh"), (await Bun.file(join(root, "bin", "gh")).text()).replace('if [ "$1" = "api" ]; then case', 'if [ "$1" = "api" ]; then case "$2" in "repos/{owner}/{repo}") echo "User bob"; exit 0;; esac; case'));
+    const ctl = new AbortController();
+    await runWatch({
+      ...base, cwd: repo, agent: fakeAgent({ failing: ["First"] }), signal: ctl.signal, notify: false,
+      log: (l) => { if (/pass 2 /.test(l)) ctl.abort(); },
+    });
+    expect(existsSync(join(root, "notify.log"))).toBe(false);
+    expect(await Bun.file(join(root, "comments.log")).text()).toContain("COMMENT: --body @bob");
   });
 
   test("a failed relabel never makes the same watcher retry the issue", async () => {

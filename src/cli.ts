@@ -122,7 +122,7 @@ if (positionals.length === 1 && positionals[0] === "ui") {
 const { config: repoCfg, legacy: legacyCfg } = await loadRepoConfigOrExit(process.cwd());
 const prompt = positionals.join(" ");
 const tasks = values.task ?? [];
-let watchOpts: { intervalMs: number; maxCostDayUsd?: number; maxCostMonthUsd?: number; forMs?: number; auditEveryDays?: number } | undefined;
+let watchOpts: { intervalMs: number; maxCostDayUsd?: number; maxCostMonthUsd?: number; forMs?: number; auditEveryDays?: number; notify: boolean; githubUser?: string } | undefined;
 if (values.watch) {
   if (prompt || tasks.length || values.review || values.issue !== undefined || values.queue || values.audit || values.limit !== undefined) {
     console.error("bunker: --watch can't be combined with a prompt, --task, --review, --issue, --queue, --audit or --limit");
@@ -169,11 +169,11 @@ if (values.watch) {
     console.error("bunker: --watch needs a verify command: pass --verify \"<cmd>\" or set verify in .bunker/config.toml");
     process.exit(2);
   }
-  watchOpts = { intervalMs: intervalMin * 60_000, ...(caps.day === undefined ? {} : { maxCostDayUsd: caps.day }), ...(caps.month === undefined ? {} : { maxCostMonthUsd: caps.month }), ...(forMs === undefined ? {} : { forMs }), ...(auditEveryDays === undefined ? {} : { auditEveryDays }) };
+  watchOpts = { intervalMs: intervalMin * 60_000, ...(caps.day === undefined ? {} : { maxCostDayUsd: caps.day }), ...(caps.month === undefined ? {} : { maxCostMonthUsd: caps.month }), ...(forMs === undefined ? {} : { forMs }), ...(auditEveryDays === undefined ? {} : { auditEveryDays }), notify: !values["no-notify"] && repoCfg.notify.desktop !== false, ...(repoCfg.notify.github_user === undefined ? {} : { githubUser: repoCfg.notify.github_user }) };
   values.queue = true;
   values.merge = true;
-} else if (values.interval !== undefined || values.for !== undefined || values["max-cost"] !== undefined || values["max-cost-day"] !== undefined || values["max-cost-month"] !== undefined || values["audit-every"] !== undefined) {
-  console.error("bunker: --interval, --for, --max-cost, --max-cost-day, --max-cost-month and --audit-every only apply to --watch");
+} else if (values.interval !== undefined || values.for !== undefined || values["max-cost"] !== undefined || values["max-cost-day"] !== undefined || values["max-cost-month"] !== undefined || values["audit-every"] !== undefined || values["no-notify"]) {
+  console.error("bunker: --interval, --for, --max-cost, --max-cost-day, --max-cost-month, --audit-every and --no-notify only apply to --watch");
   process.exit(2);
 }
 if (values.audit) {

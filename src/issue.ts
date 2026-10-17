@@ -32,6 +32,8 @@ export interface IssueOptions extends Timeouts {
   /** Reviews each round. Defaults to `agent`. */
   reviewer?: Agent;
   sandbox: Sandbox;
+  /** GitHub login @-mentioned in the comment left when the issue becomes `bunker-blocked`. */
+  mention?: string;
   /** The target repo's main checkout. Defaults to process.cwd(). */
   cwd?: string;
   maxRounds?: number;
@@ -218,11 +220,11 @@ const BLOCKED_LABEL = "bunker-blocked";
 type Env = Record<string, string>;
 
 /** Swaps `bunker` for `bunker-blocked` on the issue and says what it waits on. */
-async function markBlocked(issue: number, blocker: { number: number; title: string }, cwd: string, env: Env): Promise<void> {
+async function markBlocked(issue: number, blocker: { number: number; title: string }, cwd: string, env: Env, mention?: string): Promise<void> {
   await $`gh label create ${BLOCKED_LABEL} --description ${"waiting on another issue; bunker relabels it `bunker` once that is closed"} --color FBCA04`.cwd(cwd).env(env).nothrow().quiet();
   const edit = await $`gh issue edit ${issue} --remove-label bunker --add-label ${BLOCKED_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
   if (edit.exitCode !== 0) console.warn(`bunker: could not relabel #${issue}: ${edit.stderr.toString().trim()}`);
-  await $`gh issue comment ${issue} --body ${`Blocked by #${blocker.number}: ${blocker.title}`}`.cwd(cwd).env(env).nothrow().quiet();
+  await $`gh issue comment ${issue} --body ${`${mention ? `@${mention} ` : ""}Blocked by #${blocker.number}: ${blocker.title}`}`.cwd(cwd).env(env).nothrow().quiet();
 }
 
 /** Whether #n is closed (any reason, incl. not planned: a rejected blocker no longer blocks); undefined if gh can't say. */
@@ -447,7 +449,7 @@ async function reclaimLeftover(o: { repo: string; cwd: string; number: number; b
 
 const stamp = () => new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 
-async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
+async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyOnHost, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, mention, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -650,7 +652,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
       log(`gh issue create failed: ${blocker.title}`, created.stderr.toString());
     } else {
       const blockedBy = { number: Number(m[1]), title: blocker.title };
-      await markBlocked(number, blockedBy, cwd, env);
+      await markBlocked(number, blockedBy, cwd, env, mention);
       await worktreeAdmin(() => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
       await worktreeAdmin(() => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
       emit(onEvent, { type: "note", text: `blocked by #${blockedBy.number}: ${blockedBy.title}` });

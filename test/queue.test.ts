@@ -392,6 +392,13 @@ describe("blocked issues", () => {
     };
   }
 
+  test("the blocked comment @-mentions the configured login", async () => {
+    const { repo } = await setup(issues);
+    await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: blockingAgent(), mention: "alice" });
+    const edits = await Bun.file(join(repo, "..", "edits.log")).text();
+    expect(edits).toContain("issue comment 1 --body @alice Blocked by #100: Need the thing");
+  });
+
   test("files the blocker as discovered, relabels, comments, no push or PR, cleans up", async () => {
     const { repo, createLog } = await setup(issues);
     const r = await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: blockingAgent() });

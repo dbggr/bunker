@@ -85,6 +85,9 @@ Single prompt and --task:
                              Also max-cost-day in ~/.config/bunker/config.toml. `--max-cost` is an alias
   --max-cost-month <usd>     same for a rolling 30 days (default: no cap; config.toml: max-cost-month)
   --audit-every <days>       also run --audit at most once per this many days, kept in .bunker/watch-state.json (default off; 30 is a good value)
+  --no-notify                no desktop notifications (notify-send / osascript; skipped silently when absent) for: usage-limit pause, spend cap,
+                             watcher stopped or crashed, an issue becoming bunker-failed or bunker-blocked, and a pass that merged PRs.
+                             Texts are redacted. Comments on failed/blocked issues @-mention notify.github_user (default: the repo owner, if a user)
   Failed issues get `bunker-failed` instead of `bunker` and are never retried automatically.
 
 --audit:
@@ -111,7 +114,7 @@ Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a sep
   Precedence: CLI flag > env var > config.toml > legacy files (.bunker/setup, verify, copy) > built-in default.
   Legacy files keep working but are deprecated (a note is printed when both exist). Unknown keys warn; a key of
   the wrong type exits 2. queue.allow_labelers is read from the checkout you run in, so only list people you trust.
-  Keys (tables: [models], [watch], [merge], [queue]):
+  Keys (tables: [models], [watch], [merge], [queue], [notify]):
   setup                  shell command run in each worktree before the agent (legacy: .bunker/setup)
   verify                 command that must pass before anything is pushed (legacy: .bunker/verify)
   copy                   gitignored paths or globs copied into each worktree (legacy: .bunker/copy)
@@ -126,6 +129,8 @@ Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a sep
   watch.audit_every      days between periodic --audit runs in --watch
   merge.ci_timeout       minutes --merge waits for CI (default 30)
   queue.allow_labelers   GitHub logins besides maintainers who may add the `bunker` label
+  notify.desktop         desktop notifications (notify-send / osascript) from --watch (default true)
+  notify.github_user     GitHub login @-mentioned when an issue becomes bunker-failed or bunker-blocked (default: the repo owner, if a user)
 
 Legacy .bunker/copy (same as copy in config.toml):
   .bunker/copy               gitignored files to copy from your checkout into each worktree before setup (e.g. .env):

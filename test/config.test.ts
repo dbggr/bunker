@@ -31,6 +31,10 @@ ci_timeout = 45
 
 [queue]
 allow_labelers = ["alice", "bob"]
+
+[notify]
+desktop = false
+github_user = "carol"
 `;
 
 describe("parseConfig", () => {
@@ -45,11 +49,12 @@ describe("parseConfig", () => {
       watch: { interval: 5, parallel: 3, max_cost_day: 10, max_cost_month: 100.5, audit_every: 30 },
       merge: { ci_timeout: 45 },
       queue: { allow_labelers: ["alice", "bob"] },
+      notify: { desktop: false, github_user: "carol" },
     });
   });
 
   test("empty file is an empty config", () => {
-    expect(parseConfig("").config).toEqual({ models: {}, watch: {}, merge: {}, queue: {} });
+    expect(parseConfig("").config).toEqual({ models: {}, watch: {}, merge: {}, queue: {}, notify: {} });
   });
 
   test("unknown keys warn, naming the key", () => {
@@ -68,6 +73,7 @@ describe("parseConfig", () => {
     ["[watch]\ninterval = 'x'", "watch.interval", "positive number"],
     ["[watch]\ninterval = 0", "watch.interval", "positive number"],
     ["[watch]\nparallel = 1.5", "watch.parallel", "positive integer"],
+    ["[notify]\ndesktop = \"yes\"", "notify.desktop", "true or false"],
     ["[watch]\nmax_cost_day = -1", "watch.max_cost_day", "positive number"],
     ["[merge]\nci_timeout = 'a'", "merge.ci_timeout", "positive number"],
     ["[queue]\nallow_labelers = 'a'", "queue.allow_labelers", "array of strings"],
