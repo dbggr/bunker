@@ -445,6 +445,15 @@ describe("runIssue()", () => {
     expect((await Bun.file(join(r2.worktree, "setup.out")).text()).trim()).toBe("EXPLICIT");
   });
 
+  test("PR body round lines show the implementer and reviewer models", async () => {
+    const { repo, prLog } = await setup(issue());
+    const agent = { ...fakeAgent(APPROVE), model: "impl-m" };
+    const reviewer = { ...fakeAgent(APPROVE), model: "rev-m" };
+    const r = await runIssue({ cwd: repo, issue: 7, agent, reviewer, sandbox: noSandbox() });
+    expect(r.status).toBe("pr-opened");
+    expect(await Bun.file(prLog).text()).toContain("(implementer: impl-m, reviewer: rev-m)");
+  });
+
   test(".bunker/verify is the default verify; --verify overrides it; PR body names the source", async () => {
     const { repo, prLog } = await setup(issue());
     await $`mkdir -p ${repo}/.bunker`;

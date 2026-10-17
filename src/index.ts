@@ -8,6 +8,7 @@ import { extractOutput, reportOutput, verdictOutput, type Report, type Verdict }
 import { output, tailLines } from "./output.ts";
 import { emit, findSessionId, findStreamResult, parseClaudeStreamLine, type OnEvent, type Stage, type StreamEvent } from "./events.ts";
 export type { BunkerEvent, OnEvent } from "./events.ts";
+import { modelLabel } from "./models.ts";
 import baseDockerfile from "../images/base/Dockerfile" with { type: "text" };
 
 export type AgentMode = "write" | "review";
@@ -22,6 +23,8 @@ export interface Agent {
   parse?(stdout: string): { text: string; usage?: Usage };
   /** Turns one line of the command's stdout into progress events. Omit if stdout isn't a stream. */
   parseLine?(line: string): StreamEvent[];
+  /** The model this agent runs, if one is set (otherwise the agent's own default). */
+  model?: string;
 }
 
 /** What a run cost. */
@@ -136,6 +139,7 @@ function parseClaudeJson(stdout: string): { text: string; usage?: Usage } {
 
 export function claudeCode(opts: { model?: string; attribution?: boolean; json?: boolean } = {}): Agent {
   return {
+    ...(opts.model ? { model: opts.model } : {}),
     ...(opts.json ? { parse: parseClaudeJson, parseLine: parseClaudeStreamLine } : {}),
     ...(opts.json ? { sessionId: findSessionId } : {}),
     command: (prompt, mode = "write", o) => [
@@ -395,7 +399,7 @@ export interface EventTarget {
   onRaw?: ((line: string) => void) | undefined;
   task?: number;
   round?: number;
-  role?: "implementer" | "reviewer";
+  role?: "implementer" | "reviewer" | "auditor";
 }
 
 /** The exec `onLine` hook for `agent`: parsed events to onEvent, raw lines to onRaw. Undefined if nobody listens or the agent doesn't stream. */
@@ -412,8 +416,8 @@ function lineHook(agent: Agent, t: EventTarget): ((line: string) => void) | unde
   };
 }
 
-export function emitStage(t: Pick<EventTarget, "onEvent" | "task" | "round" | "role">, name: Stage, text?: string) {
-  emit(t.onEvent, { type: "stage", name, ...(t.task !== undefined ? { task: t.task } : {}), ...(t.round !== undefined ? { round: t.round } : {}), ...(t.role ? { role: t.role } : {}), ...(text ? { text } : {}) });
+export function emitStage(t: Pick<EventTarget, "onEvent" | "task" | "round" | "role">, name: Stage, text?: string, model?: string) {
+  emit(t.onEvent, { type: "stage", name, ...(model ? { model } : {}), ...(t.task !== undefined ? { task: t.task } : {}), ...(t.round !== undefined ? { round: t.round } : {}), ...(t.role ? { role: t.role } : {}), ...(text ? { text } : {}) });
 }
 
 /** A failed agent run; carries the usage already spent. */
@@ -531,7 +535,7 @@ async function runAgent(
   try {
     for (let i = 0; i < maxIterations; i++) {
       const target = { onEvent, task, round: i + 1, role: "implementer" as const };
-      emitStage(target, "implement");
+      emitStage(target, "implement", undefined, modelLabel(agent));
       const onLine = lineHook(agent, target);
       const step = await agentStep({
         agent, sandbox, mode: "write", prompt, prev: resume ? prev : undefined, target,
@@ -766,7 +770,7 @@ export async function review({
       const feedback = rounds.at(-1)?.feedback;
       const task = feedback === undefined ? prompt : `${prompt}\n\nA reviewer requested changes:\n${feedback}`;
       const implTarget = { onEvent, onRaw, round: i + 1, role: "implementer" as const };
-      emitStage(implTarget, "implement");
+      emitStage(implTarget, "implement", undefined, modelLabel(agent));
       const implHook = lineHook(agent, implTarget);
       const impl = await agentStep({
         agent, sandbox, mode: "write", prompt: task, target: implTarget,
@@ -786,7 +790,7 @@ export async function review({
       const head = (await $`git -C ${wt.path} rev-parse HEAD`.text()).trim();
       const diff = await $`git -C ${wt.path} diff ${base}..HEAD`.text();
       const revTarget = { onEvent, onRaw, round: i + 1, role: "reviewer" as const };
-      emitStage(revTarget, "review");
+      emitStage(revTarget, "review", undefined, modelLabel(reviewer));
       const revHook = lineHook(reviewer, revTarget);
       // Reviewers never resume: each review is independent.
       const revPrompt = reviewerPrompt(prompt, diff, reviewerInstruction, approveSignal);

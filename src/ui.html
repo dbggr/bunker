@@ -118,12 +118,12 @@ function onEvent(m) {
   if (e.round !== undefined) q(".round").textContent = "round " + e.round + (e.role ? " " + e.role : "");
   if (e.type === "stage") {
     const s = q(".stage");
-    s.textContent = e.name;
+    s.textContent = e.name + (e.model ? " · " + e.model : "");
     s.title = "stage " + (STAGES.indexOf(e.name) + 1) + " of " + STAGES.length + ": " + STAGES.join(" → ");
     s.className = "stage " + (e.name === "merged" ? "merged" : e.name === "failed" ? "failed" : "");
     i.stage = e.name;
     i.done = e.name === "merged" || e.name === "failed";
-    line(i, "stagel", "— " + e.name + (e.text ? " (" + e.text + ")" : ""));
+    line(i, "stagel", "— " + e.name + (e.model ? " · " + e.model : "") + (e.text ? " (" + e.text + ")" : ""));
   } else if (e.type === "meta") {
     if (e.logPath) q(".logpath").textContent = "log: " + e.logPath;
     if (e.url) { const a = document.createElement("a"); a.href = e.url; a.textContent = "PR"; a.target = "_blank"; a.rel = "noreferrer"; q(".pr").replaceChildren(a); }
