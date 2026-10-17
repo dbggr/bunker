@@ -13,6 +13,10 @@ afterEach(() => {
 });
 
 describe("redact()", () => {
+  test("redacts every GitHub token prefix", () => {
+    for (const p of ["ghp", "gho", "ghu", "ghs", "ghr"]) expect(redact(`x ${p}_${"a1".repeat(10)} y`)).toBe("x [REDACTED] y");
+  });
+
   test("replaces values of secret env vars", () => {
     for (const k of VARS) process.env[k] = `opaque-${k}-value`;
     const out = redact(VARS.map((k) => `x ${process.env[k]} y`).join("\n"));

@@ -56,7 +56,7 @@ async function setup(issues: [number, string, string][], mergeMode: "ff" | "none
   await $`mkdir ${bin}`;
   await Bun.write(join(root, "list.json"), JSON.stringify(issues.map(([number, title, createdAt]) => ({ number, title, createdAt }))));
   for (const [number, title] of issues) {
-    await Bun.write(join(root, `issue-${number}.json`), JSON.stringify({ number, title, body: "Do it.", state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, `issue-${number}.json`), JSON.stringify({ number, title, body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker" }] }));
   }
   await Bun.write(
     join(bin, "gh"),
@@ -244,7 +244,7 @@ describe("runQueue()", () => {
     const { repo } = await setup(issues, "ff");
     const root = join(repo, "..");
     await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "x", state: "CLOSED", labels: [{ name: "bunker" }] }));
-    await Bun.write(join(root, "issue-2.json"), JSON.stringify({ number: 2, title: "Second", body: "x", state: "OPEN", labels: [] }));
+    await Bun.write(join(root, "issue-2.json"), JSON.stringify({ number: 2, title: "Second", body: "x", author: { login: "owner" }, state: "OPEN", labels: [] }));
     const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[3, "merged"]]);
   });
@@ -391,7 +391,7 @@ describe("blocked issues", () => {
   test("skips an issue whose body or trusted comment says Blocked by / Depends on an open issue", async () => {
     const { repo } = await setup(issues, "ff");
     const root = join(repo, "..");
-    const mk = (n: number, extra: object) => Bun.write(join(root, `issue-${n}.json`), JSON.stringify({ number: n, title: "t", body: "Do it.", state: "OPEN", labels: [{ name: "bunker" }], ...extra }));
+    const mk = (n: number, extra: object) => Bun.write(join(root, `issue-${n}.json`), JSON.stringify({ number: n, title: "t", body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker" }], ...extra }));
     await mk(1, { body: "blocked BY #50 please" });
     await mk(2, { comments: [{ authorAssociation: "OWNER", body: "Depends on #50" }] });
     await mk(50, {});
@@ -399,10 +399,26 @@ describe("blocked issues", () => {
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[3, "merged"]]);
   });
 
+  test("Blocked by in the body of an untrusted author's issue is ignored; in a read-only collaborator's comment too", async () => {
+    const { repo } = await setup(issues, "ff");
+    const root = join(repo, "..");
+    const bin = join(root, "bin");
+    const orig = await Bun.file(join(bin, "gh")).text();
+    await Bun.write(join(bin, "gh"), orig.replace(/\*"\/permission"\*\) echo admin; exit 0;;/, '*"/permission"*) case "$*" in *mallory*|*triager*) echo read; exit 0;; esac; echo admin; exit 0;;'));
+    const mk = (n: number, extra: object) => Bun.write(join(root, `issue-${n}.json`), JSON.stringify({ number: n, title: "t", body: "Do it.", state: "OPEN", labels: [{ name: "bunker" }], author: { login: "owner" }, ...extra }));
+    await mk(1, { body: "Blocked by #50", author: { login: "mallory" } });
+    await mk(2, { comments: [{ author: { login: "triager" }, authorAssociation: "COLLABORATOR", body: "Depends on #50" }] });
+    await mk(3, {});
+    await mk(50, {});
+    const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 3, ciPollMs: 10, listRetryMs: 10 });
+    expect(rs.map((r) => r.issue)).toContain(1);
+    expect(rs.map((r) => r.issue)).toContain(2);
+  });
+
   test("a reference to a closed issue doesn't block", async () => {
     const { repo } = await setup(issues, "ff");
     const root = join(repo, "..");
-    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "t", body: "Depends on #50", state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "t", body: "Depends on #50", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker" }] }));
     await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "t", body: "", state: "CLOSED", stateReason: "COMPLETED", labels: [] }));
     const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10, listRetryMs: 10 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"]]);
@@ -411,7 +427,7 @@ describe("blocked issues", () => {
   test("a blocker closed as not planned no longer blocks", async () => {
     const { repo } = await setup(issues, "ff");
     const root = join(repo, "..");
-    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "t", body: "Depends on #50", state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "t", body: "Depends on #50", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker" }] }));
     await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "t", body: "", state: "CLOSED", stateReason: "NOT_PLANNED", labels: [] }));
     const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10, listRetryMs: 10 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"]]);
@@ -420,7 +436,7 @@ describe("blocked issues", () => {
   test("auto-resume: a bunker-blocked issue whose blockers closed goes back to bunker and is worked", async () => {
     const { repo } = await setup(issues, "ff");
     const root = join(repo, "..");
-    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Do it.", state: "OPEN", labels: [{ name: "bunker-blocked" }], comments: [{ authorAssociation: "OWNER", body: "Blocked by #50: thing" }] }));
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker-blocked" }], comments: [{ authorAssociation: "OWNER", body: "Blocked by #50: thing" }] }));
     await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "thing", body: "", state: "CLOSED", stateReason: "COMPLETED", labels: [] }));
     await Bun.write(join(root, "blocked-list.json"), JSON.stringify([{ number: 1, title: "First", createdAt: "2026-01-01T00:00:00Z" }]));
     const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10, listRetryMs: 10 });
@@ -434,7 +450,7 @@ describe("blocked issues", () => {
     const { repo } = await setup(issues, "ff");
     const root = join(repo, "..");
     await Bun.write(join(root, "list.json"), "[]");
-    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Do it.", state: "OPEN", labels: [{ name: "bunker-blocked" }], comments: [{ authorAssociation: "OWNER", body: "Blocked by #50: thing" }] }));
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker-blocked" }], comments: [{ authorAssociation: "OWNER", body: "Blocked by #50: thing" }] }));
     await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "thing", body: "", state: "CLOSED", stateReason: "COMPLETED", labels: [] }));
     await Bun.write(join(root, "blocked-list.json"), JSON.stringify([{ number: 1, title: "First", createdAt: "2026-01-01T00:00:00Z" }]));
     const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10, listRetryMs: 10 });
@@ -444,9 +460,9 @@ describe("blocked issues", () => {
   test("auto-resume leaves an issue blocked while any blocker is open", async () => {
     const { repo } = await setup(issues);
     const root = join(repo, "..");
-    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Depends on #50, blocked by #51", state: "OPEN", labels: [{ name: "bunker-blocked" }] }));
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Depends on #50, blocked by #51", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker-blocked" }] }));
     await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, state: "CLOSED", stateReason: "COMPLETED", labels: [] }));
-    await Bun.write(join(root, "issue-51.json"), JSON.stringify({ number: 51, state: "OPEN", labels: [] }));
+    await Bun.write(join(root, "issue-51.json"), JSON.stringify({ number: 51, author: { login: "owner" }, state: "OPEN", labels: [] }));
     await Bun.write(join(root, "blocked-list.json"), JSON.stringify([{ number: 1, title: "First", createdAt: "2026-01-01T00:00:00Z" }]));
     await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), listRetryMs: 10, limit: 1 });
     const edits = (await Bun.file(join(root, "edits.log")).exists()) ? await Bun.file(join(root, "edits.log")).text() : "";
@@ -487,7 +503,7 @@ describe("queue order: priority, bug, age", () => {
     const list = rows.map(([number, createdAt, labels]) => ({ number, title: `T${number}`, createdAt, labels: labels.map((name) => ({ name })) }));
     await Bun.write(join(root, "list.json"), JSON.stringify(list));
     for (const [n, , labels] of rows) {
-      await Bun.write(join(root, `issue-${n}.json`), JSON.stringify({ number: n, title: `T${n}`, body: "Do it.", state: "OPEN", labels: ["bunker", ...labels].map((name) => ({ name })), ...extra[n] }));
+      await Bun.write(join(root, `issue-${n}.json`), JSON.stringify({ number: n, title: `T${n}`, body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: ["bunker", ...labels].map((name) => ({ name })), ...extra[n] }));
     }
     return { ...env, root };
   }
@@ -524,7 +540,7 @@ describe("queue order: priority, bug, age", () => {
       ],
       { 2: { body: "Blocked by #50" } },
     );
-    await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "t", body: "", state: "OPEN", labels: [] }));
+    await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "t", body: "", author: { login: "owner" }, state: "OPEN", labels: [] }));
     const rs = await run(repo);
     expect(rs.map((r) => r.issue)).toEqual([1]);
   });

@@ -40,3 +40,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # bunker auth (see .env.example)
 .bunker/.env
+
+# bunker run state (agents can write .git/info/exclude, so ignore these here too)
+.bunker/runs/
+.bunker/sessions/
+.bunker/paused/

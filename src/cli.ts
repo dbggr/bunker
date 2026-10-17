@@ -17,7 +17,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { redact } from "./redact.ts";
 import { createProgress, emit, type BunkerEvent, hyperlink } from "./events.ts";
-import { connectHub, hubReachable, readToken, repoId, startHub, type Hub, type Publisher } from "./ui.ts";
+import { connectHub, hubReachable, readToken, repoId, startHub, viewUrlFor, type Hub, type Publisher } from "./ui.ts";
 import { HELP } from "./help.ts";
 import { options } from "./options.ts";
 import { output } from "./output.ts";
@@ -128,7 +128,7 @@ if (positionals.length === 1 && positionals[0] === "ui") {
     process.exit(2);
   }
   if (await hubReachable(port, readToken())) {
-    console.log(`bunker: hub already running at http://127.0.0.1:${port}`);
+    console.log(`bunker: hub already running at ${viewUrlFor(port, readToken())}`);
     process.exit(0);
   }
   let hub;
@@ -138,7 +138,7 @@ if (positionals.length === 1 && positionals[0] === "ui") {
     console.error(`bunker: could not start the hub: ${e instanceof Error ? e.message : e}`);
     process.exit(2);
   }
-  console.log(`bunker: hub at ${hub.url} (Ctrl-C to quit)`);
+  console.log(`bunker: hub at ${hub.viewUrl} (Ctrl-C to quit)`);
   await new Promise(() => {});
 }
 
@@ -354,7 +354,6 @@ const progress = createProgress({ write: (s) => output.write(redact(s)), tty, co
 // Publish to the shared hub when one is up; --ui makes sure there is one. No hub, no publishing, no errors.
 let hub: Hub | undefined;
 let publisher: Publisher | undefined;
-const hubUrl = `http://127.0.0.1:${uiPort}`;
 if (values.ui || values.audit || values.queue || values.issue !== undefined) {
   try {
     if (values.ui && !(await hubReachable(uiPort, readToken()))) {
@@ -369,7 +368,7 @@ if (values.ui || values.audit || values.queue || values.issue !== undefined) {
       process.exit(2);
     }
   }
-  if (values.ui) console.log(`bunker: live view at ${hub?.url ?? hubUrl}`);
+  if (values.ui) console.log(`bunker: live view at ${hub?.viewUrl ?? viewUrlFor(uiPort, readToken())}`);
 }
 const onEvent = publisher ? (e: BunkerEvent) => (progress.onEvent(e), publisher.onEvent(e)) : progress.onEvent;
 clearProgress = progress.clear;
@@ -533,7 +532,7 @@ if (values.audit) {
 await publisher?.flush();
 if (hub) {
   if (values["ui-keep"]) {
-    console.log(`bunker: run finished; still serving ${hub.url} (Ctrl-C to quit)`);
+    console.log(`bunker: run finished; still serving ${hub.viewUrl} (Ctrl-C to quit)`);
     await new Promise(() => {});
   }
   await hub.stop();

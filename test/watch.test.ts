@@ -56,7 +56,7 @@ async function setup(issues: [number, string, string][]) {
   await $`mkdir -p ${bin} ${root}/q`;
   for (const [number, title, createdAt] of issues) {
     await Bun.write(join(root, "q", `${number}.json`), JSON.stringify({ number, title, createdAt }));
-    await Bun.write(join(root, `issue-${number}.json`), JSON.stringify({ number, title, body: "Do it.", state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, `issue-${number}.json`), JSON.stringify({ number, title, body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker" }] }));
   }
   await Bun.write(
     join(bin, "gh"),
@@ -318,7 +318,7 @@ describe("runWatch() next pass", () => {
 
   test("an issue labelled during pass 1 starts right after it, not after --interval", async () => {
     const { repo, root } = await setup(three.slice(0, 1));
-    await Bun.write(join(root, "issue-2.json"), JSON.stringify({ number: 2, title: "Second", body: "Do it.", state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, "issue-2.json"), JSON.stringify({ number: 2, title: "Second", body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker" }] }));
     // The list lags: issue 2 only shows up in the end-of-pass re-list (list calls: 2 initial + 1 re-list).
     await Bun.write(join(root, "q", "2.json"), JSON.stringify({ number: 2, title: "Second", createdAt: "2026-02-01T00:00:00Z" }));
     await Bun.write(join(root, "hide-2"), "3");
@@ -354,8 +354,8 @@ describe("runWatch() next pass", () => {
 
   test("a queue holding only blocked issues sleeps and does not spin", async () => {
     const { repo, root } = await setup(three.slice(0, 1));
-    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Blocked by #99", state: "OPEN", labels: [{ name: "bunker" }] }));
-    await Bun.write(join(root, "issue-99.json"), JSON.stringify({ number: 99, title: "Other", body: "", state: "OPEN", labels: [] }));
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Blocked by #99", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, "issue-99.json"), JSON.stringify({ number: 99, title: "Other", body: "", author: { login: "owner" }, state: "OPEN", labels: [] }));
     const prompts: string[] = [];
     const lines: string[] = [];
     const s = await runWatch({ ...long, cwd: repo, agent: fakeAgent({ prompts }), forMs: 800, log: (l) => lines.push(l) });

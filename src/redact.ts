@@ -1,7 +1,7 @@
 /** Env vars whose values must never appear in output. */
 const SECRET_VARS = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "BUNKER_GH_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"] as const;
 
-const TOKEN_SHAPES = /github_pat_\w+|gh[po]_[A-Za-z0-9]{10,}|sk-ant-[\w-]+/g;
+const TOKEN_SHAPES = /github_pat_\w+|gh[pousr]_[A-Za-z0-9]{10,}|sk-ant-[\w-]+/g;
 
 /** Replaces known secret values and token-shaped strings with [REDACTED]. */
 export function redact(text: string, env: Record<string, string | undefined> = process.env): string {
