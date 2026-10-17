@@ -9,19 +9,20 @@ export interface RepoConfig {
   models: { implementer?: string; reviewer?: string; auditor?: string; default?: string };
   watch: { interval?: number; parallel?: number; max_cost_day?: number; max_cost_month?: number; audit_every?: number };
   merge: { ci_timeout?: number };
+  notify: { enabled?: boolean; github_user?: string };
 }
 
 /** An invalid `.bunker/config.toml`: the CLI exits 2. */
 export class ConfigError extends Error {}
 
-type Kind = "string" | "strings" | "number" | "integer";
+type Kind = "string" | "strings" | "number" | "integer" | "boolean";
 
 interface KeySpec {
   key: string;
   kind: Kind;
   doc: string;
   /** Shown as the default when nothing sets the key. */
-  default?: string | number | string[];
+  default?: string | number | boolean | string[];
 }
 
 /** Every key of `.bunker/config.toml`, in the order `--help` and `bunker doctor` list them. */
@@ -39,6 +40,8 @@ export const CONFIG_KEYS: KeySpec[] = [
   { key: "watch.max_cost_month", kind: "number", doc: "USD cap per rolling 30 days for --watch" },
   { key: "watch.audit_every", kind: "number", doc: "days between periodic --audit runs in --watch" },
   { key: "merge.ci_timeout", kind: "number", doc: "minutes --merge waits for CI", default: 30 },
+  { key: "notify.enabled", kind: "boolean", doc: "desktop notifications from --watch (notify-send / osascript)", default: true },
+  { key: "notify.github_user", kind: "string", doc: "login @-mentioned when an issue becomes bunker-failed / bunker-blocked (default: the repo owner, if a user)" },
 ];
 
 const EXPECTED: Record<Kind, string> = {
@@ -46,9 +49,10 @@ const EXPECTED: Record<Kind, string> = {
   strings: "an array of strings",
   number: "a positive number",
   integer: "a positive integer",
+  boolean: "true or false",
 };
 
-const TABLES = ["models", "watch", "merge"];
+const TABLES = ["models", "watch", "merge", "notify"];
 
 function check(kind: Kind, v: unknown): boolean {
   switch (kind) {
@@ -60,6 +64,8 @@ function check(kind: Kind, v: unknown): boolean {
       return typeof v === "number" && v > 0 && Number.isFinite(v);
     case "integer":
       return typeof v === "number" && Number.isInteger(v) && v > 0;
+    case "boolean":
+      return typeof v === "boolean";
   }
 }
 
@@ -73,7 +79,7 @@ export function parseConfig(text: string, name = ".bunker/config.toml"): { confi
   } catch (e) {
     throw new ConfigError(`${name}: invalid TOML: ${e instanceof Error ? e.message : e}`);
   }
-  const config: RepoConfig = { models: {}, watch: {}, merge: {} };
+  const config: RepoConfig = { models: {}, watch: {}, merge: {}, notify: {} };
   const warnings: string[] = [];
   const known = new Set(CONFIG_KEYS.map((k) => k.key));
   const root = raw as Record<string, unknown>;
@@ -160,7 +166,7 @@ export async function loadRepoConfigOrExit(dir: string): Promise<LoadedConfig> {
 
 export interface Setting {
   key: string;
-  value: string | number | string[] | undefined;
+  value: string | number | boolean | string[] | undefined;
   source: string;
 }
 

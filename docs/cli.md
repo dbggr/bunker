@@ -82,6 +82,9 @@ Single prompt and --task:
   --watch                    loop: work the queue, sleep, repeat until Ctrl-C; needs --verify or verify in config.toml
   --interval <min>           minutes to sleep when no work is waiting (default 10)
   --for <duration>           stop starting new issues after this long, e.g. 5h, 90m, 2h30m (default: until Ctrl-C)
+  --no-notify                no desktop notifications (notify-send / osascript) for: paused on the usage limit, spend cap
+                             reached, an issue failed or blocked, a pass that merged, watch stopped or crashed. Failed /
+                             blocked comments @-mention notify.github_user (default: the repo owner, if a user account)
   --max-cost-day <usd>       stop starting issues once this much (notional USD, as `claude -p` reports it) was spent in a rolling 24 h,
                              then sleep until the window frees up; kept in .bunker/watch-spend.json (default: no cap).
                              Also max-cost-day in ~/.config/bunker/config.toml. `--max-cost` is an alias
@@ -143,6 +146,8 @@ Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a sep
   watch.max_cost_month   USD cap per rolling 30 days for --watch
   watch.audit_every      days between periodic --audit runs in --watch
   merge.ci_timeout       minutes --merge waits for CI (default 30)
+  notify.enabled         desktop notifications from --watch (notify-send / osascript) (default true)
+  notify.github_user     login @-mentioned when an issue becomes bunker-failed / bunker-blocked (default: the repo owner, if a user)
 
 Legacy .bunker/copy (same as copy in config.toml):
   .bunker/copy               gitignored files to copy from your checkout into each worktree before setup (e.g. .env):

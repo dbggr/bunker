@@ -9,6 +9,7 @@ import { redact } from "./redact.ts";
 import { runAudit } from "./audit.ts";
 import type { Agent } from "./index.ts";
 import { countWaiting, runQueue, type QueueEntry, type QueueOptions } from "./issue.ts";
+import { noNotify, type Notify } from "./notify.ts";
 
 export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult" | "onRefused"> {
   /** Remove leftover worktrees and branches (as `bunker clean --yes`) once the lock is held. */
@@ -35,6 +36,8 @@ export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "ke
   maxIssues?: number;
   /** One line per event. Defaults to console.log. */
   log?: (line: string) => void;
+  /** Desktop notification for events that need the user. Defaults to none. */
+  notify?: Notify;
 }
 
 export interface WatchSummary {
@@ -91,7 +94,7 @@ function acquireLock(file: string): () => void {
  * Works the `bunker` queue with auto-merge, pass after pass, until aborted or `forMs` is up.
  * Any outcome other than `merged` relabels the issue `bunker-failed` so it is never retried by itself.
  */
-export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, auditor, maxIssues, cleanOnStart, log = console.log, ...opts }: WatchOptions): Promise<WatchSummary> {
+export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, auditor, maxIssues, cleanOnStart, log = console.log, notify = noNotify, mention, ...opts }: WatchOptions): Promise<WatchSummary> {
   const cwd = opts.cwd ?? process.cwd();
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
@@ -165,8 +168,9 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     }
     const edit = await $`gh issue edit ${e.issue} --remove-label bunker --add-label ${FAILED_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
     if (edit.exitCode !== 0) log(`bunker: could not relabel #${e.issue}: ${edit.stderr.toString().trim()}`);
+    notify(`bunker: #${e.issue} failed`, `status ${e.status}${e.prUrl ? ` · ${e.prUrl}` : ""}`);
     const body = redact([
-      `bunker --watch did not merge this issue: status \`${e.status}\`.`,
+      `${mention ? `${mention} ` : ""}bunker --watch did not merge this issue: status \`${e.status}\`.`,
       ...(e.error ? ["", "```", e.error.trimEnd(), "```"] : []),
       ...(e.verifyOutput ? ["", "Verify output:", "```", e.verifyOutput.trimEnd(), "```"] : []),
       ...(e.prUrl ? ["", `PR: ${e.prUrl}`] : []),
@@ -185,6 +189,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       if (hit.length) {
         // Every exceeded window must free up before work resumes.
         const at = Math.max(...hit.map((h) => h.liftsAt));
+        notify("bunker: spend cap reached", `${hit.map((h) => `${h.window === "day" ? "daily" : "monthly"} $${h.spent.toFixed(2)} of $${h.cap}`).join(", ")}; no new issues until ${new Date(at).toLocaleString()}`);
         for (const h of hit) log(`bunker: ${h.window === "day" ? "daily" : "monthly"} spend cap reached ($${h.spent.toFixed(2)} of $${h.cap} in ${h.window === "day" ? "24 h" : "30 days"}); no new issues, sleeping until ${new Date(at).toISOString()}`);
         // Re-check at least daily: a timer can't be that long.
         await sleep(Math.min(at - Date.now(), DAY_MS));
@@ -200,7 +205,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       let paused = 0;
       const failedBefore = summary.failed;
       await runQueue({
-        ...opts, cwd, merge: true, limit: Infinity, keepGoing: true, relist: true,
+        ...opts, cwd, mention, merge: true, limit: Infinity, keepGoing: true, relist: true,
         skip: (n) => handled.has(n),
         onRefused: (n) => handled.add(n),
         shouldStop: () => stopped() || capped().length > 0,
@@ -217,7 +222,9 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
             summary.merged++;
           } else if (e.status === "already-in-progress") {
             handled.add(e.issue);
-          } else if (e.status !== "blocked") {
+          } else if (e.status === "blocked") {
+            notify(`bunker: #${e.issue} blocked`, e.error ?? "waiting on another issue");
+          } else {
             summary.failed++;
             await markFailed(e);
           }
@@ -231,11 +238,16 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       if (paused) {
         const wait = pausedUntil !== undefined ? Math.max(0, pausedUntil - Date.now()) : intervalMs;
         const until = new Date(Date.now() + wait).toISOString();
+        notify("bunker: paused on the Claude usage limit", `#${paused} resumes ${new Date(Date.now() + wait).toLocaleString()}`);
         log(`bunker: Claude usage limit reached on #${paused}; paused, sleeping until ${until}${pausedUntil === undefined ? " (no reset time given; using --interval)" : ""}, then resuming the same issue`);
         await sleep(wait);
-        if (!stopped()) log(`bunker: resuming #${paused} after the usage limit`);
+        if (!stopped()) {
+          log(`bunker: resuming #${paused} after the usage limit`);
+          notify("bunker: resumed after the usage limit", `#${paused}`);
+        }
         continue;
       }
+      if (merged > 0) notify(`bunker: pass ${summary.passes} · ${merged} merged`, `${summary.merged} merged so far · $${summary.spentUsd.toFixed(2)} spent`);
       const progressed = merged > 0 || summary.failed > failedBefore;
       idlePasses = progressed ? 0 : idlePasses + 1;
       // Two passes in a row that merged and failed nothing (everything skipped) would spin; sleep instead.
@@ -248,9 +260,13 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       log(`bunker: pass ${summary.passes} · ${merged} merged · next pass in ${Number.isInteger(mins) ? mins : mins.toFixed(2)} min · ${formatSpend(spendFile, caps)}`);
       await sleep(intervalMs);
     }
+  } catch (e) {
+    notify("bunker: watch crashed", e instanceof Error ? e.message : String(e));
+    throw e;
   } finally {
     release();
   }
+  notify("bunker: watch stopped", `${summary.passes} pass(es) · ${summary.merged} merged · ${summary.failed} failed`);
   log(`bunker: watch stopped after ${summary.passes} pass(es) · ${summary.merged} merged · ${summary.failed} failed · $${summary.spentUsd.toFixed(2)} spent`);
   return summary;
 }
