@@ -196,9 +196,10 @@ export function noSandbox(): Sandbox {
       return join(process.env.HOME ?? tmpdir(), ".claude", "projects");
     },
     exec: (cmd, { worktree, prefix, onLine }) =>
+      // detached: own process group, so a terminal Ctrl-C reaches only bunker, which lets the step finish.
       // Explicit env: Bun.spawn otherwise passes the startup environment, dropping
       // anything set at runtime (e.g. the token loaded from .bunker/.env).
-      teeStdout(Bun.spawn(cmd, { cwd: worktree, env: agentEnv(), stdio: ["ignore", "pipe", "inherit"] }), prefix, onLine),
+      teeStdout(Bun.spawn(cmd, { cwd: worktree, env: agentEnv(), stdio: ["ignore", "pipe", "inherit"], detached: true }), prefix, onLine),
   };
 }
 
@@ -324,7 +325,7 @@ function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions):
         image,
         ...args,
       ];
-      return teeStdout(Bun.spawn(argv, { env: process.env, stdio: ["ignore", "pipe", "inherit"] }), prefix, onLine);
+      return teeStdout(Bun.spawn(argv, { env: process.env, stdio: ["ignore", "pipe", "inherit"], detached: true }), prefix, onLine);
     },
   };
 }

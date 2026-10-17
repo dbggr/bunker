@@ -236,3 +236,14 @@ describe.skipIf(!dockerUp)("run() with docker", () => {
     expect((await $`find ${join(repo, ".git")} -not -user ${uid}`.text()).trim()).toBe("");
   }, 60_000);
 });
+
+describe("terminal Ctrl-C", () => {
+  test("noSandbox runs the agent in its own process group, so a terminal SIGINT misses it", async () => {
+    const repo = await makeRepo();
+    const res = await noSandbox().exec(["sh", "-c", "cut -d' ' -f5 /proc/$$/stat"], { worktree: repo, gitCommonDir: join(repo, ".git") });
+    const childPgid = Number(res.stdout.trim());
+    const ours = Number((await Bun.file("/proc/self/stat").text()).split(" ")[4]);
+    expect(childPgid).toBeGreaterThan(0);
+    expect(childPgid).not.toBe(ours);
+  });
+});
