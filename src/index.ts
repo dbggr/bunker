@@ -383,7 +383,7 @@ export interface EventTarget {
   onRaw?: ((line: string) => void) | undefined;
   task?: number;
   round?: number;
-  role?: "implementer" | "reviewer";
+  role?: "implementer" | "reviewer" | "auditor";
 }
 
 /** The exec `onLine` hook for `agent`: parsed events to onEvent, raw lines to onRaw. Undefined if nobody listens or the agent doesn't stream. */

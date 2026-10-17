@@ -4,7 +4,7 @@ export type StreamEvent =
   | { type: "toolCall"; name: string; summary: string }
   | { type: "result"; text: string; usage?: { costUsd: number; durationMs: number } };
 
-export type Stage = "setup" | "implement" | "review" | "verify" | "PR" | "waiting for merge" | "merged" | "failed";
+export type Stage = "setup" | "audit" | "implement" | "review" | "verify" | "PR" | "waiting for merge" | "merged" | "failed";
 
 /** Progress from a run. `name` is the stage, or the tool call (e.g. "Edit src/cli.ts"). */
 export interface BunkerEvent {
@@ -13,7 +13,7 @@ export interface BunkerEvent {
   /** Index of the task, for runAll(). */
   task?: number;
   round?: number;
-  role?: "implementer" | "reviewer";
+  role?: "implementer" | "reviewer" | "auditor";
   /** On a "stage" that starts an agent: the model it runs ("Claude default" when none is set). */
   model?: string;
   name?: string;

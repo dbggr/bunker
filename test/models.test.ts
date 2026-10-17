@@ -86,3 +86,12 @@ describe("visibility", () => {
     expect(out).toContain("review · rev-m");
   });
 });
+
+describe("auditor stage event", () => {
+  test("progress shows the auditor role and its model", () => {
+    let out = "";
+    const p = createProgress({ write: (s: string) => void (out += s), tty: false } as never);
+    p.onEvent({ type: "stage", name: "audit", role: "auditor", model: "aud-m", at: 0 });
+    expect(out).toContain("auditor · audit · aud-m");
+  });
+});

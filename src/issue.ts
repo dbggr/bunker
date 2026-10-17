@@ -162,9 +162,12 @@ export function issueBranch(issue: Pick<IssueInfo, "number" | "title" | "labels"
   return { branch: `${type}/${issue.number}-${slug}`, slug };
 }
 
+/** Model label for the PR body, which must never mention the agent vendor. */
+const prModel = (a: Agent): string => a.model || "account default";
+
 function reviewLines(result: ReviewResult, agent: Agent, reviewer: Agent): string {
   return result.rounds
-    .map((r, i) => `Round ${i + 1}: ${r.commits.length} commit(s), ${r.approved ? "approved" : "changes requested"} (implementer: ${modelLabel(agent)}, reviewer: ${modelLabel(reviewer)})`)
+    .map((r, i) => `Round ${i + 1}: ${r.commits.length} commit(s), ${r.approved ? "approved" : "changes requested"} (implementer: ${prModel(agent)}, reviewer: ${prModel(reviewer)})`)
     .join("\n");
 }
 

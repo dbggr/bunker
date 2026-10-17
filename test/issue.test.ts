@@ -195,7 +195,7 @@ describe("runIssue()", () => {
     const body = args.slice(args.indexOf("--body") + 1).join("\n");
     expect(body).toContain("Closes #7");
     expect(body).toContain("Verify: `test -f feature.txt` passed");
-    expect(body.replace(/\(implementer: .*\)/, "")).not.toMatch(/claude|generated|co-authored/i);
+    expect(body).not.toMatch(/claude|generated|co-authored/i);
     expect(prompts[0]).toContain("Implement GitHub issue #7: feat: Add feature\n\nMake it so.");
     expect(prompts[0]).toMatch(/Conventional Commits/);
     // Worktree kept; caller's checkout and branch untouched.

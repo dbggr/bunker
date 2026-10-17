@@ -9,7 +9,7 @@ import { parseDuration, runWatch } from "./watch.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { redact } from "./redact.ts";
-import { createProgress, type BunkerEvent, hyperlink } from "./events.ts";
+import { createProgress, emit, type BunkerEvent, hyperlink } from "./events.ts";
 import { connectHub, hubReachable, readToken, repoId, startHub, type Hub, type Publisher } from "./ui.ts";
 import { HELP } from "./help.ts";
 import { options } from "./options.ts";
@@ -289,7 +289,7 @@ if (values.audit) {
   let result;
   try {
     const auditor = claudeCode({ model: models.auditor, json: true });
-    console.log(`bunker: audit · ${modelLabel(auditor)}`);
+    emit(onEvent, { type: "stage", name: "audit", role: "auditor", model: modelLabel(auditor) });
     result = await runAudit({ agent: auditor, sandbox, maxIssues, focus: values.focus, setup: values.setup });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
