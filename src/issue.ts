@@ -1,5 +1,5 @@
 import { SEVERITY_HELP, pickFollowUps, type Severity } from "./structured.ts";
-import { enforceLabeler } from "./labeler.ts";
+import { enforceLabeler, MAINTAINER_ROLES } from "./labeler.ts";
 import { describeQueue, orderQueue, PRIORITY_LABELS, type Queued } from "./priority.ts";
 import { $ } from "bun";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -23,7 +23,9 @@ export interface IssueInfo {
   state: string;
   labels: { name: string }[];
   /** Oldest first, as `gh issue view --json comments` returns them. */
-  comments?: { author?: { login?: string } | null; authorAssociation?: string; body: string }[];
+  comments?: { author?: { login?: string } | null; authorAssociation?: string; body: string; trusted?: boolean }[];
+  /** Set by `markTrust`: the body's author has admin/maintain permission. */
+  bodyTrusted?: boolean;
 }
 
 export interface IssueOptions extends Timeouts {
@@ -142,9 +144,9 @@ function isLiveShape(live: Record<string, unknown>): boolean {
   );
 }
 
-/** Issue numbers named by `Blocked by #N` / `Depends on #N` (case-insensitive) in the body and trusted comments. */
-export function blockerRefs(issue: Pick<IssueInfo, "body" | "comments">): number[] {
-  const texts = [issue.body ?? "", ...(issue.comments ?? []).filter((c) => TRUSTED_ASSOCIATIONS.has(c.authorAssociation ?? "")).map((c) => c.body)];
+/** Issue numbers named by `Blocked by #N` / `Depends on #N` (case-insensitive) in the body (if its author is trusted) and trusted comments. */
+export function blockerRefs(issue: Pick<IssueInfo, "body" | "comments" | "bodyTrusted">): number[] {
+  const texts = [...(issue.bodyTrusted ? [issue.body ?? ""] : []), ...(issue.comments ?? []).filter((c) => c.trusted).map((c) => c.body)];
   const refs = new Set<number>();
   for (const t of texts) for (const m of t.matchAll(/\b(?:blocked\s+by|depends\s+on)\s+#(\d+)/gi)) refs.add(Number(m[1]));
   return [...refs];
@@ -213,7 +215,7 @@ export async function resumeBlocked(cwd: string, env: Env): Promise<Queued[]> {
   }
   const resumed: Queued[] = [];
   for (const { number: n, title, createdAt } of found) {
-    const v = await $`gh issue view ${n} --json body,comments,state,labels`.cwd(cwd).env(env).nothrow().quiet();
+    const v = await $`gh issue view ${n} --json body,author,comments,state,labels`.cwd(cwd).env(env).nothrow().quiet();
     if (v.exitCode !== 0) continue;
     let info: IssueInfo;
     try {
@@ -222,6 +224,7 @@ export async function resumeBlocked(cwd: string, env: Env): Promise<Queued[]> {
       continue;
     }
     if (info.state.toUpperCase() !== "OPEN" || !info.labels.some((l) => l.name === BLOCKED_LABEL)) continue;
+    await markTrust(info, cwd, env);
     const refs = blockerRefs(info);
     if (!refs.length) continue;
     const states = await Promise.all(refs.map((r) => isDone(r, cwd, env)));
@@ -265,8 +268,35 @@ async function waitForMerge(
   }
 }
 
-/** Comment authors trusted to instruct the agent; anyone else can comment on a public repo. */
+/** Authors whose issue body is shown unfenced; anyone else can open an issue on a public repo. */
 const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+/** Associations worth a permission lookup before trusting a comment. */
+const MAYBE_TRUSTED = new Set(["MEMBER", "COLLABORATOR"]);
+
+/**
+ * Sets `trusted` on each comment and `bodyTrusted` on the issue: only the repo owner and users with admin/maintain permission
+ * count (a read/triage collaborator does not). Fails closed when the permission lookup fails. The body needs `author`.
+ */
+export async function markTrust(info: Pick<IssueInfo, "author" | "comments" | "bodyTrusted">, cwd: string, env: Record<string, string | undefined>): Promise<void> {
+  const cache = new Map<string, Promise<boolean>>();
+  const maintainer = (login: string | undefined) => {
+    if (!login) return Promise.resolve(false);
+    let p = cache.get(login);
+    if (!p) {
+      p = (async () => {
+        const perm = await $`gh api repos/{owner}/{repo}/collaborators/${login}/permission --jq .role_name`.cwd(cwd).env(env as Record<string, string>).nothrow().quiet();
+        return perm.exitCode === 0 && MAINTAINER_ROLES.has(perm.stdout.toString().trim());
+      })();
+      cache.set(login, p);
+    }
+    return p;
+  };
+  info.bodyTrusted = await maintainer(info.author?.login);
+  await Promise.all((info.comments ?? []).map(async (c) => {
+    const assoc = c.authorAssociation ?? "";
+    c.trusted = assoc === "OWNER" || (MAYBE_TRUSTED.has(assoc) && (await maintainer(c.author?.login)));
+  }));
+}
 
 /** The issue's title and body as prompt text; fenced and flagged as untrusted unless the author is trusted. */
 function issueSection(number: number, issue: IssueInfo): string {
@@ -282,9 +312,9 @@ function issueSection(number: number, issue: IssueInfo): string {
   );
 }
 
-/** Comments by the repo's owner, members and collaborators as prompt text (oldest first, with author), or "" if there are none. */
+/** Comments by the repo's owner and its admin/maintain users as prompt text (oldest first, with author), or "" if there are none. */
 function commentsSection(comments: IssueInfo["comments"]): string {
-  const trusted = comments?.filter((c) => TRUSTED_ASSOCIATIONS.has(c.authorAssociation ?? "")) ?? [];
+  const trusted = comments?.filter((c) => c.trusted) ?? [];
   if (!trusted.length) return "";
   const items = trusted.map((c) => {
     let fence = "~~~";
@@ -438,6 +468,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   // `gh issue view` doesn't expose the issue's author association, so ask the REST API; fail closed to untrusted.
   const assoc = await $`gh api repos/{owner}/{repo}/issues/${number} --jq .author_association`.cwd(cwd).env(env).nothrow().quiet();
   issue.authorAssociation = assoc.exitCode === 0 ? assoc.stdout.toString().trim() : "";
+  await markTrust(issue, cwd, env);
   if (issue.state.toUpperCase() !== "OPEN") throw new Error(`issue #${number} is closed`);
 
   const base = issueBranch(issue);
@@ -447,7 +478,8 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   const worktree = join(repo, ".worktrees", `${number}-${slug}`);
   const filed: IssueResult["filed"] = [];
   const logPath = join(repo, ".bunker", "runs", `${number}-${new Date().toISOString().replace(/[:.]/g, "-")}.log`);
-  mkdirSync(join(repo, ".bunker", "runs"), { recursive: true });
+  mkdirSync(join(repo, ".bunker", "runs"), { recursive: true, mode: 0o700 });
+  writeFileSync(logPath, "", { mode: 0o600, flag: "a" });
   const log = (title: string, text = "") => appendFileSync(logPath, redact(`== ${title} ==\n${text.trimEnd()}\n\n`));
   log(`issue #${number}: ${issue.title}`, `branch ${branch}`);
   if (queueOrder) log("queue order", queueOrder);
@@ -578,8 +610,8 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   spent.usage = result.usage;
   if (result.status === "paused-usage-limit" && result.pause) {
     // Keep everything and remember where to pick up; the issue keeps its `bunker` label.
-    mkdirSync(join(repo, ".bunker", "paused"), { recursive: true });
-    writeFileSync(pausedFile, JSON.stringify({ ...result.pause, issueBaseSha: baseSha }));
+    mkdirSync(join(repo, ".bunker", "paused"), { recursive: true, mode: 0o700 });
+    writeFileSync(pausedFile, JSON.stringify({ ...result.pause, issueBaseSha: baseSha }), { mode: 0o600 });
     const when = result.pause.resetAt !== undefined ? `resets ${new Date(result.pause.resetAt).toISOString()}` : "reset time unknown";
     const text = `#${number}: paused on the Claude usage limit (${when}); work kept on ${branch}, session ${result.pause.sessionId ?? "none"}`;
     log("paused: usage limit", text);
@@ -799,9 +831,9 @@ export async function countWaiting(cwd: string, env: Env, skip: (issue: number) 
   let n = 0;
   for (const q of await listQueued(cwd, env)) {
     if (await skip(q.number)) continue;
-    const view = await $`gh issue view ${q.number} --json state,labels,body,comments`.cwd(cwd).env(env).nothrow().quiet();
+    const view = await $`gh issue view ${q.number} --json state,labels,body,author,comments`.cwd(cwd).env(env).nothrow().quiet();
     if (view.exitCode !== 0) continue;
-    let live: Pick<IssueInfo, "state" | "labels" | "body" | "comments">;
+    let live: Pick<IssueInfo, "state" | "labels" | "body" | "author" | "comments" | "bodyTrusted">;
     try {
       live = JSON.parse(view.stdout.toString());
       if (live === null || typeof live !== "object" || !isLiveShape(live)) continue;
@@ -810,6 +842,7 @@ export async function countWaiting(cwd: string, env: Env, skip: (issue: number) 
     }
     if (live.state !== "OPEN" || !live.labels.some((l) => l.name === "bunker")) continue;
     let blocked = false;
+    await markTrust(live, cwd, env);
     for (const ref of blockerRefs(live)) {
       if ((await isDone(ref, cwd, env)) === false) {
         blocked = true;
@@ -971,13 +1004,13 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
     if (!q) break;
     if (active.has(q.number) || (await skip?.(q.number))) continue;
     // The list lags label changes by seconds, so confirm the live state before working it.
-    const view = await $`gh issue view ${q.number} --json state,labels,body,comments`.cwd(cwd).env(env).nothrow().quiet();
+    const view = await $`gh issue view ${q.number} --json state,labels,body,author,comments`.cwd(cwd).env(env).nothrow().quiet();
     if (view.exitCode !== 0) {
       // A transient API error on one candidate must not discard the results already collected.
       output.warn(`bunker: skipping #${q.number}, gh issue view failed:\n${view.stderr}`);
       continue;
     }
-    let live: Pick<IssueInfo, "state" | "labels" | "body" | "comments">;
+    let live: Pick<IssueInfo, "state" | "labels" | "body" | "author" | "comments" | "bodyTrusted">;
     try {
       live = JSON.parse(view.stdout.toString());
       if (live === null || typeof live !== "object" || !isLiveShape(live)) throw new Error("unexpected shape");
@@ -987,6 +1020,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
     }
     if (live.state !== "OPEN" || !live.labels.some((l) => l.name === "bunker")) continue;
     let waiting: number | undefined;
+    await markTrust(live, cwd, env);
     for (const ref of blockerRefs(live)) {
       if ((await isDone(ref, cwd, env)) === false) {
         waiting = ref;

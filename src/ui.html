@@ -136,7 +136,7 @@ function onEvent(m) {
 setInterval(() => { for (const r of repos.values()) for (const i of r.issues.values()) if (i.start && !i.done) i.el.querySelector(".time").textContent = clock(Date.now() - i.start); }, 1000);
 function tick() { for (const r of repos.values()) for (const i of r.issues.values()) if (i.start && i.done) i.el.querySelector(".time").textContent = clock(i.end - i.start); }
 function open() {
-  const ws = new WebSocket("ws://" + location.host + "/events");
+  const ws = new WebSocket("ws://" + location.host + "/events" + location.search);
   ws.onopen = () => (conn.textContent = "live");
   ws.onmessage = (m) => { onEvent(JSON.parse(m.data)); tick(); };
   ws.onclose = () => (conn.textContent = "disconnected");

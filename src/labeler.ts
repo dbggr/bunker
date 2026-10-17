@@ -3,7 +3,7 @@ import { readUserConfig } from "./user-config.ts";
 
 type Env = Record<string, string>;
 
-const MAINTAINER_ROLES = new Set(["admin", "maintain"]);
+export const MAINTAINER_ROLES = new Set(["admin", "maintain"]);
 
 export type LabelerCheck = { ok: true; adder: string } | { ok: false; adder?: string; reason: string; denied: boolean; comment?: string };
 
