@@ -4,7 +4,7 @@ import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { safePull } from "./pull.ts";
 import { redact } from "./redact.ts";
-import { runQueue, type QueueEntry, type QueueOptions } from "./issue.ts";
+import { countWaiting, runQueue, type QueueEntry, type QueueOptions } from "./issue.ts";
 
 export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult"> {
   /** Sleep between passes. Defaults to 10 minutes. */
@@ -109,6 +109,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
   const stopped = () => !!signal?.aborted || Date.now() >= deadline;
   const sleep = (ms: number) =>
     new Promise<void>((resolve) => {
+      if (signal?.aborted) return resolve();
       const t = setTimeout(done, Math.max(0, Math.min(ms, deadline - Date.now())));
       signal?.addEventListener("abort", done, { once: true });
       function done() {
@@ -158,6 +159,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
   };
 
   const summary: WatchSummary = { passes: 0, merged: 0, failed: 0, spentUsd: 0 };
+  let idlePasses = 0;
   try {
     while (!stopped()) {
       if (spentNow() >= maxCostUsd) {
@@ -171,6 +173,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
         if (!r.pulled) log(r.message);
       }
       let merged = 0;
+      const failedBefore = summary.failed;
       await runQueue({
         ...opts, cwd, merge: true, limit: Infinity, keepGoing: true, relist: true,
         skip: (n) => handled.has(n),
@@ -190,8 +193,16 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd = 20, forM
       });
       summary.passes++;
       if (stopped()) break;
+      const progressed = merged > 0 || summary.failed > failedBefore;
+      idlePasses = progressed ? 0 : idlePasses + 1;
+      // Two passes in a row that merged and failed nothing (everything skipped) would spin; sleep instead.
+      const waiting = idlePasses >= 2 || spentNow() >= maxCostUsd ? 0 : await countWaiting(cwd, env, (n) => handled.has(n));
+      if (waiting > 0) {
+        log(`bunker: pass ${summary.passes} · ${merged} merged · next pass now (${waiting} waiting)`);
+        continue;
+      }
       const mins = intervalMs / 60_000;
-      log(`bunker: pass ${summary.passes} · ${merged} merged · next in ${Number.isInteger(mins) ? mins : mins.toFixed(2)} min`);
+      log(`bunker: pass ${summary.passes} · ${merged} merged · next pass in ${Number.isInteger(mins) ? mins : mins.toFixed(2)} min`);
       await sleep(intervalMs);
     }
   } finally {

@@ -64,7 +64,9 @@ async function setup(issues: [number, string, string][]) {
 echo "$*" >> "${root}/gh.log"
 if [ "$1 $2" = "issue list" ]; then
   printf '['; sep=''
-  for f in "${root}"/q/*.json; do [ -f "$f" ] || continue; printf '%s' "$sep"; cat "$f"; sep=','; done
+  hide=0; case "$*" in *"--label bunker --state"*) [ -f "${root}/hide-2" ] && hide=$(cat "${root}/hide-2");; esac
+  [ "$hide" -gt 0 ] && echo $((hide - 1)) > "${root}/hide-2"
+  for f in "${root}"/q/*.json; do [ -f "$f" ] || continue; [ "$hide" -gt 0 ] && [ "$f" = "${root}/q/2.json" ] && continue; printf '%s' "$sep"; cat "$f"; sep=','; done
   printf ']'; exit 0
 fi
 if [ "$1 $2" = "issue view" ]; then cat "${root}/issue-$3.json"; exit 0; fi
@@ -112,8 +114,8 @@ describe("runWatch()", () => {
       log: (l) => { lines.push(l); if (/pass 2 /.test(l)) ctl.abort(); },
     });
     const passes = lines.filter((l) => /bunker: pass \d+ /.test(l));
-    expect(passes[0]).toMatch(/pass 1 · 2 merged · next in /);
-    expect(passes[1]).toMatch(/pass 2 · 0 merged · next in /);
+    expect(passes[0]).toMatch(/pass 1 · 2 merged · next pass in /);
+    expect(passes[1]).toMatch(/pass 2 · 0 merged · next pass in /);
     expect(s.passes).toBe(2);
     expect(s.merged).toBe(2);
   });
@@ -226,6 +228,58 @@ describe("runWatch()", () => {
     await expect(runWatch({ ...base, cwd: repo, agent: fakeAgent(), forMs: 100, log: () => {} })).rejects.toThrow(/already running/);
     ctl.abort();
     await first;
+  });
+});
+
+describe("runWatch() next pass", () => {
+  const long = { ...base, intervalMs: 600_000 };
+
+  test("an issue labelled during pass 1 starts right after it, not after --interval", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    await Bun.write(join(root, "issue-2.json"), JSON.stringify({ number: 2, title: "Second", body: "Do it.", state: "OPEN", labels: [{ name: "bunker" }] }));
+    // The list lags: issue 2 only shows up in the end-of-pass re-list (list calls: 2 initial + 1 re-list).
+    await Bun.write(join(root, "q", "2.json"), JSON.stringify({ number: 2, title: "Second", createdAt: "2026-02-01T00:00:00Z" }));
+    await Bun.write(join(root, "hide-2"), "3");
+    const ctl = new AbortController();
+    const lines: string[] = [];
+    const started = Date.now();
+    const s = await runWatch({
+      ...long, cwd: repo, agent: fakeAgent(), signal: ctl.signal,
+      log: (l) => { lines.push(l); if (/pass 2 /.test(l)) ctl.abort(); },
+    });
+    expect(Date.now() - started).toBeLessThan(30_000);
+    expect(s.merged).toBe(2);
+    expect(lines.find((l) => /pass 1 /.test(l))).toMatch(/next pass now \(1 waiting\)/);
+  });
+
+  test("an empty queue sleeps --interval", async () => {
+    const { repo } = await setup([]);
+    const lines: string[] = [];
+    const s = await runWatch({ ...long, cwd: repo, agent: fakeAgent(), forMs: 600, log: (l) => lines.push(l) });
+    expect(s.passes).toBe(1);
+    expect(lines.find((l) => /pass 1 /.test(l))).toMatch(/next pass in 10 min/);
+  });
+
+  test("a queue holding only blocked issues sleeps and does not spin", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Blocked by #99", state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, "issue-99.json"), JSON.stringify({ number: 99, title: "Other", body: "", state: "OPEN", labels: [] }));
+    const prompts: string[] = [];
+    const lines: string[] = [];
+    const s = await runWatch({ ...long, cwd: repo, agent: fakeAgent({ prompts }), forMs: 800, log: (l) => lines.push(l) });
+    expect(prompts).toHaveLength(0);
+    expect(s.passes).toBe(1);
+    expect(lines.find((l) => /pass 1 /.test(l))).toMatch(/next pass in 10 min/);
+  });
+
+  test("two passes that do nothing sleep even if issues still look waiting", async () => {
+    // A held-open issue that is never started (skipped as already handled would not count; this one is simply unstartable).
+    const { repo, root } = await setup(three.slice(0, 1));
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Do it.", state: "OPEN", labels: [] })); // list lags: view says no longer labelled
+    const lines: string[] = [];
+    const s = await runWatch({ ...long, cwd: repo, agent: fakeAgent(), forMs: 1500, log: (l) => lines.push(l) });
+    expect(s.passes).toBeLessThanOrEqual(2);
+    expect(lines.filter((l) => /next pass in/.test(l))).toHaveLength(1);
   });
 });
 
