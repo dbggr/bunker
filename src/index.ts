@@ -890,10 +890,19 @@ export async function runAll({ tasks, cwd = process.cwd(), copyToWorktree, ...op
   const patterns = await copyPatterns(cwd, copyToWorktree);
   const worktrees: Worktree[] = [];
   const copies: string[][] = [];
-  for (const _ of tasks) {
-    const wt = await addWorktree(cwd, base);
-    worktrees.push(wt);
-    copies.push(await copyInto(cwd, wt, patterns));
+  try {
+    for (const _ of tasks) {
+      const wt = await addWorktree(cwd, base);
+      worktrees.push(wt);
+      copies.push(await copyInto(cwd, wt, patterns));
+    }
+  } catch (e) {
+    // A failing copyInto already removed its own worktree; drop the earlier, fully set up ones.
+    for (const wt of worktrees.slice(0, copies.length)) {
+      await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree remove --force ${wt.path}`.nothrow().quiet());
+      await worktreeAdmin(cwd, () => $`git -C ${cwd} branch -D ${wt.branch}`.nothrow().quiet());
+    }
+    throw e;
   }
 
   const outcomes = await Promise.allSettled(
