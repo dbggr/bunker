@@ -325,7 +325,7 @@ process.on("exit", () => clearProgress());
 const startedAt = Date.now();
 process.on("exit", () => console.log(`bunker: elapsed ${formatDuration(Date.now() - startedAt)} (wall-clock)`));
 
-const allowLabelers = [...(values["allow-labeler"] ?? []), ...(repoCfg.queue.allow_labelers ?? []), ...(values.issue !== undefined || values.queue ? await configAllowedLabelers().catch((e) => (console.error(`bunker: ${e instanceof Error ? e.message : e}`), process.exit(2))) : [])];
+const allowLabelers = [...(values["allow-labeler"] ?? []), ...(values.issue !== undefined || values.queue ? await configAllowedLabelers().catch((e) => (console.error(`bunker: ${e instanceof Error ? e.message : e}`), process.exit(2))) : [])];
 const tty = !!process.stdout.isTTY;
 const progress = createProgress({ write: (s) => output.write(redact(s)), tty, columns: process.stdout.columns ?? 100 });
 // Publish to the shared hub when one is up; --ui makes sure there is one. No hub, no publishing, no errors.
