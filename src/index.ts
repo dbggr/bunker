@@ -1,5 +1,5 @@
 import { $ } from "bun";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -7,7 +7,7 @@ import { redact } from "./redact.ts";
 import { committedCopies, copyIntoWorktree, copyPatterns, copyRejection } from "./copy.ts";
 import { extractOutput, reportOutput, verdictOutput, type Report, type Verdict } from "./structured.ts";
 import { output, tailLines } from "./output.ts";
-import { emit, findSessionId, findStreamResult, parseClaudeStreamLine, type OnEvent, type Stage, type StreamEvent } from "./events.ts";
+import { emit, findSessionId, findUsageLimit, findStreamResult, parseClaudeStreamLine, type OnEvent, type Stage, type StreamEvent } from "./events.ts";
 export type { BunkerEvent, OnEvent } from "./events.ts";
 import { modelLabel } from "./models.ts";
 import baseDockerfile from "../images/base/Dockerfile" with { type: "text" };
@@ -20,6 +20,8 @@ export interface Agent {
   command(prompt: string, mode?: AgentMode, opts?: { resume?: string }): string[];
   /** The id of the conversation the command just ran, from its raw stdout. Omit if the agent has no resumable sessions. */
   sessionId?(stdout: string): string | undefined;
+  /** Whether the command stopped on the plan's usage limit, and when it resets (epoch ms) if known. Omit if the agent has no such limit. */
+  usageLimit?(stdout: string): { resetAt?: number } | undefined;
   /** Turns the command's raw stdout into the agent's text plus what the run cost. Omit if stdout is already the text. */
   parse?(stdout: string): { text: string; usage?: Usage };
   /** Turns one line of the command's stdout into progress events. Omit if stdout isn't a stream. */
@@ -211,7 +213,7 @@ export function claudeCode(opts: { model?: string; attribution?: boolean; json?:
   return {
     ...(opts.model ? { model: opts.model } : {}),
     ...(opts.json ? { parse: parseClaudeJson, parseLine: parseClaudeStreamLine } : {}),
-    ...(opts.json ? { sessionId: findSessionId } : {}),
+    ...(opts.json ? { sessionId: findSessionId, usageLimit: findUsageLimit } : {}),
     command: (prompt, mode = "write", o) => [
       "claude",
       "-p",
@@ -566,6 +568,32 @@ export function emitStage(t: Pick<EventTarget, "onEvent" | "task" | "round" | "r
   emit(t.onEvent, { type: "stage", name, ...(model ? { model } : {}), ...(t.task !== undefined ? { task: t.task } : {}), ...(t.round !== undefined ? { round: t.round } : {}), ...(t.role ? { role: t.role } : {}), ...(text ? { text } : {}) });
 }
 
+/** Where a run stopped on the usage limit, so it can be picked up again. JSON-serialisable. */
+export interface Pause {
+  /** Epoch ms the limit resets, when the agent said. */
+  resetAt?: number;
+  role: "implementer" | "reviewer";
+  /** 1-based review round. */
+  round: number;
+  sessionId?: string;
+  /** Host copy of the session file. */
+  sessionFile?: string;
+  /** The review worktree and branch holding the work so far. */
+  worktree: string;
+  branch: string;
+  /** With role `reviewer`: the implementer's output and session this round. */
+  implOutput?: string;
+  implSessionId?: string;
+  rounds: ReviewRound[];
+}
+
+/** Thrown inside a step when the agent hit the usage limit. */
+class UsageLimit extends Error {
+  constructor(readonly resetAt: number | undefined, readonly session: Session | undefined) {
+    super("claude usage limit reached");
+  }
+}
+
 /** A failed agent run; carries the usage already spent. */
 export class AgentFailure extends Error {
   constructor(message: string, readonly usage?: Usage) {
@@ -644,7 +672,7 @@ async function agentStep(o: {
     try {
       await restoreSession(o.sandbox, o.ctx.worktree, o.prev);
       res = await exec(o.agent.command(o.resumePrompt ?? o.prompt, o.mode, { resume: o.prev.id }));
-      if (res.code !== 0) {
+      if (res.code !== 0 && !o.agent.usageLimit?.(res.stdout)) {
         fallback(`exit ${res.code}`);
         res = undefined;
       }
@@ -656,6 +684,8 @@ async function agentStep(o: {
   res ??= await exec(o.agent.command(o.prompt, o.mode));
   const id = o.agent.sessionId?.(res.stdout);
   const session = id ? await captureSession(o.sandbox, id, o.dest) : undefined;
+  const limit = o.agent.usageLimit?.(res.stdout);
+  if (limit) throw new UsageLimit(limit.resetAt, session ?? (id ? { id, file: "" } : undefined));
   return { ...res, ...(session ? { session } : {}) };
 }
 
@@ -852,6 +882,8 @@ export interface ReviewOptions extends Timeouts {
   sessionsDir?: string;
   /** As in run(), copied before setup. */
   copyToWorktree?: string[];
+  /** Continue a run that stopped on the usage limit (a `pause` from an earlier result): same worktree and branch, same step, same session. */
+  resumeFrom?: Pause;
 }
 
 export interface ReviewRound {
@@ -875,10 +907,12 @@ export interface ReviewRound {
 }
 
 export interface ReviewResult {
-  status: "approved" | "rejected" | "failed" | "conflict" | "bad-output" | "idle-timeout";
+  status: "approved" | "rejected" | "failed" | "conflict" | "bad-output" | "idle-timeout" | "paused-usage-limit";
   branch: string;
   commits: Commit[];
   rounds: ReviewRound[];
+  /** With status `paused-usage-limit`: the worktree and branch are kept; pass this as `resumeFrom` to continue. */
+  pause?: Pause;
   /** Implementer + reviewer, all rounds, if the agents report it. */
   usage?: Usage;
   error?: string;
@@ -927,12 +961,21 @@ export async function review({
   resume = true,
   sessionsDir,
   copyToWorktree,
+  resumeFrom,
   ...timeouts
 }: ReviewOptions): Promise<ReviewResult> {
   const { base, gitCommonDir } = await repoInfo(cwd);
-  const wt = await addWorktree(cwd, base);
+  let wt: Worktree;
+  if (resumeFrom) {
+    wt = { branch: resumeFrom.branch, path: resumeFrom.worktree };
+    // A cleaned-up temp dir loses uncommitted work, but the branch's commits are still there.
+    if (!existsSync(wt.path)) await worktreeAdmin(() => $`git -C ${cwd} worktree add -q ${wt.path} ${wt.branch}`);
+  } else {
+    wt = await addWorktree(cwd, base);
+  }
   const ctx = { worktree: wt.path, gitCommonDir };
-  const rounds: ReviewRound[] = [];
+  const rounds: ReviewRound[] = resumeFrom ? [...resumeFrom.rounds] : [];
+  let pause: Pause | undefined;
   let commits: Commit[] = [];
   const usages: (Usage | undefined)[] = [];
   let status: ReviewResult["status"] = "rejected";
@@ -940,35 +983,56 @@ export async function review({
   const store = await sessionStore(sessionsDir);
   let prev: Session | undefined;
   let copied: string[] = [];
+  /** The step in flight, for the pause record. */
+  let step: { role: "implementer" | "reviewer"; round: number; implOutput?: string; implSessionId?: string } = { role: "implementer", round: 1 };
   const reviewSignals = [approveSignal, "</verdict>"];
   try {
     copied = await copyIntoWorktree(cwd, wt.path, await copyPatterns(cwd, copyToWorktree));
-    emitStage({ onEvent }, "setup");
-    const prep = await runSetup(sandbox, ctx, setup, timeouts);
-    if (prep?.timedOut) throw new IdleTimeout(timeoutMessage("setup", prep.timedOut, timeouts));
-    if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${tailLines(prep.stdout)}`);
-    for (let i = 0; i < maxRounds; i++) {
+    if (!resumeFrom) {
+      emitStage({ onEvent }, "setup");
+      const prep = await runSetup(sandbox, ctx, setup, timeouts);
+      if (prep?.timedOut) throw new IdleTimeout(timeoutMessage("setup", prep.timedOut, timeouts));
+      if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${tailLines(prep.stdout)}`);
+    }
+    // Resuming: the interrupted step continues its session; every earlier one is already in `rounds`.
+    let resuming = resumeFrom;
+    const savedSession = resumeFrom?.sessionId && resumeFrom.sessionFile ? { id: resumeFrom.sessionId, file: resumeFrom.sessionFile } : undefined;
+    commits = resumeFrom ? await commitsBetween(cwd, base, wt.branch) : commits;
+    for (let i = resumeFrom ? resumeFrom.round - 1 : 0; i < maxRounds; i++) {
       const feedback = rounds.at(-1)?.feedback;
+      const CONTINUE = "Your session stopped on the Claude usage limit, which has now reset. Continue where you left off and finish the task.";
+      const skipImpl = resuming?.role === "reviewer";
+      step = { role: "implementer", round: i + 1 };
       const task = feedback === undefined ? prompt : `${prompt}\n\nA reviewer requested changes:\n${feedback}`;
       const implTarget = { onEvent, onRaw, round: i + 1, role: "implementer" as const };
       emitStage(implTarget, "implement", undefined, modelLabel(agent));
       const implHook = lineHook(agent, implTarget);
-      const impl = await agentStep({
-        agent, sandbox, mode: "write", prompt: task, target: implTarget,
-        ...(feedback !== undefined ? { resumePrompt: `A reviewer requested changes:\n${feedback}` } : {}),
-        prev: resume ? prev : undefined,
-        ctx: implHook ? { ...ctx, onLine: implHook } : ctx,
-        dest: join(store.dir, `implementer-${i + 1}.jsonl`), timeouts, signals: [],
-      });
-      prev = impl.session;
-      const implOut = interpret(agent, impl.stdout);
-      usages.push(implOut.usage);
-      if (impl.code !== 0) throw new Error(`agent exited with ${impl.code}; work kept on ${wt.branch}`);
-      const staged = await committedCopies(wt.path, base, copied);
-      if (staged.length) throw new Error(`${copyRejection(staged)}; work kept on ${wt.branch}`);
-      const total = await commitsBetween(cwd, base, wt.branch);
-      const added = total.slice(commits.length);
-      commits = total;
+      let impl: { code: number; stdout: string; session?: Session };
+      let implOut: { text: string; usage?: Usage };
+      let added: Commit[] = [];
+      if (skipImpl) {
+        impl = { code: 0, stdout: "", ...(resumeFrom!.implSessionId ? { session: { id: resumeFrom!.implSessionId, file: join(store.dir, `implementer-${i + 1}.jsonl`) } } : {}) };
+        implOut = { text: resumeFrom!.implOutput ?? "" };
+      } else {
+        const resumed = resuming?.role === "implementer" ? resuming : undefined;
+        impl = await agentStep({
+          agent, sandbox, mode: "write", prompt: task, target: implTarget,
+          ...(resumed ? { resumePrompt: CONTINUE } : feedback !== undefined ? { resumePrompt: `A reviewer requested changes:\n${feedback}` } : {}),
+          prev: resumed ? savedSession : resume ? prev : undefined,
+          ctx: implHook ? { ...ctx, onLine: implHook } : ctx,
+          dest: join(store.dir, `implementer-${i + 1}.jsonl`), timeouts, signals: [],
+        });
+        prev = impl.session;
+        implOut = interpret(agent, impl.stdout);
+        usages.push(implOut.usage);
+        if (impl.code !== 0) throw new Error(`agent exited with ${impl.code}; work kept on ${wt.branch}`);
+        const staged = await committedCopies(wt.path, base, copied);
+        if (staged.length) throw new Error(`${copyRejection(staged)}; work kept on ${wt.branch}`);
+        const total = await commitsBetween(cwd, base, wt.branch);
+        added = total.slice(commits.length);
+        commits = total;
+      }
+      step = { role: "reviewer", round: i + 1, implOutput: implOut.text, ...(impl.session ? { implSessionId: impl.session.id } : {}) };
 
       const head = (await $`git -C ${wt.path} rev-parse HEAD`.text()).trim();
       const diff = await $`git -C ${wt.path} diff ${base}..HEAD`.text();
@@ -977,8 +1041,11 @@ export async function review({
       const revHook = lineHook(reviewer, revTarget);
       // Reviewers never resume: each review is independent.
       const revPrompt = reviewerPrompt(prompt, diff, reviewerInstruction, approveSignal);
+      const revResumed = resuming?.role === "reviewer" ? savedSession : undefined;
+      resuming = undefined;
       let rev = await agentStep({
         agent: reviewer, sandbox, mode: "review", prompt: revPrompt, target: revTarget,
+        ...(revResumed ? { prev: revResumed, resumePrompt: "Your session stopped on the Claude usage limit, which has now reset. Continue the review and finish it." } : {}),
         ctx: revHook ? { ...ctx, onLine: revHook } : ctx,
         dest: join(store.dir, `reviewer-${i + 1}.jsonl`), timeouts, signals: reviewSignals,
       });
@@ -1020,16 +1087,30 @@ export async function review({
       }
     }
   } catch (e) {
-    status = e instanceof BadOutput ? "bad-output" : e instanceof IdleTimeout ? "idle-timeout" : "failed";
-    error = redact(e instanceof Error ? e.message : String(e));
+    if (e instanceof UsageLimit) {
+      status = "paused-usage-limit";
+      error = e.message;
+      // The session was captured into the store's dest; the caller's sessionsDir keeps it.
+      pause = {
+        ...(e.resetAt !== undefined ? { resetAt: e.resetAt } : {}), role: step.role, round: step.round,
+        ...(e.session ? { sessionId: e.session.id, ...(e.session.file ? { sessionFile: e.session.file } : {}) } : {}),
+        worktree: wt.path, branch: wt.branch, rounds,
+        ...(step.implOutput !== undefined ? { implOutput: step.implOutput } : {}),
+        ...(step.implSessionId ? { implSessionId: step.implSessionId } : {}),
+      };
+    } else {
+      status = e instanceof BadOutput ? "bad-output" : e instanceof IdleTimeout ? "idle-timeout" : "failed";
+      error = redact(e instanceof Error ? e.message : String(e));
+    }
   } finally {
     await store.done();
-    await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
+    // A paused run keeps its worktree: whatever the agent had not committed yet is the work.
+    if (!pause) await worktreeAdmin(() => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
   }
   if (status === "approved") {
     error = await mergeBack(cwd, wt.branch, commits);
     if (error) status = "conflict";
   }
   const usage = sumUsage(usages);
-  return { status, branch: wt.branch, commits, rounds, ...(usage ? { usage } : {}), ...(error ? { error } : {}) };
+  return { status, branch: wt.branch, commits, rounds, ...(usage ? { usage } : {}), ...(pause ? { pause } : {}), ...(error ? { error } : {}) };
 }

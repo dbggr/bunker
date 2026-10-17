@@ -172,3 +172,38 @@ export function createProgress({ write, tty, columns = 100 }: ProgressOptions): 
   };
   return { onEvent, clear };
 }
+
+/**
+ * Whether a stream-json stdout ends in claude hitting the plan's usage limit, and when it resets (epoch ms) if it says.
+ * Matches an error `result` whose subtype or message names the limit; ordinary results that merely mention one don't count.
+ */
+export function findUsageLimit(stdout: string): { resetAt?: number } | undefined {
+  const lines = stdout.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!;
+    if (!line.startsWith("{")) continue;
+    let j: any;
+    try {
+      j = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (j?.type !== "result") continue;
+    const text = typeof j.result === "string" ? j.result : "";
+    const kind = typeof j.subtype === "string" ? j.subtype : "";
+    const named = /usage[_ ]limit|rate[_ ]limit|limit reached/i;
+    if (!(j.is_error === true && (named.test(text) || named.test(kind))) && !/usage_limit/i.test(kind)) return undefined;
+    const field = j.resets_at ?? j.reset_at ?? j.resetsAt;
+    let at: number | undefined;
+    if (typeof field === "number") at = field < 1e11 ? field * 1000 : field;
+    else if (typeof field === "string" && !Number.isNaN(Date.parse(field))) at = Date.parse(field);
+    else {
+      const epoch = /\|\s*(\d{9,13})\b/.exec(text)?.[1];
+      const iso = /\b(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2}))/.exec(text)?.[1];
+      if (epoch) at = epoch.length <= 10 ? Number(epoch) * 1000 : Number(epoch);
+      else if (iso && !Number.isNaN(Date.parse(iso))) at = Date.parse(iso);
+    }
+    return at !== undefined ? { resetAt: at } : {};
+  }
+  return undefined;
+}

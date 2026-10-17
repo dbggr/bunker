@@ -1,0 +1,154 @@
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { $ } from "bun";
+import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { claudeCode, noSandbox, type Agent } from "../src/index.ts";
+import { runIssue } from "../src/issue.ts";
+import { runWatch } from "../src/watch.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
+
+const dirs: string[] = [];
+const origPath = process.env.PATH;
+const realHome = process.env.HOME;
+beforeEach(() => {
+  delete process.env.BUNKER_GH_TOKEN;
+});
+afterEach(async () => {
+  process.env.PATH = origPath;
+  process.env.HOME = realHome;
+  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+});
+
+const VERDICT = '<verdict>{"approved":true,"required_changes":[]}</verdict>';
+const result = (o: object) => `echo '${JSON.stringify({ type: "result", total_cost_usd: 0.1, duration_ms: 5, ...o })}'`;
+
+describe("claudeCode().usageLimit", () => {
+  const agent = claudeCode({ json: true });
+  test("recognises a usage-limit result and its reset time", () => {
+    const at = Date.UTC(2030, 0, 1, 12);
+    expect(agent.usageLimit?.(JSON.stringify({ type: "result", is_error: true, result: "Claude AI usage limit reached|" + at / 1000 }))).toEqual({ resetAt: at });
+    expect(agent.usageLimit?.(JSON.stringify({ type: "result", subtype: "error_usage_limit", is_error: true, result: "stop", resets_at: new Date(at).toISOString() }))).toEqual({ resetAt: at });
+    expect(agent.usageLimit?.(JSON.stringify({ type: "result", is_error: true, result: "5-hour limit reached" }))).toEqual({});
+  });
+  test("ignores ordinary results and errors", () => {
+    expect(agent.usageLimit?.(JSON.stringify({ type: "result", result: "I fixed the usage limit bug" }))).toBeUndefined();
+    expect(agent.usageLimit?.(JSON.stringify({ type: "result", is_error: true, result: "boom" }))).toBeUndefined();
+    expect(agent.usageLimit?.("plain")).toBeUndefined();
+  });
+});
+
+async function setup() {
+  const root = await mkdtemp(join(tmpdir(), "bunker-limit-"));
+  dirs.push(root);
+  const home = join(root, "home");
+  const origin = join(root, "origin.git");
+  const repo = join(root, "repo");
+  const bin = join(root, "bin");
+  await $`mkdir -p ${home} ${bin}`;
+  process.env.HOME = home;
+  await $`git init -q --bare -b main ${origin}`;
+  await $`git init -q -b main ${repo}`;
+  await $`git -C ${repo} config user.name Test`;
+  await $`git -C ${repo} config user.email test@example.com`;
+  await $`git -C ${repo} commit -q --allow-empty -m init`;
+  await $`git -C ${repo} remote add origin ${origin}`;
+  await $`git -C ${repo} push -q -u origin main`;
+  const issue = { number: 1, title: "First", body: "Do it.", state: "OPEN", labels: [{ name: "bunker" }] };
+  await Bun.write(join(root, "issue.json"), JSON.stringify(issue));
+  await Bun.write(join(root, "q.json"), JSON.stringify({ number: 1, title: "First", createdAt: "2026-01-01T00:00:00Z" }));
+  await Bun.write(
+    join(bin, "gh"),
+    `#!/bin/sh
+echo "$*" >> "${root}/gh.log"
+if [ "$1" = "api" ]; then case "$*" in *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
+if [ "$1 $2" = "issue list" ]; then printf '['; [ -f "${root}/q.json" ] && cat "${root}/q.json"; printf ']'; exit 0; fi
+if [ "$1 $2" = "issue view" ]; then cat "${root}/issue.json"; exit 0; fi
+if [ "$1 $2" = "issue edit" ]; then rm -f "${root}/q.json"; exit 0; fi
+if [ "$1 $2" = "issue comment" ] || [ "$1 $2" = "label create" ]; then exit 0; fi
+if [ "$1 $2" = "pr create" ]; then echo "https://github.com/o/r/pull/1"; exit 0; fi
+if [ "$1 $2" = "pr view" ]; then echo '{"state":"MERGED","mergeCommit":{"oid":"abc"}}'; exit 0; fi
+if [ "$1 $2" = "pr merge" ]; then rm -f "${root}/q.json"; git --git-dir="${origin}" update-ref refs/heads/main "refs/heads/$(git rev-parse --abbrev-ref HEAD)"; exit 0; fi
+exit 1
+`,
+  );
+  await chmod(join(bin, "gh"), 0o755);
+  process.env.PATH = `${bin}:${origPath}`;
+  return { root, repo };
+}
+
+/** Fake claude: the first implementer call hits the usage limit (leaving a commit-less session); resumed calls finish. */
+function limitedAgent(root: string, resetAt?: number): Agent {
+  const base = claudeCode({ json: true });
+  const calls = join(root, "calls.log");
+  return {
+    ...base,
+    command(prompt, mode = "write", o) {
+      if (mode === "review") return ["sh", "-c", result({ result: VERDICT, session_id: "rev" })];
+      const limited = !existsSync(join(root, "limited"));
+      const script = [
+        `echo "write resume=${o?.resume ?? "none"}" >> ${calls}`,
+        `P=$HOME/.claude/projects/$(pwd | tr -c 'a-zA-Z0-9\\n' -)`,
+        `mkdir -p "$P"; echo '{}' > "$P/sess-1.jsonl"`,
+        limited
+          ? `touch ${root}/limited; ${result({ is_error: true, subtype: "success", result: "Claude AI usage limit reached", session_id: "sess-1", ...(resetAt ? { resets_at: new Date(resetAt).toISOString() } : {}) })}; exit 1`
+          : `echo hi > f.txt && git add . && git commit -qm "feat: impl"; ${result({ result: "done", session_id: "sess-1" })}`,
+      ].join("\n");
+      return ["sh", "-c", script];
+    },
+  };
+}
+
+const callsOf = async (root: string) => (await Bun.file(join(root, "calls.log")).text()).trim().split("\n");
+const base = { sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10 };
+
+describe("usage limit", () => {
+  test("runIssue pauses (keeping work and the label) and a re-run resumes the same session", async () => {
+    const { root, repo } = await setup();
+    const a = limitedAgent(root, Date.now() + 3_600_000);
+    const first = await runIssue({ ...base, cwd: repo, issue: 1, agent: a });
+    expect(first.status).toBe("paused-usage-limit");
+    expect(first.pause?.sessionId).toBe("sess-1");
+    expect(first.pause?.resetAt).toBeGreaterThan(Date.now());
+    expect(existsSync(first.worktree)).toBe(true);
+    expect((await $`git -C ${repo} branch --list ${first.branch}`.text()).trim()).not.toBe("");
+    expect(await Bun.file(join(root, "gh.log")).text()).not.toContain("bunker-failed");
+
+    const second = await runIssue({ ...base, cwd: repo, issue: 1, agent: a });
+    expect(second.status).toBe("merged");
+    expect(await callsOf(root)).toEqual(["write resume=none", "write resume=sess-1"]);
+    expect(existsSync(join(repo, ".bunker", "paused", "1.json"))).toBe(false);
+  });
+
+  test("watch sleeps until the reset time, resumes the same session, never labels bunker-failed", async () => {
+    const { root, repo } = await setup();
+    const resetAt = Date.now() + 1500;
+    const lines: string[] = [];
+    const ctl = new AbortController();
+    const s = await runWatch({
+      ...base, cwd: repo, agent: limitedAgent(root, resetAt), intervalMs: 20_000, listRetryMs: 5, signal: ctl.signal,
+      log: (l) => { lines.push(l); if (/pass 2 /.test(l)) ctl.abort(); },
+    });
+    expect(Date.now()).toBeGreaterThanOrEqual(resetAt);
+    expect(s.merged).toBe(1);
+    expect(s.failed).toBe(0);
+    expect(lines.join("\n")).toMatch(/usage limit.*#1.*resum/is);
+    expect(await callsOf(root)).toEqual(["write resume=none", "write resume=sess-1"]);
+    expect(await Bun.file(join(root, "gh.log")).text()).not.toContain("bunker-failed");
+  });
+
+  test("watch with no reset time waits --interval", async () => {
+    const { root, repo } = await setup();
+    const ctl = new AbortController();
+    const t0 = Date.now();
+    const s = await runWatch({
+      ...base, cwd: repo, agent: limitedAgent(root), intervalMs: 800, listRetryMs: 5, signal: ctl.signal,
+      log: (l) => { if (/pass 2 /.test(l)) ctl.abort(); },
+    });
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(800);
+    expect(s.merged).toBe(1);
+    expect(s.failed).toBe(0);
+  });
+});

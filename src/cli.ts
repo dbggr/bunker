@@ -22,6 +22,11 @@ import { selfUpdate } from "./self-update.ts";
 import { buildCommit } from "./build-info.ts";
 import pkg from "../package.json" with { type: "json" };
 
+/** When to re-run after a usage-limit pause (exit code 3). */
+function rerunHint(resetAt?: number): string {
+  return resetAt !== undefined ? `re-run after ${new Date(resetAt).toISOString()} to resume` : "re-run later to resume (no reset time was given)";
+}
+
 // Anything printed first wipes the in-place progress line, if one is showing.
 let clearProgress = () => {};
 
@@ -387,7 +392,11 @@ if (values.audit) {
     if (r.review?.usage) console.log(`  cost ${formatUsage(r.review.usage)}`);
     for (const f of r.filed) console.log(`  filed #${f.number}: ${f.title}`);
   }
-  if (results.some((r) => r.status !== "blocked" && r.status !== "already-in-progress" && r.status !== (values.merge ? "merged" : "pr-opened"))) process.exitCode = 1;
+  const pausedRun = results.find((r) => r.status === "paused-usage-limit");
+  if (pausedRun) {
+    console.log(`bunker: paused on the Claude usage limit (#${pausedRun.issue}); ${rerunHint(pausedRun.pause?.resetAt)}`);
+    process.exitCode = 3;
+  } else if (results.some((r) => r.status !== "blocked" && r.status !== "already-in-progress" && r.status !== (values.merge ? "merged" : "pr-opened"))) process.exitCode = 1;
 } else if (values.issue !== undefined) {
   const issue = Number(values.issue);
   if (!Number.isInteger(issue) || issue < 1) {
@@ -415,11 +424,13 @@ if (values.audit) {
     console.log(`bunker: round ${i + 1}: ${r.commits.length} commit(s), ${r.approved ? "approved" : "changes requested"}`);
   }
   console.log(`bunker: [${result.status}] ${result.branch} (worktree ${result.worktree})`);
+  if (result.status === "paused-usage-limit") console.log(`bunker: paused on the Claude usage limit; ${rerunHint(result.pause?.resetAt)}`);
   if (result.error) console.log(`  ${result.error.trimEnd().replaceAll("\n", "\n  ")}`);
   if (result.prUrl) console.log(result.prUrl);
   if (result.review?.usage) console.log(`bunker: cost ${formatUsage(result.review.usage)}`);
   if (result.logPath) console.log(`bunker: log ${tty ? hyperlink(result.logPath) : result.logPath}`);
-  if (result.status !== (values.merge ? "merged" : "pr-opened")) process.exitCode = 1;
+  if (result.status === "paused-usage-limit") process.exitCode = 3;
+  else if (result.status !== (values.merge ? "merged" : "pr-opened")) process.exitCode = 1;
 } else if (values.review) {
   const reviewer = reviewerAgent();
   const result = await review({ onEvent, prompt, agent, reviewer, sandbox, maxRounds, resume, ...timeouts });
