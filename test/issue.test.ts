@@ -416,6 +416,22 @@ describe("runIssue()", () => {
     expect(Date.now() - t0).toBeLessThan(20_000);
   });
 
+  test("a sandboxed verify that hangs → idle-timeout with a reason, and a failed stage event", async () => {
+    const { repo } = await setup(issue());
+    const inner = noSandbox();
+    const sandbox = {
+      exec: async (cmd: string[], ctx: Parameters<typeof inner.exec>[1]) =>
+        cmd.join(" ").includes("HANGME") ? { code: 137, stdout: "STARTED\n", timedOut: "idle" as const } : inner.exec(cmd, ctx),
+    };
+    const events: BunkerEvent[] = [];
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox, verify: "echo HANGME", idleTimeoutMs: 1234, onEvent: (e: BunkerEvent) => events.push(e) });
+    expect(r.status).toBe("idle-timeout");
+    expect(r.error).toContain("verify produced no output");
+    expect(r.error).toContain("idle timeout");
+    expect(r.verifyOutput).toContain("STARTED");
+    expect(events.some((e) => e.type === "stage" && e.name === "failed" && e.text === "idle-timeout")).toBe(true);
+  });
+
   test("setup runs in the sandbox before the agent; agent sees its output", async () => {
     const { repo } = await setup(issue());
     const calls: string[][] = [];
