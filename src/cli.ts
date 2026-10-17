@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
-import { AgentFailure, claudeCode, formatDuration, formatUsage, docker, noSandbox, review, run, runAll } from "./index.ts";
+import { $ } from "bun";
+import { AgentFailure, UsageLimit, claudeCode, formatDuration, formatUsage, docker, noSandbox, review, run, runAll, worktreeAdmin } from "./index.ts";
 import { loadRepoConfigOrExit } from "./config.ts";
 import { modelLabel, resolveModels } from "./models.ts";
 import { formatChecks, runDoctor } from "./doctor.ts";
@@ -465,12 +466,24 @@ if (values.audit) {
   for (const c of result.commits) console.log(`  ${c.sha.slice(0, 7)} ${c.subject}`);
   if (result.error) console.log(`  ${result.error.trimEnd().replaceAll("\n", "\n  ")}`);
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
+  if (result.status === "paused-usage-limit") {
+    // Nothing resumes a plain --review, so don't leak the kept worktree; the branch keeps the committed work.
+    if (result.pause) await worktreeAdmin(() => $`git -C ${process.cwd()} worktree remove --force ${result.pause!.worktree}`.nothrow().quiet());
+    console.log(`bunker: paused on the Claude usage limit; work kept on ${result.branch}; ${rerunHint(result.pause?.resetAt)}`);
+    await publisher?.flush();
+    process.exit(3);
+  }
   if (result.status !== "approved") { await publisher?.flush(); process.exit(1); }
 } else if (prompt) {
   let result;
   try {
     result = await run({ onEvent, prompt, agent, sandbox, maxIterations, resume, ...timeouts });
   } catch (e) {
+    if (e instanceof UsageLimit) {
+      console.log(`\nbunker: paused on the Claude usage limit; ${rerunHint(e.resetAt)}`);
+      await publisher?.flush();
+      process.exit(3);
+    }
     console.error(`\nbunker: ${e instanceof Error ? e.message : e}`);
     if (e instanceof AgentFailure && e.usage) console.log(`bunker: cost ${formatUsage(e.usage)}`);
     await publisher?.flush();
