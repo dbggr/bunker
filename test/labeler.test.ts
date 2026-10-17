@@ -63,6 +63,14 @@ describe("enforceLabeler()", () => {
     expect(await g.log()).not.toContain("issue edit");
   });
 
+  test("an issue never labeled bunker fails closed and says to add the label", async () => {
+    const g = await fakeGh(null, {});
+    const logs: string[] = [];
+    expect(await enforceLabeler(7, { cwd: process.cwd(), env: g.env, log: (t) => logs.push(t) })).toBe(false);
+    expect(logs.join("\n")).toContain("no `bunker` label event found on #7 (add the label first");
+    expect(await g.log()).not.toContain("issue edit");
+  });
+
   test("an events lookup error fails closed", async () => {
     const g = await fakeGh(null, {}, true);
     const r = await checkLabeler(7, { cwd: process.cwd(), env: g.env });

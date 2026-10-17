@@ -17,7 +17,7 @@ export async function checkLabeler(issue: number, opts: { cwd: string; env: Env;
   const events = await $`gh api repos/{owner}/{repo}/issues/${issue}/events --paginate --jq ${'.[] | select(.event == "labeled" and .label.name == "bunker") | .actor.login'}`.cwd(cwd).env(env).nothrow().quiet();
   if (events.exitCode !== 0) return { ok: false, denied: false, reason: `could not read the label events of #${issue}: ${events.stderr.toString().trim()}` };
   const adder = events.stdout.toString().split("\n").map((l) => l.trim()).filter(Boolean).pop();
-  if (!adder) return { ok: false, denied: false, reason: `no \`bunker\` label event found on #${issue}` };
+  if (!adder) return { ok: false, denied: false, reason: `no \`bunker\` label event found on #${issue} (add the label first: --issue checks who labeled it)` };
   if (opts.allow?.some((a) => a.toLowerCase() === adder.toLowerCase())) return { ok: true, adder };
   const perm = await $`gh api repos/{owner}/{repo}/collaborators/${adder}/permission --jq .role_name`.cwd(cwd).env(env).nothrow().quiet();
   if (perm.exitCode !== 0) return { ok: false, adder, denied: false, reason: `could not look up @${adder}'s permission (the token needs to read it): ${perm.stderr.toString().trim()}` };
