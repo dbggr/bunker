@@ -392,13 +392,17 @@ async function reclaimLeftover(o: { repo: string; cwd: string; number: number; b
   const remoteSha = (await $`git ${o.gitCfg} -C ${repo} ls-remote --heads ${o.remote} ${`refs/heads/${branch}`}`.env(o.env).nothrow().quiet()).stdout.toString().trim().split(/\s+/)[0] || undefined;
   if (remoteSha) {
     const prs = await $`gh pr list --head ${branch} --state open --json url`.cwd(o.cwd).env(o.env).nothrow().quiet();
+    // Only a successful lookup with an empty list means "no open PR"; anything else must not lead to replacing the branch.
+    let list: { url?: string }[] | undefined;
     try {
-      const url = (JSON.parse(prs.stdout.toString()) as { url?: string }[])[0]?.url;
-      if (prs.exitCode === 0 && url) {
-        emit(o.onEvent, { type: "note", text: `#${number} is already in progress: ${url}` });
-        return { prUrl: url };
-      }
+      if (prs.exitCode === 0) list = JSON.parse(prs.stdout.toString());
     } catch {}
+    if (!Array.isArray(list)) throw new Error(`could not check for an open PR on ${branch} of #${number}:\n${prs.stderr}`);
+    const url = list[0]?.url;
+    if (url) {
+      emit(o.onEvent, { type: "note", text: `#${number} is already in progress: ${url}` });
+      return { prUrl: url };
+    }
     // No open PR (e.g. a closed one): keep the remote tip under a tag; the push will replace it.
     const tag = `bunker/stale/${number}-remote-${stamp()}`;
     const kept = await $`git ${o.gitCfg} -C ${repo} fetch -q ${o.remote} ${`refs/heads/${branch}:refs/tags/${tag}`}`.env(o.env).nothrow().quiet();
