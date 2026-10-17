@@ -398,10 +398,10 @@ async function reclaimLeftover(o: { repo: string; cwd: string; number: number; b
     o.log("stale leftover kept", tag);
     emit(o.onEvent, { type: "note", text: `#${number}: kept an interrupted attempt's work as tag ${tag}` });
   }
-  await worktreeAdmin(() => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
+  await worktreeAdmin(repo, () => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
   if (existsSync(worktree)) await rm(worktree, { recursive: true, force: true });
-  await worktreeAdmin(() => $`git -C ${repo} worktree prune`.nothrow().quiet());
-  if (hasBranch) await worktreeAdmin(() => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
+  await worktreeAdmin(repo, () => $`git -C ${repo} worktree prune`.nothrow().quiet());
+  if (hasBranch) await worktreeAdmin(repo, () => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
   return { remoteSha };
 }
 
@@ -536,7 +536,7 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   const leftover = await reclaimLeftover({ repo, cwd, number, branch, worktree, baseSha, remote, gitCfg, env, log, onEvent });
   remoteSha = leftover.remoteSha;
   if (leftover.prUrl) return fail("already-in-progress", { prUrl: leftover.prUrl });
-  const add = await worktreeAdmin(() => $`git -C ${repo} worktree add -q -b ${branch} ${worktree} ${baseSha}`.nothrow().quiet());
+  const add = await worktreeAdmin(repo, () => $`git -C ${repo} worktree add -q -b ${branch} ${worktree} ${baseSha}`.nothrow().quiet());
   if (add.exitCode !== 0) return fail("failed", { error: `could not create worktree:\n${add.stderr}` });
   setUntrack(track({ repo, worktree, branch, base: baseSha }));
   try {
@@ -611,8 +611,8 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     } else {
       const blockedBy = { number: Number(m[1]), title: blocker.title };
       await markBlocked(number, blockedBy, cwd, env);
-      await worktreeAdmin(() => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
-      await worktreeAdmin(() => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
+      await worktreeAdmin(repo, () => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
+      await worktreeAdmin(repo, () => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
       emit(onEvent, { type: "note", text: `blocked by #${blockedBy.number}: ${blockedBy.title}` });
       return fail("blocked", { review: result, blockedBy });
     }
@@ -747,8 +747,8 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
       return fail("merge-unverified", { ...opened, error: `merged, but ${target} differs from ${branch} in:\n${differing.join("\n")}` });
     }
 
-    await worktreeAdmin(() => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
-    await worktreeAdmin(() => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
+    await worktreeAdmin(repo, () => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
+    await worktreeAdmin(repo, () => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
     return fail("merged", opened);
   };
   return merge && mergeTurn ? mergeTurn(publish) : publish();

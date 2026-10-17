@@ -490,7 +490,7 @@ if (values.audit) {
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
   if (result.status === "paused-usage-limit") {
     // Nothing resumes a plain --review, so don't leak the kept worktree; the branch keeps the committed work.
-    if (result.pause) await worktreeAdmin(() => $`git -C ${process.cwd()} worktree remove --force ${result.pause!.worktree}`.nothrow().quiet());
+    if (result.pause) await worktreeAdmin(process.cwd(), () => $`git -C ${process.cwd()} worktree remove --force ${result.pause!.worktree}`.nothrow().quiet());
     console.log(`bunker: paused on the Claude usage limit; work kept on ${result.branch}; ${rerunHint(result.pause?.resetAt)}`);
     await publisher?.flush();
     process.exit(3);
