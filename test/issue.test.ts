@@ -713,22 +713,14 @@ describe("runIssue() --merge", () => {
     expect(await Bun.file(join(dirname(mergeLog), "api.log")).exists()).toBe(false);
   });
 
-  test("auto-merge not allowed → plain squash merge fallback → merged", async () => {
+  test("auto-merge not allowed → never merges immediately, merge-failed, PR left open", async () => {
     const { repo, mergeLog } = await setup(issue(), "noauto");
     const r = await run(repo);
-    expect(r.status).toBe("merged");
-    expect((await Bun.file(mergeLog).text()).trim().split("\n")).toEqual([
-      "|pr merge https://github.com/o/r/pull/99 --auto --squash",
-      "|pr merge https://github.com/o/r/pull/99 --squash",
-    ]);
-    expect(await branches(repo)).toEqual(["main"]);
-  });
-
-  test("auto-merge not allowed and plain merge refused by protection → merge-failed, PR left open", async () => {
-    const { repo } = await setup(issue(), "noauto-protected");
-    const r = await run(repo);
     expect(r.status).toBe("merge-failed");
-    expect(r.error).toContain("base branch policy");
+    expect(r.error).toMatch(/auto-merge/i);
+    expect(r.error).toMatch(/status check/i);
+    expect(r.error).toContain("bunker doctor");
+    expect((await Bun.file(mergeLog).text()).trim().split("\n")).toEqual(["|pr merge https://github.com/o/r/pull/99 --auto --squash"]);
     expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
   });
 
