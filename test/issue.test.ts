@@ -406,6 +406,16 @@ describe("runIssue()", () => {
     expect(calls.some((c) => c.join(" ").includes("ONHOST"))).toBe(false);
   });
 
+  test("verifyOnHost kills a hung verify at the step timeout", async () => {
+    const { repo } = await setup(issue());
+    const t0 = Date.now();
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: "echo STARTED; sleep 30", verifyOnHost: true, stepTimeoutMs: 500 });
+    expect(r.status).toBe("idle-timeout");
+    expect(r.error).toContain("verify timed out");
+    expect(r.verifyOutput).toContain("STARTED");
+    expect(Date.now() - t0).toBeLessThan(20_000);
+  });
+
   test("setup runs in the sandbox before the agent; agent sees its output", async () => {
     const { repo } = await setup(issue());
     const calls: string[][] = [];
