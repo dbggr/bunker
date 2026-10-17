@@ -40,6 +40,9 @@ exit 1
 `,
   );
   await chmod(join(bin, "gh"), 0o755);
+  // Never let a test reach the real docker daemon: `clean --images --yes` would `docker rmi` the host's bunker-repo-* images.
+  await Bun.write(join(bin, "docker"), `#!/bin/sh\necho "docker $*" >> "${root}/docker.log"\n`);
+  await chmod(join(bin, "docker"), 0o755);
   process.env.PATH = `${bin}:${origPath}`;
   return { root, repo };
 }
@@ -274,6 +277,14 @@ describe("bunker clean", () => {
     expect(existsSync(join(runs, "2-new.log"))).toBe(true);
     await run(repo, { yes: true });
     expect(existsSync(join(runs, "2-new.log"))).toBe(true);
+  });
+
+  test("tests never reach the real docker daemon: the default fake docker answers --images", async () => {
+    const { root, repo } = await setup();
+    await run(repo, { yes: true, images: true });
+    const log = await Bun.file(join(root, "docker.log")).text();
+    expect(log).toContain("docker images");
+    expect(log).not.toContain("rmi");
   });
 
   test("--images removes unused bunker-repo-* images only", async () => {
