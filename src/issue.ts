@@ -14,7 +14,9 @@ import { hyperlink } from "./core/events.ts";
 import { failureReason } from "./core/reason.ts";
 import { modelLabel } from "./agents/models.ts";
 import { loadPromptTemplate, renderPrompt } from "./prompt.ts";
-import { AgentFailure, isolatedEnv, type Pause, emitStage, review, runSetup, stepLimits, timeoutMessage, worktreeAdmin, type Timeouts, type OnEvent, type ReviewResult, type Sandbox } from "./index.ts";
+import { AgentFailure, type Pause, emitStage, review, runSetup, worktreeAdmin, type OnEvent, type ReviewResult } from "./index.ts";
+import { isolatedEnv } from "./sandboxes/env.ts";
+import { stepLimits, timeoutMessage, type Timeouts, type Sandbox } from "./sandboxes/exec.ts";
 import type { Agent, Usage } from "./agents/agent.ts";
 
 export interface IssueInfo {

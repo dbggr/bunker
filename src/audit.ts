@@ -1,7 +1,8 @@
 import { $ } from "bun";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { IdleTimeout, agentLimits, emitStage, lineHook, runSetup, timeoutMessage, type OnEvent, type Timeouts, type Sandbox } from "./index.ts";
+import { emitStage, lineHook, runSetup, type OnEvent } from "./index.ts";
+import { IdleTimeout, agentLimits, timeoutMessage, type Timeouts, type Sandbox } from "./sandboxes/exec.ts";
 import { sumUsage, type Agent, type Usage } from "./agents/agent.ts";
 import { modelLabel } from "./agents/models.ts";
 import { neutralise } from "./core/redact.ts";
