@@ -9,7 +9,9 @@ import { PRIORITY_LABELS } from "./priority.ts";
 
 type Env = Record<string, string | undefined>;
 
-export const LABELS = ["bunker", "discovered", "bunker-failed", "bunker-blocked", ...PRIORITY_LABELS.map((p) => p.name)] as const;
+/** Filed on follow-ups and audit findings; filing falls back to no severity label without them, so they are optional. */
+export const SEVERITY_LABELS = ["severity:high", "severity:medium"] as const;
+export const LABELS = ["bunker", "discovered", "bunker-failed", "bunker-blocked", ...PRIORITY_LABELS.map((p) => p.name), ...SEVERITY_LABELS] as const;
 
 export interface Check {
   id: string;
@@ -190,7 +192,7 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
       names = (JSON.parse(labels.out) as { name: string }[]).map((l) => l.name);
     } catch {}
     for (const l of LABELS) {
-      add({ id: `label-${l}`, group: "github", label: `label ${l}`, ok: !!names?.includes(l), fix: `gh label create ${l} --repo ${repo!.slug}` });
+      add({ id: `label-${l}`, group: "github", label: `label ${l}`, ok: !!names?.includes(l), required: !(SEVERITY_LABELS as readonly string[]).includes(l), fix: `gh label create ${l} --repo ${repo!.slug}` });
     }
     const branch = defaultBranch ?? "main";
     add({
