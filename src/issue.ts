@@ -821,6 +821,8 @@ export interface QueueOptions extends Omit<IssueOptions, "issue"> {
   parallel?: number;
   /** GitHub logins besides repo admins and maintainers whose `bunker` label may queue work. */
   allowLabelers?: string[];
+  /** Called with an issue whose labeler check refused it (lookup failed or not permitted), so a long-lived caller can stop re-checking it. */
+  onRefused?: (issue: number) => void;
 }
 
 export interface QueueEntry extends IssueResult {
@@ -835,7 +837,7 @@ export interface QueueEntry extends IssueResult {
  * stops after the first PR opens; with `merge` continues only after `merged`.
  * Stops starting issues at the first other outcome, or after `limit` issues.
  */
-export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shouldStop, skip, onResult, parallel = 1, relist, allowLabelers, ...opts }: QueueOptions): Promise<QueueEntry[]> {
+export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shouldStop, skip, onResult, parallel = 1, relist, allowLabelers, onRefused, ...opts }: QueueOptions): Promise<QueueEntry[]> {
   const cwd = opts.cwd ?? process.cwd();
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
@@ -972,7 +974,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       output.warn(`bunker: #${q.number} waiting on #${waiting}`);
       continue;
     }
-    if (!(await enforceLabeler(q.number, { cwd, env, ...(allowLabelers ? { allow: allowLabelers } : {}) }))) continue;
+    if (!(await enforceLabeler(q.number, { cwd, env, ...(allowLabelers ? { allow: allowLabelers } : {}), onRefused: () => onRefused?.(q.number) }))) continue;
     counted++;
     const before = previous;
     let release!: () => void;

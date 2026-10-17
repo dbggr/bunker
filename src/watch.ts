@@ -10,7 +10,7 @@ import { runAudit } from "./audit.ts";
 import type { Agent } from "./index.ts";
 import { countWaiting, runQueue, type QueueEntry, type QueueOptions } from "./issue.ts";
 
-export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult"> {
+export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult" | "onRefused"> {
   /** Remove leftover worktrees and branches (as `bunker clean --yes`) once the lock is held. */
   cleanOnStart?: boolean;
   /** Sleep between passes. Defaults to 10 minutes. */
@@ -154,7 +154,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     }
   };
 
-  /** Issues this watcher gave up on (a failed relabel must not let one be retried) or found already in progress (an open PR); skipped for the rest of the run. */
+  /** Issues this watcher gave up on (a failed relabel must not let one be retried) found already in progress (an open PR) or refused by the labeler check (e.g. a failed permission lookup); skipped for the rest of the run. */
   const handled = new Set<number>();
   let labelReady = false;
   const markFailed = async (e: QueueEntry) => {
@@ -202,6 +202,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       await runQueue({
         ...opts, cwd, merge: true, limit: Infinity, keepGoing: true, relist: true,
         skip: (n) => handled.has(n),
+        onRefused: (n) => handled.add(n),
         shouldStop: () => stopped() || capped().length > 0,
         onResult: async (e) => {
           const usd = ((e.review?.usage ?? e.usage)?.costUsd ?? 0) + (e.priorCostUsd ?? 0);
