@@ -598,7 +598,12 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
   const { issues: blocks, blocker } = collectFollowUps(result.rounds);
   for (const b of blocks) {
     const body = `${b.body}\n\nFound while working on #${number}.`;
-    const created = await $`gh issue create --label discovered ${b.bug ? ["--label", "bug"] : []} --title ${b.title} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
+    let created = await $`gh issue create --label discovered ${b.bug ? ["--label", "bug"] : []} --title ${b.title} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
+    // A repo without a `bug` label rejects the call; file it unlabelled rather than drop the follow-up.
+    if (created.exitCode !== 0 && b.bug) {
+      log(`gh issue create with the bug label failed, retrying without it: ${b.title}`, created.stderr.toString());
+      created = await $`gh issue create --label discovered --title ${b.title} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
+    }
     if (created.exitCode !== 0) {
       log(`gh issue create failed: ${b.title}`, created.stderr.toString());
       continue;
