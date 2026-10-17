@@ -81,6 +81,20 @@ export function findStreamResult(stdout: string): Extract<StreamEvent, { type: "
   return undefined;
 }
 
+/** The `session_id` of the last stream-json line that carries one. */
+export function findSessionId(stdout: string): string | undefined {
+  const lines = stdout.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!;
+    if (!line.startsWith("{")) continue;
+    try {
+      const id = JSON.parse(line)?.session_id;
+      if (typeof id === "string" && id) return id;
+    } catch {}
+  }
+  return undefined;
+}
+
 /** A path as an OSC 8 terminal hyperlink to its file:// URL. */
 export function hyperlink(path: string): string {
   return `\x1b]8;;file://${encodeURI(path)}\x1b\\${path}\x1b]8;;\x1b\\`;
