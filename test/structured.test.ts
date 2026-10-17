@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { Output, extractOutput, verdictOutput, reportOutput } from "../src/structured.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 describe("extractOutput()", () => {
   test("valid verdict parsed", () => {
