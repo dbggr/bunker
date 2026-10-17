@@ -3,6 +3,8 @@ import { parseArgs } from "node:util";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./env.ts";
 import { AgentFailure, claudeCode, formatDuration, formatUsage, docker, noSandbox, review, run, runAll } from "./index.ts";
 import { modelLabel, resolveModels } from "./models.ts";
+import { formatChecks, runDoctor } from "./doctor.ts";
+import { runInit, terminalIo } from "./init.ts";
 import { runAudit } from "./audit.ts";
 import { runIssue, runQueue } from "./issue.ts";
 import { parseDuration, runWatch } from "./watch.ts";
@@ -55,6 +57,31 @@ if (values.version) {
 
 if (positionals.length === 1 && positionals[0] === "self-update") {
   process.exit(await selfUpdate());
+}
+
+// `bunker doctor` (read-only checks) and `bunker init` (interactive onboarding).
+if (positionals.length === 1 && (positionals[0] === "doctor" || positionals[0] === "init")) {
+  const cmd = positionals[0];
+  const others = Object.entries(values).filter(([k, v]) => !(k === "yes" && cmd === "init") && k !== "verbose" && v !== false && v !== undefined);
+  if (others.length) {
+    console.error(`bunker: ${cmd} only takes ${cmd === "init" ? "--yes" : "no options"}`);
+    process.exit(2);
+  }
+  if (cmd === "doctor") {
+    const r = await runDoctor({ cwd: process.cwd() });
+    console.log(formatChecks(r.checks));
+    process.exit(r.code);
+  }
+  if (!values.yes && !process.stdin.isTTY) {
+    console.error("bunker: init is interactive and needs a terminal; pass --yes to accept the proposed defaults");
+    process.exit(2);
+  }
+  process.exit(await runInit({ cwd: process.cwd(), yes: !!values.yes, io: terminalIo() }));
+}
+
+if (values.yes) {
+  console.error("bunker: --yes only applies to init");
+  process.exit(2);
 }
 
 // `bunker ui [--port <n>]`: the shared live view, a long-lived hub every run publishes to.

@@ -1,6 +1,8 @@
 export const HELP = `bunker - run coding agents in sandboxed git worktrees
 
 Usage:
+  bunker init [--yes]                         set up this repo: tokens, .bunker/ files, models, labels (--yes: accept defaults)
+  bunker doctor                               read-only setup check: ✓/✗ with a fix for each; exit 1 if anything required is missing
   bunker "<prompt>" [options]                 single prompt: one agent run, merged back
   bunker --task "<p>" --task "<p>" ...        parallel: one worktree per task
   bunker --review "<prompt>"                  implement -> review -> fix rounds
@@ -71,6 +73,19 @@ Single prompt and --task:
   --focus "<text>"           steer the audit toward a topic
   --setup "<cmd>"            run in the worktree before the agent
 
+init and doctor:
+  bunker doctor              read-only, safe to re-run: checks tools (docker, git, gh, claude), auth (Claude token, scoped
+                             BUNKER_GH_TOKEN and the permissions it lacks), repo files, GitHub labels / auto-merge / CI /
+                             required check, and the model per role. Prints ✓/✗ with a one-line fix; exit 1 if anything
+                             required is missing
+  bunker init                interactive, per repo: runs doctor, then walks each ✗: Claude token (via \`claude setup-token\`)
+                             and the scoped GitHub token (hidden input, validated, stored 0600 in ~/.config/bunker/.env),
+                             .bunker/setup, verify and Dockerfile for the detected toolchain (asks before each write, never
+                             overwrites), models, and the four labels. It never changes repo settings (auto-merge, branch
+                             protection, required checks): it prints what to set. Ends with doctor and the first command to run
+  --yes                      (init) accept every proposed default without asking; still never overwrites a file and skips the
+                             steps that need a secret from you
+
 Repo files:
   .bunker/copy               gitignored files to copy from your checkout into each worktree before setup (e.g. .env):
                              one path or glob per line, \`#\` comments; directories are copied recursively, missing
@@ -86,6 +101,7 @@ Models:
   log, the PR body and --ui; "Claude default" when none is set.
 
 Auth:
+  Easiest: run \`bunker init\` in the repo (or \`bunker doctor\` to just check). By hand:
   Put CLAUDE_CODE_OAUTH_TOKEN (from \`claude setup-token\`) in ~/.config/bunker/.env,
   plus optionally BUNKER_GH_TOKEN, a scoped token for bunker's own gh/git calls.
   Precedence: exported variables > <repo>/.bunker/.env > ~/.config/bunker/.env.
