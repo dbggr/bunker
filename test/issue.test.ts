@@ -901,6 +901,21 @@ describe("runIssue() with a leftover branch", () => {
     await p.catch(() => {});
   });
 
+  test.each(["SIGINT", "SIGTERM"] as const)("%s exits with 130 so the exit hook can clean up", async (sig) => {
+    const { repo } = await setup(issue());
+    await run(repo); // installs the hooks on first use
+    expect(process.listenerCount(sig)).toBeGreaterThan(0);
+    const real = process.exit;
+    const codes: unknown[] = [];
+    process.exit = ((c?: number) => void codes.push(c)) as typeof process.exit;
+    try {
+      process.emit(sig, sig);
+    } finally {
+      process.exit = real;
+    }
+    expect(codes).toEqual([130]);
+  });
+
   test("other branches are never touched", async () => {
     const { repo } = await setup(issue());
     await $`git -C ${repo} branch feature/70-other main`;
