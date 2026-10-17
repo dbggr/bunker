@@ -1,5 +1,5 @@
 import type { Server } from "bun";
-import { timingSafeEqual, randomBytes } from "node:crypto";
+import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -71,6 +71,8 @@ const same = (a: string, b: string) => {
   return x.length === y.length && timingSafeEqual(x, y);
 };
 
+const proof = (token: string, nonce: string) => createHmac("sha256", token).update(`bunker-hub:${nonce}`).digest("hex");
+
 /**
  * The shared live view. Always binds to loopback; there is no option to change that.
  * The page and socket are read-only; the one write is POST /publish, which needs the token.
@@ -114,7 +116,8 @@ export function startHub({ port = DEFAULT_PORT, token, historyLimit = HISTORY_LI
       }
       if (req.method !== "GET") return new Response("read-only", { status: 405 });
       if (url.pathname === "/") return new Response(page as unknown as string, { headers: { "content-type": "text/html; charset=utf-8" } });
-      if (url.pathname === "/health") return new Response("bunker-hub");
+      // Challenge-response: proves we hold the token without revealing it.
+      if (url.pathname === "/health") return new Response(proof(token, url.searchParams.get("nonce") ?? ""));
       if (url.pathname === "/events" && srv.upgrade(req)) return undefined;
       return new Response("not found", { status: 404 });
     },
@@ -134,11 +137,12 @@ export function startHub({ port = DEFAULT_PORT, token, historyLimit = HISTORY_LI
   };
 }
 
-/** Is a hub listening on this port? */
-export async function hubReachable(port: number): Promise<boolean> {
+/** Is a genuine hub (one that holds our token) listening on this port? The token itself is never sent. */
+export async function hubReachable(port: number, token: string): Promise<boolean> {
   try {
-    const res = await fetch(`http://${HOST}:${port}/health`, { signal: AbortSignal.timeout(1000) });
-    return (await res.text()) === "bunker-hub";
+    const nonce = randomBytes(16).toString("hex");
+    const res = await fetch(`http://${HOST}:${port}/health?nonce=${nonce}`, { signal: AbortSignal.timeout(1000) });
+    return same(await res.text(), proof(token, nonce));
   } catch {
     return false;
   }
@@ -146,7 +150,7 @@ export async function hubReachable(port: number): Promise<boolean> {
 
 /** A publisher for a reachable hub, or undefined when none is running. Delivery failures are swallowed. */
 export async function connectHub({ port = DEFAULT_PORT, repo, token }: { port?: number; repo: string; token: string }): Promise<Publisher | undefined> {
-  if (!(await hubReachable(port))) return undefined;
+  if (!(await hubReachable(port, token))) return undefined;
   let chain: Promise<unknown> = Promise.resolve();
   return {
     onEvent(event) {

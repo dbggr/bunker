@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, statSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connectHub, readToken, repoIdFromUrl, startHub, type Hub } from "../src/ui.ts";
+import { connectHub, hubReachable, readToken, repoIdFromUrl, startHub, type Hub } from "../src/ui.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -169,14 +169,28 @@ describe("connectHub()", () => {
     await pub!.flush();
   });
 
-  test("a wrong token publishes nothing and does not throw", async () => {
+  test("a hub with a different token is not trusted", async () => {
     hub = startHub({ port: 0, token: TOKEN });
-    const c = await connect(hub.url);
-    const pub = await connectHub({ port: hub.server.port!, repo: "a/one", token: "bad" });
-    pub!.onEvent({ type: "text", text: "x", at: 1 });
-    await pub!.flush();
-    expect(c.messages).toEqual([]);
-    c.ws.close();
+    expect(await connectHub({ port: hub.server.port!, repo: "a/one", token: "bad" })).toBeUndefined();
+  });
+
+  test("an impostor that answers 'bunker-hub' never receives the token", async () => {
+    const seen: string[] = [];
+    const fake = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        seen.push(req.headers.get("authorization") ?? "");
+        return new Response("bunker-hub");
+      },
+    });
+    try {
+      expect(await hubReachable(fake.port!, TOKEN)).toBe(false);
+      expect(await connectHub({ port: fake.port!, repo: "a/one", token: TOKEN })).toBeUndefined();
+      expect(seen.every((a) => a === "")).toBe(true);
+    } finally {
+      await fake.stop(true);
+    }
   });
 });
 
