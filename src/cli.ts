@@ -69,8 +69,8 @@ if (positionals.length === 1 && positionals[0] === "self-update") {
   process.exit(await selfUpdate({ channel: values.channel }));
 }
 
-// `bunker doctor` (read-only checks) and `bunker init` (interactive onboarding).
-if (positionals.length === 1 && (positionals[0] === "doctor" || positionals[0] === "init")) {
+// `bunker doctor` (read-only checks) and `bunker init` (interactive onboarding). `bunker -- init` is the prompt "init".
+if (!process.argv.slice(2).includes("--") && positionals.length === 1 && (positionals[0] === "doctor" || positionals[0] === "init")) {
   const cmd = positionals[0];
   const others = Object.entries(values).filter(([k, v]) => !(k === "yes" && cmd === "init") && k !== "verbose" && v !== false && v !== undefined);
   if (others.length) {

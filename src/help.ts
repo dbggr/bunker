@@ -102,6 +102,8 @@ init and doctor:
                              .bunker/config.toml (setup, verify) and Dockerfile for the detected toolchain (asks before each write, never
                              overwrites), models, and the four labels. It never changes repo settings (auto-merge, branch
                              protection, required checks): it prints what to set. Ends with doctor and the first command to run
+  A one-word prompt "init" or "doctor" is read as the subcommand; to use it as a prompt put -- first: bunker -- init
+                             (or make it longer than one word).
   --yes                      (init) accept every proposed default without asking; still never overwrites a file and skips the
                              steps that need a secret from you
 
