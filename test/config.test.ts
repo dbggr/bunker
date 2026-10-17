@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { join } from "node:path";
 import { ConfigError, effectiveSettings, loadRepoConfig, parseConfig } from "../src/config.ts";
+import { notifyEnabled } from "../src/notify.ts";
 import { resolveModels } from "../src/models.ts";
 import { copyPatterns } from "../src/copy.ts";
 import { cleanup, fakeWorld } from "./fakes.ts";
@@ -163,7 +164,23 @@ describe("precedence", () => {
   });
 });
 
+describe("notifyEnabled", () => {
+  test("on by default; --no-notify and notify.desktop = false turn it off", () => {
+    expect(notifyEnabled(false, parseConfig("").config.notify)).toBe(true);
+    expect(notifyEnabled(true, {})).toBe(false);
+    expect(notifyEnabled(false, parseConfig("[notify]\ndesktop = false").config.notify)).toBe(false);
+    expect(notifyEnabled(false, parseConfig("[notify]\ndesktop = true").config.notify)).toBe(true);
+  });
+});
+
 describe("cli", () => {
+  test("--no-notify without --watch exits 2", async () => {
+    const w = await fakeWorld();
+    const p = Bun.spawnSync(["bun", join(import.meta.dir, "../src/cli.ts"), "--no-notify", "--queue"], { cwd: w.repo, env: { ...process.env, ...w.env } });
+    expect(p.exitCode).toBe(2);
+    expect(p.stderr.toString()).toContain("--no-notify");
+  });
+
   const run = async (repo: string, env: Record<string, string>, ...args: string[]) => {
     const p = Bun.spawn(["bun", join(import.meta.dir, "../src/cli.ts"), ...args], { cwd: repo, env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
     const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);

@@ -11,6 +11,7 @@ import { runIssue, runQueue } from "./issue.ts";
 import { loadSpendCaps } from "./spend.ts";
 import { configAllowedLabelers, enforceLabeler } from "./labeler.ts";
 import { parseDuration, runWatch } from "./watch.ts";
+import { notifyEnabled } from "./notify.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { redact } from "./redact.ts";
@@ -169,7 +170,7 @@ if (values.watch) {
     console.error("bunker: --watch needs a verify command: pass --verify \"<cmd>\" or set verify in .bunker/config.toml");
     process.exit(2);
   }
-  watchOpts = { intervalMs: intervalMin * 60_000, ...(caps.day === undefined ? {} : { maxCostDayUsd: caps.day }), ...(caps.month === undefined ? {} : { maxCostMonthUsd: caps.month }), ...(forMs === undefined ? {} : { forMs }), ...(auditEveryDays === undefined ? {} : { auditEveryDays }), notify: !values["no-notify"] && repoCfg.notify.desktop !== false, ...(repoCfg.notify.github_user === undefined ? {} : { githubUser: repoCfg.notify.github_user }) };
+  watchOpts = { intervalMs: intervalMin * 60_000, ...(caps.day === undefined ? {} : { maxCostDayUsd: caps.day }), ...(caps.month === undefined ? {} : { maxCostMonthUsd: caps.month }), ...(forMs === undefined ? {} : { forMs }), ...(auditEveryDays === undefined ? {} : { auditEveryDays }), notify: notifyEnabled(!!values["no-notify"], repoCfg.notify), ...(repoCfg.notify.github_user === undefined ? {} : { githubUser: repoCfg.notify.github_user }) };
   values.queue = true;
   values.merge = true;
 } else if (values.interval !== undefined || values.for !== undefined || values["max-cost"] !== undefined || values["max-cost-day"] !== undefined || values["max-cost-month"] !== undefined || values["audit-every"] !== undefined || values["no-notify"]) {

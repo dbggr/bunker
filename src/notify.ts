@@ -26,3 +26,6 @@ export async function ownerLogin(cwd: string, env: Record<string, string>): Prom
   const m = /^User (\S+)$/.exec(r.stdout.toString().trim());
   return m?.[1];
 }
+
+/** Whether --watch shows desktop notifications: on unless `--no-notify` or `notify.desktop = false`. */
+export const notifyEnabled = (noNotifyFlag: boolean, cfg: { desktop?: boolean }): boolean => !noNotifyFlag && cfg.desktop !== false;

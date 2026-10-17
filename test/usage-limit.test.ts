@@ -81,6 +81,8 @@ exit 1
 `,
   );
   await chmod(join(bin, "gh"), 0o755);
+  await Bun.write(join(bin, "notify-send"), `#!/bin/sh\nshift\necho "$*" >> "${root}/notify.log"\n`);
+  await chmod(join(bin, "notify-send"), 0o755);
   process.env.PATH = `${bin}:${origPath}`;
   return { root, repo };
 }
@@ -143,6 +145,17 @@ describe("usage limit", () => {
     expect(lines.join("\n")).toMatch(/usage limit.*#1.*resum/is);
     expect(await callsOf(root)).toEqual(["write resume=none", "write resume=sess-1"]);
     expect(await Bun.file(join(root, "gh.log")).text()).not.toContain("bunker-failed");
+  });
+
+  test("watch notifies once about the pause", async () => {
+    const { root, repo } = await setup();
+    const ctl = new AbortController();
+    await runWatch({
+      ...base, cwd: repo, agent: limitedAgent(root, Date.now() + 500), intervalMs: 20_000, listRetryMs: 5, signal: ctl.signal, notify: true,
+      log: (l) => { if (/pass 2 /.test(l)) ctl.abort(); },
+    });
+    const lines = (await Bun.file(join(root, "notify.log")).text()).trim().split("\n");
+    expect(lines.filter((l) => /paused on usage limit/.test(l))).toHaveLength(1);
   });
 
   test("watch with no reset time waits --interval", async () => {

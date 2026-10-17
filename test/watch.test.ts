@@ -26,13 +26,16 @@ interface FakeOpts {
   /** Seconds the implementer takes. */
   slow?: number;
   prompts?: string[];
+  /** Issue titles whose implementer reports being blocked. */
+  blocked?: string[];
 }
 
-function fakeAgent({ failing = [], cost, slow = 0, prompts = [] }: FakeOpts = {}): Agent {
+function fakeAgent({ failing = [], cost, slow = 0, prompts = [], blocked = [] }: FakeOpts = {}): Agent {
   return {
     command(prompt, mode = "write") {
       if (mode !== "write") return ["sh", "-c", `echo '${APPROVE}'`];
       prompts.push(prompt);
+      if (blocked.some((t) => prompt.includes(`Title: ${t}`))) return ["sh", "-c", `echo '<blocked-by title="Need the thing">Cannot proceed.</blocked-by>'`];
       if (failing.some((t) => prompt.includes(`Title: ${t}`))) return ["sh", "-c", "echo boom >&2; exit 1"];
       return ["sh", "-c", `sleep ${slow}; echo hi > f-$(date +%s%N).txt && git add . && git commit -qm "feat: impl"`];
     },
@@ -214,6 +217,48 @@ describe("runWatch()", () => {
     });
     expect(existsSync(join(root, "notify.log"))).toBe(false);
     expect(await Bun.file(join(root, "comments.log")).text()).toContain("COMMENT: --body @bob");
+  });
+
+  const notifyLines = async (root: string) => (existsSync(join(root, "notify.log")) ? (await Bun.file(join(root, "notify.log")).text()).trim().split("\n") : []);
+
+  test("a spend cap notifies once", async () => {
+    const { repo, root } = await setup(three);
+    await runWatch({ ...base, cwd: repo, agent: fakeAgent({ cost: 15 }), maxCostUsd: 20, forMs: 400, notify: true, log: () => {} });
+    expect((await notifyLines(root)).filter((l) => /spend cap reached/.test(l))).toHaveLength(1);
+  });
+
+  test("a blocked issue notifies once and its comment @-mentions the user", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    const ctl = new AbortController();
+    await runWatch({
+      ...base, cwd: repo, agent: fakeAgent({ blocked: ["First"] }), signal: ctl.signal, notify: true, githubUser: "alice",
+      log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); },
+    });
+    expect((await notifyLines(root)).filter((l) => /issue blocked/.test(l))).toHaveLength(1);
+    expect(await Bun.file(join(root, "comments.log")).text()).toContain("COMMENT: --body @alice Blocked by #100: Need the thing");
+  });
+
+  test("a crash notifies once, with the secret in its message redacted, and rethrows", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    await expect(
+      runWatch({ ...base, cwd: repo, agent: fakeAgent(), notify: true, log: (l) => { if (/pass 1 /.test(l)) throw new Error("kaboom ghp_abcdefghijklmnop1234"); } }),
+    ).rejects.toThrow(/kaboom/);
+    const lines = await notifyLines(root);
+    expect(lines.filter((l) => /watcher crashed/.test(l))).toHaveLength(1);
+    expect(lines.some((l) => /watcher stopped/.test(l))).toBe(false);
+    const text = lines.join("\n");
+    expect(text).toContain("[REDACTED]");
+    expect(text).not.toContain("ghp_abcdefghijklmnop1234");
+  });
+
+  test("the default mention is skipped when the repo owner is an organisation", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    await Bun.write(join(root, "bin", "gh"), (await Bun.file(join(root, "bin", "gh")).text()).replace('if [ "$1" = "api" ]; then case', 'if [ "$1" = "api" ]; then case "$2" in "repos/{owner}/{repo}") echo "Organization acme"; exit 0;; esac; case'));
+    const ctl = new AbortController();
+    await runWatch({ ...base, cwd: repo, agent: fakeAgent({ failing: ["First"] }), signal: ctl.signal, log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); } });
+    const comments = await Bun.file(join(root, "comments.log")).text();
+    expect(comments).toContain("did not merge");
+    expect(comments).not.toContain("@");
   });
 
   test("a failed relabel never makes the same watcher retry the issue", async () => {
