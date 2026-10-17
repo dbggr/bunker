@@ -4,12 +4,15 @@ import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { addSpend, DAY_MS, exceededCaps, formatSpend, type SpendCaps } from "./spend.ts";
 import { safePull } from "./pull.ts";
+import { runClean } from "./clean.ts";
 import { redact } from "./redact.ts";
 import { runAudit } from "./audit.ts";
 import type { Agent } from "./index.ts";
 import { countWaiting, runQueue, type QueueEntry, type QueueOptions } from "./issue.ts";
 
 export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult"> {
+  /** Remove leftover worktrees and branches (as `bunker clean --yes`) once the lock is held. */
+  cleanOnStart?: boolean;
   /** Sleep between passes. Defaults to 10 minutes. */
   intervalMs?: number;
   /** Spend cap in notional USD per rolling 24 h. Defaults to no cap. */
@@ -88,7 +91,7 @@ function acquireLock(file: string): () => void {
  * Works the `bunker` queue with auto-merge, pass after pass, until aborted or `forMs` is up.
  * Any outcome other than `merged` relabels the issue `bunker-failed` so it is never retried by itself.
  */
-export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, auditor, maxIssues, log = console.log, ...opts }: WatchOptions): Promise<WatchSummary> {
+export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, auditor, maxIssues, cleanOnStart, log = console.log, ...opts }: WatchOptions): Promise<WatchSummary> {
   const cwd = opts.cwd ?? process.cwd();
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
@@ -99,6 +102,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   const missing = ["/.bunker/watch.lock", "/.bunker/watch-spend.json", "/.bunker/watch-state.json"].filter((p) => !excluded.split("\n").includes(p));
   if (missing.length) await appendFile(exclude, `${excluded && !excluded.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
   const release = acquireLock(join(dir, "watch.lock"));
+  if (cleanOnStart) await runClean({ cwd: repo, yes: true, auto: true });
 
   const token = process.env.BUNKER_GH_TOKEN;
   const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;

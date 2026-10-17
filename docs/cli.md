@@ -16,6 +16,7 @@ Usage:
   bunker --watch                              keep working the queue unattended (implies --queue --merge)
   bunker ui [--port <n>]                      shared live view: one tab per repo (default port 4321)
   bunker --audit                              file improvement ideas as `discovered` issues
+  bunker clean [--yes] [--logs <days>] [--images] [--force]   remove leftover worktrees and branches (dry run unless --yes)
   bunker self-update [--channel main]         build and install the latest v* release tag (--channel main: pull main instead)
 
 Common options (all modes):
@@ -106,6 +107,20 @@ init and doctor:
                              protection, required checks): it prints what to set. Ends with doctor and the first command to run
   --yes                      (init) accept every proposed default without asking; still never overwrites a file and skips the
                              steps that need a secret from you
+
+clean:
+  bunker clean               run from the repo's main checkout. Dry run by default: prints what it would remove and why.
+                             Worktrees: .worktrees/<n>-* whose issue is closed or whose PR is merged/closed; /tmp/bunker-*
+                             worktrees of this repo that no running process uses. Branches: bunker/<id> without a worktree;
+                             {feature|fix}/<n>-<slug> whose PR is merged/closed or that have no commits beyond origin/<default>.
+                             Anything with commits not on origin/<default>, or uncommitted changes, is first kept as the tag
+                             bunker/stale/<name>-<timestamp> (printed). Only bunker's own names are touched. Ends with git worktree prune
+  --yes                      (clean) really remove
+  --logs <days>              (clean) also remove .bunker/runs/*.log older than this (default: keep all)
+  --images                   (clean) also remove bunker-repo-* docker images no running container uses (bunker-claude is kept)
+  --force                    (clean) go ahead although a --watch lock for this repo is held by a live process (otherwise exit 2)
+  --issue, --queue and --watch run the same worktree and branch cleanup at start-up, and Ctrl-C/SIGTERM removes the
+  current run's /tmp/bunker-* worktree and bunker/<id> branch if it has no commits.
 
 Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a separate file):
   Precedence: CLI flag > env var > config.toml > legacy files (.bunker/setup, verify, copy) > built-in default.

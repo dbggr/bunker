@@ -2,7 +2,7 @@
 
 ## Worktree per issue
 
-Each issue gets its own git worktree at `<repo>/.worktrees/<N>-<slug>` on a branch `fix/<N>-<slug>` (issue labelled `bug`) or `feature/<N>-<slug>`, created from freshly fetched origin. Your checkout and branch are never touched. `.worktrees/` is excluded via `.git/info/exclude`. Worktrees are removed after a merge and kept when a run fails, so you can inspect them.
+Each issue gets its own git worktree at `<repo>/.worktrees/<N>-<slug>` on a branch `fix/<N>-<slug>` (issue labelled `bug`) or `feature/<N>-<slug>`, created from freshly fetched origin. Your checkout and branch are never touched. `.worktrees/` is excluded via `.git/info/exclude`. Worktrees are removed after a merge and kept when a run fails, so you can inspect them. Leftovers pile up (interrupted runs, merged or closed issues): `bunker clean` lists them (a dry run), `bunker clean --yes` removes them; `--logs <days>` also prunes old run logs and `--images` unused `bunker-repo-*` images. Work not on origin's default branch is first kept under a `bunker/stale/<name>-<timestamp>` tag, and only bunker's own names are touched. `--issue`, `--queue` and `--watch` run the same worktree and branch cleanup at start-up, and Ctrl-C removes the current run's empty `/tmp/bunker-*` worktree and branch. `clean` exits 2 while a `--watch` for the repo is running, unless `--force`.
 
 ## Docker sandbox and images
 
