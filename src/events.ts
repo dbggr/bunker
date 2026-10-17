@@ -4,7 +4,7 @@ export type StreamEvent =
   | { type: "toolCall"; name: string; summary: string }
   | { type: "result"; text: string; usage?: { costUsd: number; durationMs: number } };
 
-export type Stage = "setup" | "audit" | "implement" | "review" | "verify" | "PR" | "waiting for merge" | "merged" | "failed";
+export type Stage = "setup" | "audit" | "implement" | "review" | "verify" | "PR" | "waiting for merge" | "merged" | "done" | "failed";
 
 /** Progress from a run. `name` is the stage, or the tool call (e.g. "Edit src/cli.ts"). */
 export interface BunkerEvent {
@@ -152,7 +152,7 @@ export function createProgress({ write, tty, columns = 100 }: ProgressOptions): 
       tool = "";
       tools = 0;
       where = who(e);
-      done = e.name === "merged" || e.name === "failed";
+      done = e.name === "merged" || e.name === "done" || e.name === "failed";
       write(`bunker: ${[where, e.name, e.model, e.text && e.name === "failed" ? `(${e.text})` : "", e.name === "merged" && urls.get(key(e)) ? `PR ${urls.get(key(e))}` : ""].filter(Boolean).join(" · ")}\n`);
       if (done) urls.delete(key(e));
       return;

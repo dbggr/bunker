@@ -32,7 +32,7 @@
 <nav id="tabs"></nav>
 <main id="main"><div class="muted" id="empty">no runs yet — start one with bunker --ui</div></main>
 <script>
-const STAGES = ["setup", "implement", "review", "verify", "PR", "waiting for merge", "merged", "failed"];
+const STAGES = ["setup", "audit", "implement", "review", "verify", "PR", "waiting for merge", "merged", "done", "failed"];
 const repos = new Map();
 const closed = new Set();
 const main = document.getElementById("main");
@@ -120,9 +120,9 @@ function onEvent(m) {
     const s = q(".stage");
     s.textContent = e.name + (e.model ? " · " + e.model : "");
     s.title = "stage " + (STAGES.indexOf(e.name) + 1) + " of " + STAGES.length + ": " + STAGES.join(" → ");
-    s.className = "stage " + (e.name === "merged" ? "merged" : e.name === "failed" ? "failed" : "");
+    s.className = "stage " + (e.name === "merged" || e.name === "done" ? "merged" : e.name === "failed" ? "failed" : "");
     i.stage = e.name;
-    i.done = e.name === "merged" || e.name === "failed";
+    i.done = e.name === "merged" || e.name === "done" || e.name === "failed";
     line(i, "stagel", "— " + e.name + (e.model ? " · " + e.model : "") + (e.text ? " (" + e.text + ")" : ""));
   } else if (e.type === "meta") {
     if (e.logPath) q(".logpath").textContent = "log: " + e.logPath;

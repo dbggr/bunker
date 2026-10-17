@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { noSandbox, type Agent } from "../src/index.ts";
+import { noSandbox, type Agent, type BunkerEvent } from "../src/index.ts";
 import { runAudit } from "../src/audit.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
@@ -213,5 +213,26 @@ describe("runAudit()", () => {
     await expect(runAudit({ cwd: repo, agent, sandbox: noSandbox(), maxRetries: 1 })).rejects.toThrow(/bad output after 1 retr/);
     expect(calls).toBe(2);
     expect(existsSync(createLog)).toBe(false);
+  });
+});
+
+describe("runAudit() events", () => {
+  test("publishes the audit stage, then done", async () => {
+    const { repo } = await setup();
+    process.env.AUDIT_PWD = join(repo, "..", "pwd");
+    const events: BunkerEvent[] = [];
+    await runAudit({ cwd: repo, agent: fakeAgent(block("A")), sandbox: noSandbox(), onEvent: (e) => events.push(e) });
+    const stages = events.filter((e) => e.type === "stage");
+    expect(stages.map((e) => e.name)).toEqual(["audit", "done"]);
+    expect(stages[0]!.role).toBe("auditor");
+  });
+
+  test("publishes failed when the audit throws", async () => {
+    const { repo } = await setup();
+    process.env.AUDIT_PWD = join(repo, "..", "pwd");
+    const events: BunkerEvent[] = [];
+    const bad: Agent = { command: () => ["sh", "-c", "exit 3"] };
+    await expect(runAudit({ cwd: repo, agent: bad, sandbox: noSandbox(), onEvent: (e) => events.push(e) })).rejects.toThrow();
+    expect(events.filter((e) => e.type === "stage").map((e) => e.name)).toEqual(["audit", "failed"]);
   });
 });

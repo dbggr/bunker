@@ -70,7 +70,7 @@ Single prompt and --task:
                              killed and the step counts as done, with a warning (default 60)
   --step-timeout <min>       overall limit for setup and verify, which can be quiet for long (default 30)
 
---issue, --queue, --watch, live view:
+--issue, --queue, --watch, --audit, live view:
   Every run publishes to a bunker hub (bunker ui) if one is reachable on 127.0.0.1:4321,
   tagged with the repo (owner/repo from origin); with no hub it just carries on.
   --ui                       make sure a hub is up (start one for this run if not), publish, print the URL
