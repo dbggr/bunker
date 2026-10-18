@@ -62,7 +62,7 @@ async function setup() {
   await $`git -C ${repo} commit -q --allow-empty -m init`;
   await $`git -C ${repo} remote add origin ${origin}`;
   await $`git -C ${repo} push -q -u origin main`;
-  const issue = { number: 1, title: "First", body: "Do it.", state: "OPEN", labels: [{ name: "bunker" }] };
+  const issue = { number: 1, title: "First", body: "Do it.", state: "OPEN", labels: [{ name: "bunker:queued" }] };
   await Bun.write(join(root, "issue.json"), JSON.stringify(issue));
   await Bun.write(join(root, "q.json"), JSON.stringify({ number: 1, title: "First", createdAt: "2026-01-01T00:00:00Z" }));
   await Bun.write(
@@ -71,7 +71,6 @@ async function setup() {
 echo "$*" >> "${root}/gh.log"
 if [ "$1" = "api" ]; then case "$*" in *"/rules/branches/"*) echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]'; exit 0;; *graphql*|*renamed*) exit 0;; *created_at*) echo 2020-01-01T00:00:00Z; exit 0;; *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
 if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker:in-progress"; then echo '[]'; exit 0; fi
-if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker:queued"; then echo '[]'; exit 0; fi
 if [ "$1 $2" = "issue list" ]; then printf '['; [ -f "${root}/q.json" ] && cat "${root}/q.json"; printf ']'; exit 0; fi
 if [ "$1 $2" = "issue view" ]; then cat "${root}/issue.json"; exit 0; fi
 if [ "$1 $2" = "issue edit" ]; then case "$*" in *in-progress*|*"--remove-label bunker:failed"*) exit 0;; esac; rm -f "${root}/q.json"; exit 0; fi

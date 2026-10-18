@@ -57,17 +57,13 @@ async function setup(issues: [number, string, string][], mergeMode: "ff" | "none
   await $`mkdir ${bin}`;
   await Bun.write(join(root, "list.json"), JSON.stringify(issues.map(([number, title, createdAt]) => ({ number, title, createdAt }))));
   for (const [number, title] of issues) {
-    await Bun.write(join(root, `issue-${number}.json`), JSON.stringify({ number, title, body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, `issue-${number}.json`), JSON.stringify({ number, title, body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker:queued" }] }));
   }
   await Bun.write(
     join(bin, "gh"),
     `#!/bin/sh
 if [ "$1" = "api" ]; then case "$*" in *"/rules/branches/"*) echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]'; exit 0;; *graphql*|*renamed*) exit 0;; *created_at*) echo 2020-01-01T00:00:00Z; exit 0;; *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
 if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker:in-progress"; then echo '[]'; exit 0; fi
-if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker:queued"; then
-  if [ -f "${root}/queued-list.json" ]; then cat "${root}/queued-list.json"; else echo '[]'; fi
-  exit 0
-fi
 if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker-blocked"; then
   if [ -f "${root}/blocked-list.json" ]; then cat "${root}/blocked-list.json"; else echo '[]'; fi
   exit 0
@@ -101,8 +97,8 @@ if [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue comment" ] || [ "$1 $2" = "l
   echo "$*" >> "${root}/edits.log"
   if [ "$1 $2" = "issue edit" ]; then
     case "$*" in
-      *"--add-label bunker-blocked"*) sed -i 's/"name":"bunker"/"name":"bunker-blocked"/' "${root}/issue-$3.json" ;;
-      *"--add-label bunker:queued"*) sed -i 's/"name":"bunker-blocked"/"name":"bunker"/' "${root}/issue-$3.json" ;;
+      *"--add-label bunker-blocked"*) sed -i 's/"name":"bunker:queued"/"name":"bunker-blocked"/' "${root}/issue-$3.json" ;;
+      *"--add-label bunker:queued"*) sed -i 's/"name":"bunker-blocked"/"name":"bunker:queued"/' "${root}/issue-$3.json" ;;
     esac
   fi
   exit 0
@@ -249,7 +245,7 @@ describe("runQueue()", () => {
   test("skips listed issues that are closed or no longer labelled when re-checked", async () => {
     const { repo } = await setup(issues, "ff");
     const root = join(repo, "..");
-    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "x", state: "CLOSED", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "x", state: "CLOSED", labels: [{ name: "bunker:queued" }] }));
     await Bun.write(join(root, "issue-2.json"), JSON.stringify({ number: 2, title: "Second", body: "x", author: { login: "owner" }, state: "OPEN", labels: [] }));
     const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[3, "merged"]]);
@@ -310,9 +306,9 @@ describe("runQueue()", () => {
   });
 
   test("skips an issue whose view is valid JSON of the wrong shape", async () => {
-    for (const raw of ["null", "[]", '{"state":"OPEN"}', '{"state":"OPEN","labels":"bunker"}', '{"state":"OPEN","labels":[null]}',
-      '{"state":"OPEN","labels":[{"name":"bunker"}],"comments":"x","body":5}', '{"state":"OPEN","labels":[{"name":"bunker"}],"comments":[null]}',
-      '{"state":"OPEN","labels":[{"name":"bunker"}],"comments":[{"body":5,"authorAssociation":"OWNER"}]}']) {
+    for (const raw of ["null", "[]", '{"state":"OPEN"}', '{"state":"OPEN","labels":"bunker:queued"}', '{"state":"OPEN","labels":[null]}',
+      '{"state":"OPEN","labels":[{"name":"bunker:queued"}],"comments":"x","body":5}', '{"state":"OPEN","labels":[{"name":"bunker:queued"}],"comments":[null]}',
+      '{"state":"OPEN","labels":[{"name":"bunker:queued"}],"comments":[{"body":5,"authorAssociation":"OWNER"}]}']) {
       const { repo } = await setup(issues);
       await Bun.write(join(repo, "..", "view-raw-1"), raw);
       const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10, listRetryMs: 10 });
@@ -375,7 +371,7 @@ describe("blocked issues", () => {
     expect(log).toMatch(/Blocks #1\.\n---/);
     const edits = await Bun.file(join(repo, "..", "edits.log")).text();
     expect(edits).toContain("label create bunker-blocked");
-    expect(edits).toContain("issue edit 1 --remove-label bunker --add-label bunker-blocked");
+    expect(edits).toContain("issue edit 1 --remove-label bunker:queued --add-label bunker-blocked");
     expect(edits).toContain("issue comment 1 --body Blocked by #100: ` Need the thing `");
     expect((await $`git -C ${repo} ls-remote --heads origin`.text()).includes("feature/1")).toBe(false);
     expect((await $`git -C ${repo} branch --list ${"feature/1-*"}`.text()).trim()).toBe("");
@@ -397,7 +393,7 @@ describe("blocked issues", () => {
   test("skips an issue whose body or trusted comment says Blocked by / Depends on an open issue", async () => {
     const { repo } = await setup(issues, "ff");
     const root = join(repo, "..");
-    const mk = (n: number, extra: object) => Bun.write(join(root, `issue-${n}.json`), JSON.stringify({ number: n, title: "t", body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker" }], ...extra }));
+    const mk = (n: number, extra: object) => Bun.write(join(root, `issue-${n}.json`), JSON.stringify({ number: n, title: "t", body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker:queued" }], ...extra }));
     await mk(1, { body: "blocked BY #50 please" });
     await mk(2, { comments: [{ authorAssociation: "OWNER", body: "Depends on #50" }] });
     await mk(50, {});
@@ -411,7 +407,7 @@ describe("blocked issues", () => {
     const bin = join(root, "bin");
     const orig = await Bun.file(join(bin, "gh")).text();
     await Bun.write(join(bin, "gh"), orig.replace(/\*"\/permission"\*\) echo admin; exit 0;;/, '*"/permission"*) case "$*" in *mallory*|*triager*) echo read; exit 0;; esac; echo admin; exit 0;;'));
-    const mk = (n: number, extra: object) => Bun.write(join(root, `issue-${n}.json`), JSON.stringify({ number: n, title: "t", body: "Do it.", state: "OPEN", labels: [{ name: "bunker" }], author: { login: "owner" }, ...extra }));
+    const mk = (n: number, extra: object) => Bun.write(join(root, `issue-${n}.json`), JSON.stringify({ number: n, title: "t", body: "Do it.", state: "OPEN", labels: [{ name: "bunker:queued" }], author: { login: "owner" }, ...extra }));
     await mk(1, { body: "Blocked by #50", author: { login: "mallory" } });
     await mk(2, { comments: [{ author: { login: "triager" }, authorAssociation: "COLLABORATOR", body: "Depends on #50" }] });
     await mk(3, {});
@@ -424,7 +420,7 @@ describe("blocked issues", () => {
   test("a reference to a closed issue doesn't block", async () => {
     const { repo } = await setup(issues, "ff");
     const root = join(repo, "..");
-    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "t", body: "Depends on #50", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "t", body: "Depends on #50", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker:queued" }] }));
     await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "t", body: "", state: "CLOSED", stateReason: "COMPLETED", labels: [] }));
     const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10, listRetryMs: 10 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"]]);
@@ -433,7 +429,7 @@ describe("blocked issues", () => {
   test("a blocker closed as not planned no longer blocks", async () => {
     const { repo } = await setup(issues, "ff");
     const root = join(repo, "..");
-    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "t", body: "Depends on #50", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "t", body: "Depends on #50", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker:queued" }] }));
     await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "t", body: "", state: "CLOSED", stateReason: "NOT_PLANNED", labels: [] }));
     const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10, listRetryMs: 10 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"]]);
@@ -448,7 +444,7 @@ describe("blocked issues", () => {
     const rs = await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), verify: "true", merge: true, limit: 1, ciPollMs: 10, listRetryMs: 10 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"]]);
     const edits = await Bun.file(join(root, "edits.log")).text();
-    expect(edits).toContain("issue edit 1 --remove-label bunker-blocked --add-label bunker");
+    expect(edits).toContain("issue edit 1 --remove-label bunker-blocked --add-label bunker:queued");
     expect(edits).toContain("issue comment 1 --body Unblocked: #50 is closed");
   });
 
@@ -509,7 +505,7 @@ describe("queue order: priority, bug, age", () => {
     const list = rows.map(([number, createdAt, labels]) => ({ number, title: `T${number}`, createdAt, labels: labels.map((name) => ({ name })) }));
     await Bun.write(join(root, "list.json"), JSON.stringify(list));
     for (const [n, , labels] of rows) {
-      await Bun.write(join(root, `issue-${n}.json`), JSON.stringify({ number: n, title: `T${n}`, body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: ["bunker", ...labels].map((name) => ({ name })), ...extra[n] }));
+      await Bun.write(join(root, `issue-${n}.json`), JSON.stringify({ number: n, title: `T${n}`, body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: ["bunker:queued", ...labels].map((name) => ({ name })), ...extra[n] }));
     }
     return { ...env, root };
   }
@@ -670,7 +666,7 @@ describe("runQueue() label-adder check", () => {
     await ghWith(env, "write");
     expect(await run(env)).toEqual([]);
     const edits = await Bun.file(join(env.repo, "..", "edits.log")).text();
-    expect(edits).toContain("issue edit 1 --remove-label bunker");
+    expect(edits).toContain("issue edit 1 --remove-label bunker:queued");
     expect(edits).toContain("issue comment 1 --body @tess only maintainers can queue bunker work");
   });
 

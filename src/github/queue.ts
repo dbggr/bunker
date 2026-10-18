@@ -2,19 +2,15 @@ import { $ } from "bun";
 import { output } from "../core/output.ts";
 import type { Queued } from "../core/priority.ts";
 import { blockerRefs, isDone, isLiveShape, type Env, type IssueInfo } from "./issues.ts";
-import { hasQueuedLabel, QUEUED_LABELS } from "./labels.ts";
+import { hasQueuedLabel, QUEUED_LABEL } from "./labels.ts";
 import { markTrust } from "./trust.ts";
 
 export async function listQueued(cwd: string, env: Env): Promise<Queued[]> {
-  // `bunker:queued`, plus the legacy `bunker` for one release; an issue carrying both is listed once.
-  const seen = new Map<number, Queued>();
-  for (const label of QUEUED_LABELS) for (const q of await listLabelled(label, cwd, env)) if (!seen.has(q.number)) seen.set(q.number, q);
-  return [...seen.values()];
+  return listLabelled(QUEUED_LABEL, cwd, env);
 }
 
 async function listLabelled(label: string, cwd: string, env: Env): Promise<Queued[]> {
   const list = await $`gh issue list --label ${label} --state open --limit 1000 --json number,title,createdAt,labels`.cwd(cwd).env(env).nothrow().quiet();
-  // A transient failure of one list must not abort the queue; the other list may still succeed.
   if (list.exitCode !== 0) {
     output.warn(`bunker: gh issue list failed:\n${list.stderr}`);
     return [];

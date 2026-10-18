@@ -53,7 +53,7 @@ async function setup(numbers: number[]) {
   await $`mkdir ${bin}`;
   await Bun.write(join(root, "list.json"), JSON.stringify(numbers.map((n) => ({ number: n, title: `Issue ${n}`, createdAt: `2026-01-0${n}T00:00:00Z` }))));
   for (const n of numbers) {
-    await Bun.write(join(root, `issue-${n}.json`), JSON.stringify({ number: n, title: `Issue ${n}`, body: "Do it.", state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, `issue-${n}.json`), JSON.stringify({ number: n, title: `Issue ${n}`, body: "Do it.", state: "OPEN", labels: [{ name: "bunker:queued" }] }));
   }
   // `pr merge` fast-forwards origin/main to the PR branch (so it must contain main) and records the order.
   await Bun.write(
@@ -61,7 +61,7 @@ async function setup(numbers: number[]) {
     `#!/bin/sh
 if [ "$1" = "api" ]; then case "$*" in *"/rules/branches/"*) echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]'; exit 0;; *graphql*|*renamed*) exit 0;; *created_at*) echo 2020-01-01T00:00:00Z; exit 0;; *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
 if [ "$1 $2" = "issue list" ]; then
-  if echo "$*" | grep -q -- "--label bunker-blocked\\|--label bunker:"; then echo '[]'; else cat "${root}/list.json"; fi
+  if echo "$*" | grep -q -- "--label bunker-blocked\\|--label bunker:in-progress"; then echo '[]'; else cat "${root}/list.json"; fi
   exit 0
 fi
 if [ "$1 $2" = "issue view" ]; then cat "${root}/issue-$3.json"; exit 0; fi

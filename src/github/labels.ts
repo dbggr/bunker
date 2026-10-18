@@ -9,19 +9,12 @@ export const FAILED_LABEL = "bunker:failed";
 export const REVIEW_LABEL = "bunker:review";
 export const AWAITING_REVIEW_LABEL = "bunker:awaiting-review";
 
-/** Pre-namespace names, still accepted for one release (`bunker` counts as `bunker:queued`, gated the same way). */
-export const LEGACY_QUEUED_LABEL = "bunker";
-export const LEGACY_FAILED_LABEL = "bunker-failed";
-export const LEGACY_REVIEW_LABEL = "needs-human-review";
-
-/** Labels that queue an issue (never `in-progress`, `failed` or `review`). */
-export const QUEUED_LABELS = [QUEUED_LABEL, LEGACY_QUEUED_LABEL] as const;
-
-export const isQueuedLabel = (name: string) => (QUEUED_LABELS as readonly string[]).includes(name);
+/** Only `bunker:queued` queues an issue (never `in-progress`, `failed` or `review`). */
+export const isQueuedLabel = (name: string) => name === QUEUED_LABEL;
 export const hasQueuedLabel = (labels: { name: string }[]) => labels.some((l) => isQueuedLabel(l.name));
 
-/** jq condition matching `labeled` events of a queueing label. */
-export const QUEUED_EVENT_JQ = `.event == "labeled" and (.label.name == "${QUEUED_LABEL}" or .label.name == "${LEGACY_QUEUED_LABEL}")`;
+/** jq condition matching `labeled` events of the queueing label. */
+export const QUEUED_EVENT_JQ = `.event == "labeled" and .label.name == "${QUEUED_LABEL}"`;
 
 const COLORS: Record<string, [string, string]> = {
   [QUEUED_LABEL]: ["0E8A16", "queued for bunker; only a maintainer's label starts work"],
@@ -46,8 +39,7 @@ export async function markInProgress(issue: number, cwd: string, env: Env): Prom
   await ensureLabel(IN_PROGRESS_LABEL, cwd, env);
   await $`gh issue edit ${issue} --add-label ${IN_PROGRESS_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
   const labels = await issueLabels(issue, cwd, env);
-  const stale = [FAILED_LABEL, LEGACY_FAILED_LABEL].filter((l) => labels?.includes(l));
-  if (stale.length) await $`gh issue edit ${issue} ${stale.flatMap((l) => ["--remove-label", l])}`.cwd(cwd).env(env).nothrow().quiet();
+  if (labels?.includes(FAILED_LABEL)) await $`gh issue edit ${issue} --remove-label ${FAILED_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
 }
 
 /** Run end: removes `bunker:in-progress`. Best effort. */
@@ -67,14 +59,9 @@ export async function issueLabels(issue: number, cwd: string, env: Env): Promise
   }
 }
 
-/** The queueing labels (`bunker:queued` and/or legacy `bunker`) the issue currently has; a removal of one it lacks would fail. */
-export async function queuedLabelsOn(issue: number, cwd: string, env: Env): Promise<string[]> {
-  const labels = await issueLabels(issue, cwd, env);
-  return labels === undefined ? [QUEUED_LABEL] : QUEUED_LABELS.filter((l) => labels.includes(l));
-}
-
-/** Removes the queueing label(s) from the issue, plus `extra` flags (e.g. `--add-label`). */
+/** Removes `bunker:queued` from the issue (if it has it), plus `extra` flags (e.g. `--add-label`). */
 export async function unqueue(issue: number, cwd: string, env: Env, extra: string[] = []) {
-  const remove = (await queuedLabelsOn(issue, cwd, env)).flatMap((l) => ["--remove-label", l]);
+  const labels = await issueLabels(issue, cwd, env);
+  const remove = labels === undefined || labels.includes(QUEUED_LABEL) ? ["--remove-label", QUEUED_LABEL] : [];
   return $`gh issue edit ${issue} ${remove} ${extra}`.cwd(cwd).env(env).nothrow().quiet();
 }

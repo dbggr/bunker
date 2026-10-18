@@ -58,7 +58,7 @@ Every issue run writes a redacted log to `<repo>/.bunker/runs/<N>-<timestamp>.lo
 
 ## Parallel queue
 
-`--queue` is sequential by default: two PRs that are each green against an old main can break main together. `--parallel <n>` (with `--merge`, or under `--watch`) works up to n issues at once, each in its own worktree and container, but keeps merges safe: they happen one at a time in queue order, and before a PR is created bunker merges the latest `origin/<default>` into its branch and re-runs verify in the sandbox. A conflict, or verify failing on the updated branch, gets one fresh attempt of that issue from the new main (a new branch, `-2` suffix); a second failure is handled like any other (`bunker-failed` under `--watch`). `--limit` and the `--watch` spend cap count all concurrent work, though cost is only recorded when an issue finishes, so a cap can be overshot by the issues already in flight. The trade-off is more concurrent spend and rework when issues touch the same files; 2 is recommended. Also consider requiring branches to be up to date in the repo's branch protection as a backstop.
+`--queue` is sequential by default: two PRs that are each green against an old main can break main together. `--parallel <n>` (with `--merge`, or under `--watch`) works up to n issues at once, each in its own worktree and container, but keeps merges safe: they happen one at a time in queue order, and before a PR is created bunker merges the latest `origin/<default>` into its branch and re-runs verify in the sandbox. A conflict, or verify failing on the updated branch, gets one fresh attempt of that issue from the new main (a new branch, `-2` suffix); a second failure is handled like any other (`bunker:failed` under `--watch`). `--limit` and the `--watch` spend cap count all concurrent work, though cost is only recorded when an issue finishes, so a cap can be overshot by the issues already in flight. The trade-off is more concurrent spend and rework when issues touch the same files; 2 is recommended. Also consider requiring branches to be up to date in the repo's branch protection as a backstop.
 
 ## The PR shepherd
 
@@ -79,7 +79,7 @@ Labels only display state. Decisions come from GitHub events (who added `bunker:
 
 ### Migrating from the old label names
 
-For one release the old `bunker` label still counts as `bunker:queued` (gated the same way); `bunker-failed` and `needs-human-review` are no longer set. `bunker doctor` reports the new labels as ✗ with the fix, and `bunker init` creates them. To rename existing labels and keep them on existing issues and PRs:
+The old `bunker`, `bunker-failed` and `needs-human-review` labels are no longer read or written; only `bunker:queued` queues work. `bunker doctor` and `bunker init` report any of them still on the repo, with the rename to run, and report the new labels as ✗ until they exist. To rename existing labels and keep them on existing issues and PRs:
 
 ```sh
 gh label edit bunker --name bunker:queued
