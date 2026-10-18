@@ -16,7 +16,7 @@ export async function atomicWrite(path: string, content: string, mode?: number):
 }
 
 /** Sets a top-level `key = value` in TOML text (replacing the line, else inserting before the first [table]). Other lines stay. */
-export function setTomlKey(text: string, key: string, value: string | number): string {
+export function setTomlKey(text: string, key: string, value: string | number | string[]): string {
   const rendered = `${key} = ${typeof value === "number" ? value : JSON.stringify(value)}`;
   const lines = text === "" ? [] : text.replace(/\n$/, "").split("\n");
   const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));

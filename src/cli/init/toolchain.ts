@@ -9,6 +9,8 @@ export interface Toolchain {
   dockerfile: string;
   /** Said alongside the proposal (why this guess, what to check). */
   note?: string;
+  /** Gitignored files that exist locally and that setup/verify need in a fresh worktree (the `copy` key). */
+  copy?: string[];
 }
 
 /** A package of a JS monorepo, relative to the repo root. */
@@ -65,7 +67,9 @@ function nodeToolchain(root: string): Toolchain | undefined {
   }
   const setup = { bun: locked ? "bun install --frozen-lockfile" : "bun install", pnpm: locked ? "pnpm install --frozen-lockfile" : "pnpm install", yarn: locked ? "yarn install --frozen-lockfile" : "yarn install", npm: locked ? "npm ci" : "npm install" }[pm];
   const dockerfile = pm === "bun" ? BUN_RUNTIME : pm === "npm" ? NODE_RUNTIME : `${NODE_RUNTIME}\nRUN corepack enable`;
-  return { name: pm, setup, verify, dockerfile, ...(notes.length ? { note: notes.join("; ") } : {}) };
+  const copy = ignoredEnvFiles(root, ["."]);
+  if (copy.length) notes.push("`.env` is gitignored, so it is copied into each worktree (copy)");
+  return { name: pm, setup, verify, dockerfile, ...(copy.length ? { copy } : {}), ...(notes.length ? { note: notes.join("; ") } : {}) };
 }
 
 const PHP_BUILTIN = new Set(["core", "ctype", "date", "filter", "hash", "iconv", "json", "libxml", "openssl", "pcre", "pdo", "phar", "posix", "pcntl", "random", "reflection", "session", "sodium", "spl", "standard", "tokenizer", "opcache", "zend opcache", "zlib"]);
@@ -118,6 +122,18 @@ function phpNeedsDatabase(root: string, dir: string): boolean {
   return false;
 }
 
+/** `.env` files in the given directories that exist locally but are gitignored (so a fresh worktree lacks them). */
+function ignoredEnvFiles(root: string, dirs: string[]): string[] {
+  const out: string[] = [];
+  for (const d of dirs) {
+    const rel = d === "." ? ".env" : `${d}/.env`;
+    if (!existsSync(join(root, rel))) continue;
+    const ignored = Bun.spawnSync(["git", "-C", root, "check-ignore", "-q", rel], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+    if (ignored) out.push(rel);
+  }
+  return out;
+}
+
 function phpToolchain(root: string): Toolchain | undefined {
   const dir = findComposerDir(root);
   if (dir === undefined) return undefined;
@@ -127,9 +143,12 @@ function phpToolchain(root: string): Toolchain | undefined {
   if (dir !== ".") notes.push(`composer.json is in ${dir}/, so setup and verify run from there`);
   let verify = `${cd}${composer?.scripts?.test ? "composer test" : "vendor/bin/phpunit"}`;
   if (phpNeedsDatabase(root, dir)) {
-    verify = "";
-    notes.push("the tests need a database (CI services or a DB host in .env.test) and the sandbox has none, so no verify command was written; add one that starts or fakes the database, or point .env.test at a local one");
+    const has = (f: string) => existsSync(join(root, dir, f));
+    verify = [`${cd}composer validate --no-check-publish`, ...(has("bin/console") ? ["php bin/console lint:container", ...(has("config") ? ["php bin/console lint:yaml config"] : [])] : [])].join(" && ");
+    notes.push("the tests need a database (CI services or a DB host in .env.test) and the sandbox has none, so verify is a DB-free check (composer validate, plus Symfony container and YAML lint when present); the real tests are left to CI. Add a verify that starts or fakes the database to run them here");
   }
+  const copy = ignoredEnvFiles(root, [dir]);
+  if (copy.length) notes.push(`${copy.join(", ")} is gitignored but setup needs it, so it is copied into each worktree (copy)`);
   const v = phpVersion(composer?.require?.php);
   const exts = new Set(["cli", "xml", "mbstring"]);
   const unknown: string[] = [];
@@ -161,6 +180,7 @@ function phpToolchain(root: string): Toolchain | undefined {
     setup: `${cd}composer install --no-interaction`,
     verify,
     dockerfile: `${runtime}\nCOPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer`,
+    ...(copy.length ? { copy } : {}),
     ...(notes.length ? { note: notes.join("; ") } : {}),
   };
 }
@@ -204,7 +224,9 @@ export function combineToolchains(list: Toolchain[]): Toolchain | undefined {
   const seen = new Set<string>();
   const dockerfile = list.flatMap((t) => t.dockerfile.split("\n")).filter((l) => !seen.has(l) && !!seen.add(l)).join("\n");
   const notes = list.map((t) => t.note).filter(Boolean);
+  const copy = [...new Set(list.flatMap((t) => t.copy ?? []))];
   return {
+    ...(copy.length ? { copy } : {}),
     name: list.map((t) => t.name).join("+"),
     setup: list.map((t) => t.setup).filter(Boolean).join(" && "),
     verify: list.map((t) => t.verify).filter(Boolean).join(" && "),

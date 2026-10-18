@@ -257,11 +257,11 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
 
   // 4. toolchain
   step(3);
-  let cfg: { setup?: string; verify?: string; verify_network?: boolean; services?: Services } = {};
+  let cfg: { setup?: string; verify?: string; verify_network?: boolean; copy?: string[]; services?: Services } = {};
   try {
     cfg = (await loadRepoConfig(root)).config;
   } catch {}
-  const cmds: { setup?: string; verify?: string } = { setup: cfg.setup, verify: cfg.verify };
+  const cmds: { setup?: string; verify?: string; copy?: string[] } = { setup: cfg.setup, verify: cfg.verify, copy: cfg.copy };
   for (const [name, svc] of Object.entries(cfg.services ?? {})) {
     // doctor (run above) already tried to pull each image.
     const bad = first.checks.find((c: Check) => c.id === `service-${name}`);
@@ -306,6 +306,7 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
     tcMemo = { tc };
     return tc;
   };
+  let proposedCopy: string[] | undefined;
   const needsFiles = failing("setup") || failing("verify");
   if (!needsFiles) skip(`setup and verify are set in .bunker/config.toml (verify: ${cmds.verify})`);
   else {
@@ -328,6 +329,11 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
       if (failing("setup")) say(`    setup:  ${cmds.setup}`);
       if (failing("verify")) say(`    verify: ${cmds.verify || "(none)"}`);
       if (!tc.verify && failing("verify")) todo.push({ what: "no verify command", fix: `add verify = "<your test command>" to .bunker/config.toml. ${tc.note ?? ""}`.trim() });
+      if (tc.copy?.length && !cmds.copy) {
+        cmds.copy = tc.copy;
+        proposedCopy = tc.copy;
+        say(`    copy:   ${JSON.stringify(tc.copy)} (gitignored, copied into each worktree)`);
+      }
       if (tc.note) wrap(`Note: ${tc.note}`, 4);
       if (!yes && (await io.confirm("Edit these commands?", false))) {
         if (failing("setup")) cmds.setup = (await io.ask("setup: ", cmds.setup)).trim() || undefined;
@@ -335,14 +341,15 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
       }
     }
     const configPath = join(root, ".bunker", "config.toml");
-    const add = [failing("setup") && cmds.setup && (["setup", cmds.setup] as const), failing("verify") && cmds.verify && (["verify", cmds.verify] as const)].filter(Boolean) as (readonly [string, string])[];
+    const add = [failing("setup") && cmds.setup && (["setup", cmds.setup] as const), failing("verify") && cmds.verify && (["verify", cmds.verify] as const), proposedCopy && (["copy", proposedCopy] as const)].filter(Boolean) as (readonly [string, string | string[]])[];
+    const comment = (k: string) => (k === "setup" ? "# runs in each worktree before the agent" : k === "copy" ? "# gitignored files copied into each worktree" : "# must pass before anything is pushed");
     if (add.length) {
       const had = existsSync(configPath);
-      const proposed = add.map(([k, v]) => `${k === "setup" ? "# runs in each worktree before the agent" : "# must pass before anything is pushed"}\n${k} = ${JSON.stringify(v)}`).join("\n\n");
+      const proposed = add.map(([k, v]) => `${comment(k)}\n${k} = ${JSON.stringify(v)}`).join("\n\n");
       say(`\nProposed ${had ? "additions to " : ""}.bunker/config.toml:\n${proposed.replace(/^/gm, "    ")}`);
       if (await io.confirm(`${had ? "Add to" : "Write"} .bunker/config.toml?`, true)) {
         let text = await readText(configPath);
-        if (!had) text = add.map(([k, v]) => `${k === "setup" ? "# runs in each worktree before the agent" : "# must pass before anything is pushed"}\n${k} = ${JSON.stringify(v)}`).join("\n\n") + "\n";
+        if (!had) text = add.map(([k, v]) => `${comment(k)}\n${k} = ${JSON.stringify(v)}`).join("\n\n") + "\n";
         else for (const [k, v] of add) text = setTomlKey(text, k, v);
         await atomicWrite(configPath, text);
         say(`  wrote .bunker/config.toml (commit it)`);
@@ -377,7 +384,7 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
         break;
       }
       say(`  Building the image and running ${cmds.setup ? "setup, then " : ""}verify (isolated, no network)...`);
-      const r = await sandboxDryRun({ root, env, sandbox, ...(cmds.setup ? { setup: cmds.setup } : {}), verify: cmds.verify, network: cfg.verify_network === true });
+      const r = await sandboxDryRun({ root, env, sandbox, ...(cmds.setup ? { setup: cmds.setup } : {}), verify: cmds.verify, network: cfg.verify_network === true, ...(cmds.copy?.length ? { copy: cmds.copy } : {}) });
       if (r.ok) {
         say(`  ✓ setup and verify pass in the sandbox (${r.seconds}s)${r.tail ? `\n${r.tail.replace(/^/gm, "    | ")}` : ""}`);
         break;

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { redact } from "../../core/redact.ts";
 import { stepLimits, type Sandbox } from "../../sandboxes/exec.ts";
+import { copyIntoWorktree } from "../../worktree/copy.ts";
 import { exec } from "../commands/doctor.ts";
 
 export interface DryRunResult {
@@ -21,7 +22,7 @@ const tailOf = (text: string, n = 15) => redact(text.trimEnd().split("\n").slice
  * Runs `setup` then `verify` once in the sandbox, in a throwaway worktree of HEAD, the way an unattended run does:
  * setup with network (it installs), verify isolated (no network, no credentials) unless `network`.
  */
-export async function sandboxDryRun(o: { root: string; env: Record<string, string | undefined>; sandbox: Sandbox; setup?: string; verify: string; network?: boolean }): Promise<DryRunResult> {
+export async function sandboxDryRun(o: { root: string; env: Record<string, string | undefined>; sandbox: Sandbox; setup?: string; verify: string; network?: boolean; copy?: string[] }): Promise<DryRunResult> {
   const start = Date.now();
   const done = (r: Omit<DryRunResult, "seconds">): DryRunResult => ({ ...r, seconds: Math.round((Date.now() - start) / 1000) });
   const tmp = await mkdtemp(join(tmpdir(), "bunker-init-"));
@@ -38,6 +39,8 @@ export async function sandboxDryRun(o: { root: string; env: Record<string, strin
       mkdirSync(join(worktree, ".bunker"), { recursive: true });
       copyFileSync(dockerfile, join(worktree, ".bunker", "Dockerfile"));
     }
+    // gitignored files the toolchain needs (.env) are copied in, as a real run does
+    if (o.copy?.length) await copyIntoWorktree(o.root, worktree, o.copy);
     const common = await exec(["git", "-C", o.root, "rev-parse", "--path-format=absolute", "--git-common-dir"], { env: o.env });
     const ctx = { worktree, gitCommonDir: common.out.trim(), limits: stepLimits({}) };
     try {
