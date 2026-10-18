@@ -16,7 +16,7 @@ export async function atomicWrite(path: string, content: string, mode?: number):
 }
 
 /** Sets a top-level `key = value` in TOML text (replacing the line, else inserting before the first [table]). Other lines stay. */
-export function setTomlKey(text: string, key: string, value: string | number): string {
+export function setTomlKey(text: string, key: string, value: string | number | string[]): string {
   const rendered = `${key} = ${typeof value === "number" ? value : JSON.stringify(value)}`;
   const lines = text === "" ? [] : text.replace(/\n$/, "").split("\n");
   const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
@@ -32,4 +32,14 @@ export function setTomlKey(text: string, key: string, value: string | number): s
 export async function readText(path: string): Promise<string> {
   const f = Bun.file(path);
   return (await f.exists()) ? f.text() : "";
+}
+
+/** Drops a top-level `key = ...` line, leaving the rest of the file as is. */
+export function removeTomlKey(text: string, key: string): string {
+  const lines = text.replace(/\n$/, "").split("\n");
+  const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
+  const end = firstTable < 0 ? lines.length : firstTable;
+  const idx = lines.slice(0, end).findIndex((l) => new RegExp(`^\\s*${key}\\s*=`).test(l));
+  if (idx >= 0) lines.splice(idx, 1);
+  return lines.join("\n") + "\n";
 }

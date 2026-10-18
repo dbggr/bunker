@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { InitInterrupted, runInit, type Io } from "../src/cli/commands/init.ts";
 import { detectToolchains, forPackage, workspacePackages } from "../src/cli/init/toolchain.ts";
 import { makeUi } from "../src/cli/init/ui.ts";
-import { setTomlKey } from "../src/cli/init/files.ts";
+import { removeTomlKey, setTomlKey } from "../src/cli/init/files.ts";
 import { findStep } from "../src/cli/init/guide.ts";
 import type { Sandbox } from "../src/sandboxes/exec.ts";
 import { cleanup, fakeWorld } from "./fakes.ts";
@@ -184,6 +184,15 @@ describe("transcript: a failing verify, then a fix", () => {
     expect(s.asked).toContain("Edit the commands and retry?");
     expect(sb.calls.map((c) => c.cmd)).toContain("(npm run check) 2>&1");
     expect(Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text())).toMatchObject({ verify: "npm run check" });
+    expect(s.text()).toContain("setup and verify pass in the sandbox");
+  });
+  test("a config kept from an earlier init that fails in the sandbox offers to regenerate from the detected toolchain", async () => {
+    const w = await repoWith({ "package.json": JSON.stringify({ scripts: { test: "x" } }), "package-lock.json": "{}", ".bunker/config.toml": 'setup = "make deps"\nverify = "make test"\n' });
+    const s = scripted();
+    const sb = fakeSandbox([{ code: 2, stdout: "make: not found" }, { code: 0 }, { code: 0 }]);
+    await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io, sandbox: sb.sandbox });
+    expect(s.asked.some((q) => /Replace .*detected/.test(q))).toBe(true);
+    expect(Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text())).toMatchObject({ setup: "npm ci", verify: "npm test" });
     expect(s.text()).toContain("setup and verify pass in the sandbox");
   });
   test("can add a line to the Dockerfile instead", async () => {
@@ -482,14 +491,23 @@ describe("toolchain detection", () => {
     expect(tc).toMatchObject({ setup: "composer install --no-interaction", verify: "composer test" });
     expect(tc.dockerfile).toContain("php8.2-cli");
   });
-  test("php: tests that need a database get no verify and a note", async () => {
+  test("php: tests that need a database get a DB-free verify and a note that tests are left to CI", async () => {
     const ci = await at({ "composer.json": "{}", ".github/workflows/ci.yml": "jobs:\n  t:\n    services:\n      postgres:\n        image: postgres:18.1-alpine\n" });
-    expect(detectToolchains(ci)[0]).toMatchObject({ verify: "" });
-    expect(detectToolchains(ci)[0]!.note).toMatch(/database/i);
-    const env = await at({ "composer.json": "{}", ".env.test": "DATABASE_URL=postgresql://app:pw@database:5432/app\n" });
-    expect(detectToolchains(env)[0]!.verify).toBe("");
+    expect(detectToolchains(ci)[0]).toMatchObject({ verify: "composer validate --no-check-publish" });
+    expect(detectToolchains(ci)[0]!.note).toMatch(/database.*CI/is);
+    const sf = await at({ "backend/composer.json": "{}", "backend/bin/console": "", "backend/config/services.yaml": "", "backend/.env.test": "DATABASE_URL=postgresql://app:pw@database:5432/app\n" });
+    expect(detectToolchains(sf)[0]!.verify).toBe("cd backend && composer validate --no-check-publish && php bin/console lint:container && php bin/console lint:yaml config");
     const local = await at({ "composer.json": "{}", ".env.test": "DATABASE_URL=sqlite:///var/test.db\n" });
-    expect(detectToolchains(local)[0]!.verify).not.toBe("");
+    expect(detectToolchains(local)[0]!.verify).toBe("vendor/bin/phpunit");
+  });
+  test("a gitignored .env beside composer.json that exists locally is proposed as copy", async () => {
+    const w = await repoWith({ ".gitignore": "backend/.env\n", "backend/composer.json": "{}" });
+    await Bun.write(join(w.repo, "backend/.env"), "APP_ENV=dev\n");
+    expect(detectToolchains(w.repo)[0]!.copy).toEqual(["backend/.env"]);
+    const tracked = await repoWith({ "backend/composer.json": "{}", "backend/.env": "A=1\n" });
+    expect(detectToolchains(tracked.repo)[0]!.copy).toBeUndefined();
+    const absent = await repoWith({ ".gitignore": "backend/.env\n", "backend/composer.json": "{}" });
+    expect(detectToolchains(absent.repo)[0]!.copy).toBeUndefined();
   });
   test("a placeholder test script falls back to build, with a note", async () => {
     const tc = detectToolchains(await at({ "package.json": JSON.stringify({ scripts: { test: 'echo "Error: no test specified" && exit 1', build: "tsc" } }), "package-lock.json": "{}" }))[0]!;
@@ -505,11 +523,49 @@ describe("toolchain detection", () => {
   });
 });
 
+describe("transcript: Symfony in a subdirectory, gitignored .env, DB-backed tests", () => {
+  test("writes copy and a DB-free verify; the dry run sees the copied .env", async () => {
+    const w = await repoWith({
+      ".gitignore": "backend/.env\n",
+      "backend/composer.json": JSON.stringify({ require: { php: ">=8.2" } }),
+      "backend/bin/console": "",
+      "backend/config/services.yaml": "",
+      "backend/.env.test": "DATABASE_URL=postgresql://app:pw@database:5432/app\n",
+    });
+    await Bun.write(join(w.repo, "backend/.env"), "APP_ENV=dev\n");
+    const seen: boolean[] = [];
+    const sandbox: Sandbox = {
+      exec: async (_cmd, ctx) => {
+        seen.push(await exists(join(ctx.worktree, "backend/.env")));
+        return { code: 0, stdout: "" };
+      },
+    };
+    const s = scripted();
+    await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io, sandbox, runBunker: async () => 0 });
+    const toml = Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text()) as Record<string, unknown>;
+    expect(toml.setup).toBe("cd backend && composer install --no-interaction");
+    expect(toml.copy).toEqual(["backend/.env"]);
+    expect(String(toml.verify)).toContain("php bin/console lint:container");
+    expect(seen).toEqual([true, true]);
+    expect(s.text()).toMatch(/CI/);
+    expect(s.text()).toContain("setup and verify pass in the sandbox");
+  });
+});
+
 describe("setTomlKey", () => {
   test("replaces in place, inserts before the first table, appends otherwise", () => {
     expect(setTomlKey("", "a", 1)).toBe("a = 1\n");
     expect(setTomlKey('a = 1\nb = "x"\n', "a", 2)).toBe('a = 2\nb = "x"\n');
     expect(setTomlKey("[watch]\nx = 1\n", "a", "v")).toBe('a = "v"\n\n[watch]\nx = 1\n');
     expect(setTomlKey("# c\nb = 1", "a", 3)).toBe("# c\nb = 1\na = 3\n");
+  });
+});
+
+describe("removeTomlKey", () => {
+  test("drops a stale top-level setup and keeps the rest", () => {
+    expect(removeTomlKey('setup = "make deps"\nverify = "make test"\n\n[services.db]\nsetup = "x"\n', "setup")).toBe('verify = "make test"\n\n[services.db]\nsetup = "x"\n');
+  });
+  test("is a no-op when the key is absent", () => {
+    expect(removeTomlKey('verify = "t"\n', "setup")).toBe('verify = "t"\n');
   });
 });
