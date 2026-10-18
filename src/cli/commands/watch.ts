@@ -4,7 +4,7 @@ import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { addSpend, DAY_MS, exceededCaps, formatSpend, type SpendCaps } from "../../core/spend.ts";
 import { safePull } from "../../github/pull.ts";
-import { runClean } from "./clean.ts";
+import { clearStaleInProgress, runClean } from "./clean.ts";
 import { codeSpan, redact } from "../../core/redact.ts";
 import { failureReason } from "../../core/reason.ts";
 import { createStatusRecorder } from "./status.ts";
@@ -15,6 +15,7 @@ import type { Agent } from "../../agents/agent.ts";
 import { runQueue, type QueueEntry, type QueueOptions } from "../../pipeline/queue.ts";
 import { countWaiting } from "../../github/queue.ts";
 import { latestBunkerLabeledAt } from "../../github/labeler.ts";
+import { ensureLabel, FAILED_LABEL, unqueue } from "../../github/labels.ts";
 import { noNotify, type Notify } from "../../core/notify.ts";
 
 export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult" | "onRefused"> {
@@ -59,8 +60,6 @@ export interface WatchSummary {
 
 const HOUR_MS = 3_600_000;
 
-export const FAILED_LABEL = "bunker-failed";
-
 /** `5h`, `90m`, `2h30m` as milliseconds; undefined for anything else (or zero). */
 export function parseDuration(text: string): number | undefined {
   const m = /^(?:(\d+)h)?(?:(\d+)m)?$/.exec(text);
@@ -103,8 +102,8 @@ function acquireLock(file: string): () => void {
 }
 
 /**
- * Works the `bunker` queue with auto-merge, pass after pass, until aborted or `forMs` is up.
- * Any outcome other than `merged` relabels the issue `bunker-failed` so it is never retried by itself.
+ * Works the `bunker:queued` queue with auto-merge, pass after pass, until aborted or `forMs` is up.
+ * Any outcome other than `merged` relabels the issue `bunker:failed` so it is never retried by itself.
  */
 export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, triageEveryHours, auditor, maxIssues, cleanOnStart, logsDays, log = console.log, notify = noNotify, mention, ...opts }: WatchOptions): Promise<WatchSummary> {
   const cwd = opts.cwd ?? process.cwd();
@@ -117,6 +116,9 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   const missing = ["/.bunker/watch.lock", "/.bunker/watch-spend.json", "/.bunker/watch-state.json", "/.bunker/watch-status.json"].filter((p) => !excluded.split("\n").includes(p));
   if (missing.length) await appendFile(exclude, `${excluded && !excluded.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
   const release = acquireLock(join(dir, "watch.lock"));
+  // Crash recovery, whether or not the worktree cleanup runs: the lock is ours, so no `--watch` run of ours is live.
+  const stale = await clearStaleInProgress(repo, (process.env.BUNKER_GH_TOKEN ? { ...process.env, GH_TOKEN: process.env.BUNKER_GH_TOKEN } : process.env) as Record<string, string>);
+  if (stale.length) log(`bunker: cleared a stale bunker:in-progress from ${stale.map((n) => `#${n}`).join(", ")}`);
   if (cleanOnStart) await runClean({ cwd: repo, yes: true, auto: true, ...(logsDays === undefined ? {} : { logsDays }) });
 
   const status = createStatusRecorder(dir, { pid: process.pid, version: pkg.version });
@@ -195,7 +197,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   /** Issues this watcher gave up on (a failed relabel must not let one be retried) found already in progress (an open PR) or refused by the labeler check (e.g. a failed permission lookup); skipped for the rest of the run. */
   const handled = new Map<number, number>();
   const giveUp = (n: number) => void handled.set(n, Date.now());
-  /** Skip a handled issue unless a human re-added `bunker` since the watcher gave up on it (a label that predates that, e.g. after a failed relabel, doesn't count). */
+  /** Skip a handled issue unless a human re-added `bunker:queued` since the watcher gave up on it (a label that predates that, e.g. after a failed relabel, doesn't count). */
   const skipHandled = async (n: number) => {
     const since = handled.get(n);
     if (since === undefined) return false;
@@ -209,10 +211,10 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   const markFailed = async (e: QueueEntry) => {
     giveUp(e.issue);
     if (!labelReady) {
-      await $`gh label create ${FAILED_LABEL} --description ${"bunker gave up on this issue; relabel `bunker` to retry"} --color B60205`.cwd(cwd).env(env).nothrow().quiet();
+      await ensureLabel(FAILED_LABEL, cwd, env);
       labelReady = true;
     }
-    const edit = await $`gh issue edit ${e.issue} --remove-label bunker --add-label ${FAILED_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
+    const edit = await unqueue(e.issue, cwd, env, ["--add-label", FAILED_LABEL]);
     if (edit.exitCode !== 0) log(`bunker: could not relabel #${e.issue}: ${edit.stderr.toString().trim()}`);
     const reason = failureReason(e.status, e.logPath, { ...(e.error ? { error: e.error } : {}), ...(e.verifyOutput ? { verifyOutput: e.verifyOutput } : {}) });
     status.failed({ issue: e.issue, status: e.status, reason, ...(e.prUrl ? { prUrl: e.prUrl } : {}), ...(e.logPath ? { logPath: e.logPath } : {}) });
@@ -226,7 +228,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       ...(e.prUrl ? ["", `PR: ${e.prUrl}`] : []),
       ...(e.logPath ? ["", `Run log: \`${e.logPath}\``] : []),
       "",
-      `Relabel \`bunker\` to retry.`,
+      `Relabel \`bunker:queued\` to retry.`,
     ].join("\n"));
     await $`gh issue comment ${e.issue} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
   };
@@ -265,7 +267,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
           if (usd > 0) record(usd);
           summary.spentUsd += usd;
           if (e.status === "paused-usage-limit") {
-            // Not a failure: the issue keeps `bunker` and is resumed once the limit resets.
+            // Not a failure: the issue keeps `bunker:queued` and is resumed once the limit resets.
             paused = e.issue;
             pausedUntil = e.pause?.resetAt;
           } else if (e.status === "merged") {

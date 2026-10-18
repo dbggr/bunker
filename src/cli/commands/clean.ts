@@ -5,6 +5,7 @@ import { basename, dirname, join, sep } from "node:path";
 import { alive } from "./watch.ts";
 import { defaultBranchOf } from "../../github/pull.ts";
 import { stamp } from "../../github/branches.ts";
+import { clearInProgress, IN_PROGRESS_LABEL } from "../../github/labels.ts";
 import { worktreeAdmin } from "../../worktree/admin.ts";
 
 export interface CleanOptions {
@@ -319,4 +320,29 @@ export async function runClean(o: CleanOptions): Promise<CleanResult> {
     else if (!o.yes) note("dry run: nothing was changed; re-run with --yes to do this");
   }
   return { code: failed ? 1 : 0, tags: tagsMade };
+}
+
+/**
+ * Crash recovery: removes `bunker:in-progress` from open issues with no live run. Live means a worktree `.worktrees/<n>-*` that a
+ * process still uses (a `--watch` takes `watch.lock` first, so none of its own runs exist yet). Labels only display state, so a
+ * failed lookup or edit leaves things as they are. Returns the issues cleared.
+ */
+export async function clearStaleInProgress(repo: string, env: Record<string, string>): Promise<number[]> {
+  const list = await $`gh issue list --label ${IN_PROGRESS_LABEL} --state open --limit 1000 --json number`.cwd(repo).env(env).nothrow().quiet();
+  if (list.exitCode !== 0) return [];
+  let numbers: number[];
+  try {
+    numbers = (JSON.parse(list.stdout.toString()) as { number?: unknown }[]).flatMap((i) => (typeof i?.number === "number" ? [i.number] : []));
+  } catch {
+    return [];
+  }
+  const root = join(repo, ".worktrees");
+  const dirs = existsSync(root) ? readdirSync(root) : [];
+  const cleared: number[] = [];
+  for (const n of numbers) {
+    if (dirs.some((d) => d.startsWith(`${n}-`) && inUse(join(root, d)))) continue;
+    await clearInProgress(n, repo, env);
+    cleared.push(n);
+  }
+  return cleared;
 }

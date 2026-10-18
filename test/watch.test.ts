@@ -63,6 +63,8 @@ async function setup(issues: [number, string, string][]) {
     `#!/bin/sh
 echo "$*" >> "${root}/gh.log"
 if [ "$1" = "api" ]; then case "$*" in *"/rules/branches/"*) echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]'; exit 0;; *graphql*|*renamed*) exit 0;; *created_at*) n=$(echo "$*" | sed 's|.*issues/\\([0-9]*\\)/events.*|\\1|'); if [ -f "${root}/labeled-at-$n" ]; then cat "${root}/labeled-at-$n"; else echo 2020-01-01T00:00:00Z; fi; exit 0;; *"/events"*) [ -f "${root}/events-fail" ] && { echo "api down" >&2; exit 1; }; echo owner; exit 0;; *"/permission"*) if [ -f "${root}/perm" ]; then cat "${root}/perm"; else echo admin; fi; exit 0;; esac; fi
+if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker:in-progress"; then if [ -f "${root}/inprogress.json" ]; then cat "${root}/inprogress.json"; else echo '[]'; fi; exit 0; fi
+if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker:queued"; then echo '[]'; exit 0; fi
 if [ "$1 $2" = "issue list" ]; then
   printf '['; sep=''
   hide=0; case "$*" in *"--label bunker --state"*) [ -f "${root}/hide-2" ] && hide=$(cat "${root}/hide-2");; esac
@@ -72,7 +74,7 @@ if [ "$1 $2" = "issue list" ]; then
 fi
 if [ "$1 $2" = "issue view" ]; then cat "${root}/issue-$3.json"; exit 0; fi
 if [ "$1 $2" = "issue edit" ] && [ -f "${root}/edit-fails" ]; then echo "network down" >&2; exit 1; fi
-if [ "$1 $2" = "issue edit" ]; then rm -f "${root}/q/$3.json"; exit 0; fi
+if [ "$1 $2" = "issue edit" ]; then case "$*" in *in-progress*|*"--remove-label bunker:failed"*) exit 0;; esac; rm -f "${root}/q/$3.json"; exit 0; fi
 if [ "$1 $2" = "issue comment" ]; then shift 3; echo "COMMENT: $*" >> "${root}/comments.log"; exit 0; fi
 if [ "$1 $2" = "pr list" ] && [ -f "${root}/prlist.json" ]; then cat "${root}/prlist.json"; exit 0; fi
 if [ "$1 $2" = "label create" ]; then exit 0; fi
@@ -173,7 +175,7 @@ describe("runWatch() --triage-every", () => {
     expect(calls).toHaveLength(1);
     const log = await Bun.file(join(root, "gh.log")).text();
     expect(log).toMatch(/issue close 1 --comment/);
-    expect(log).not.toMatch(/--add-label (bunker|priority)/);
+    expect(log).not.toMatch(/--add-label (bunker:queued|priority)/);
     const state = JSON.parse(await Bun.file(join(repo, ".bunker", "watch-state.json")).text());
     expect(Date.now() - state.lastTriageAt).toBeLessThan(60_000);
     await run(repo, calls, 12);
@@ -204,6 +206,61 @@ describe("runWatch()", () => {
     expect(s.merged).toBe(2);
   });
 
+  test("in-progress is set on start and cleared on success", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    const ctl = new AbortController();
+    const s = await runWatch({ ...base, cwd: repo, agent: fakeAgent(), signal: ctl.signal, log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); } });
+    expect(s.merged).toBe(1);
+    const gh = await Bun.file(join(root, "gh.log")).text();
+    const add = gh.indexOf("issue edit 1 --add-label bunker:in-progress");
+    const remove = gh.indexOf("issue edit 1 --remove-label bunker:in-progress");
+    expect(add).toBeGreaterThan(-1);
+    expect(remove).toBeGreaterThan(add);
+    expect(gh).not.toContain("bunker:failed");
+  });
+
+  test("in-progress is cleared and bunker:failed set on failure; a started run removes an old bunker:failed", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker:queued" }, { name: "bunker:failed" }] }));
+    const ctl = new AbortController();
+    await runWatch({ ...base, cwd: repo, agent: fakeAgent({ failing: ["First"] }), signal: ctl.signal, log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); } });
+    const gh = await Bun.file(join(root, "gh.log")).text();
+    const start = gh.indexOf("issue edit 1 --add-label bunker:in-progress");
+    const unfail = gh.indexOf("issue edit 1 --remove-label bunker:failed");
+    const done = gh.indexOf("issue edit 1 --remove-label bunker:in-progress");
+    const fail = gh.indexOf("--add-label bunker:failed");
+    expect(start).toBeGreaterThan(-1);
+    expect(unfail).toBeGreaterThan(start);
+    expect(done).toBeGreaterThan(unfail);
+    expect(fail).toBeGreaterThan(done);
+  });
+
+  test("start-up removes a stale in-progress from an issue with no live run", async () => {
+    const { repo, root } = await setup([]);
+    await Bun.write(join(root, "inprogress.json"), JSON.stringify([{ number: 7 }]));
+    const ctl = new AbortController();
+    const lines: string[] = [];
+    await runWatch({ ...base, cwd: repo, agent: fakeAgent(), signal: ctl.signal, log: (l) => { lines.push(l); if (/pass 1 /.test(l)) ctl.abort(); } });
+    const gh = await Bun.file(join(root, "gh.log")).text();
+    expect(gh).toContain("issue edit 7 --remove-label bunker:in-progress");
+    expect(lines.join("\n")).toContain("#7");
+  });
+
+  test("start-up keeps in-progress on an issue whose worktree a process still uses", async () => {
+    const { repo, root } = await setup([]);
+    await Bun.write(join(root, "inprogress.json"), JSON.stringify([{ number: 7 }]));
+    const wt = join(repo, ".worktrees", "7-live");
+    await $`mkdir -p ${wt}`;
+    const proc = Bun.spawn(["sleep", "30"], { cwd: wt });
+    try {
+      const ctl = new AbortController();
+      await runWatch({ ...base, cwd: repo, agent: fakeAgent(), signal: ctl.signal, log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); } });
+    } finally {
+      proc.kill();
+    }
+    expect(await Bun.file(join(root, "gh.log")).text()).not.toContain("issue edit 7");
+  });
+
   test("a failing issue is relabelled and commented, never retried, and the next issue runs", async () => {
     const { repo, root } = await setup(three.slice(0, 2));
     const ctl = new AbortController();
@@ -215,9 +272,9 @@ describe("runWatch()", () => {
     expect(s.merged).toBe(1);
     expect(s.failed).toBe(1);
     const gh = await Bun.file(join(root, "gh.log")).text();
-    expect(gh).toContain("label create bunker-failed");
-    expect(gh).toContain("issue edit 1 --remove-label bunker --add-label bunker-failed");
-    expect(gh).not.toContain("issue edit 2");
+    expect(gh).toContain("label create bunker:failed");
+    expect(gh).toContain("issue edit 1 --remove-label bunker --add-label bunker:failed");
+    expect(gh).not.toMatch(/issue edit 2 --remove-label bunker( |:queued)/);
     const comments = await Bun.file(join(root, "comments.log")).text();
     expect(comments).toMatch(/failed/);
     expect(comments).toContain("agent exited with 1");

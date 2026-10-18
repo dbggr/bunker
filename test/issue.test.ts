@@ -813,7 +813,7 @@ describe("runIssue() --merge", () => {
     expect((await Bun.file(join(dirname(mergeLog), "rules.log")).text()).trim()).toBe("api repos/{owner}/{repo}/rules/branches/main");
   });
 
-  test.each([".bunker/verify", ".github/workflows/ci.yml"])("a PR touching %s → no auto-merge, labelled needs-human-review, needs-review", async (path) => {
+  test.each([".bunker/verify", ".github/workflows/ci.yml"])("a PR touching %s → no auto-merge, labelled bunker:review, needs-review", async (path) => {
     const { repo, mergeLog, editLog } = await setup(issue(), "ff");
     const agent: Agent = { command: (p, m = "write") => (m === "write" ? ["sh", "-c", `mkdir -p $(dirname ${path}) && echo x > ${path} && echo hi > feature.txt && git add -A && git commit -qm "feat: impl"`] : ["sh", "-c", `echo '${APPROVE}'`]) };
     const r = await run(repo, { agent });
@@ -821,7 +821,7 @@ describe("runIssue() --merge", () => {
     expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
     expect(r.error).toContain(path);
     expect(await Bun.file(mergeLog).exists()).toBe(false);
-    expect(await Bun.file(editLog).text()).toContain("pr edit https://github.com/o/r/pull/99 --add-label needs-human-review");
+    expect(await Bun.file(editLog).text()).toContain("pr edit https://github.com/o/r/pull/99 --add-label bunker:review");
   });
 
   // git quotes such paths in plain --name-only output ("\".bunker/\\303\\251\""), which a ^.bunker/ match would miss.

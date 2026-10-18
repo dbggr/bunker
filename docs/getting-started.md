@@ -64,7 +64,7 @@ bunker implements issue 12 in a worktree, reviews it, runs `.bunker/verify` and 
 
 ## 6. Scale up
 
-Label issues `bunker`, then work the queue:
+Label issues `bunker:queued`, then work the queue:
 
 ```sh
 bunker --queue --merge

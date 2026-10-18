@@ -85,8 +85,8 @@ describe("planActions()", () => {
   test("valid only comments, and is labelled only in label mode", () => {
     const valid = v("valid", { priority: "high", bug: true });
     expect(planActions(valid, "comment")).toEqual([{ kind: "comment" }]);
-        expect(planActions(valid, "label")).toEqual([{ kind: "comment" }, { kind: "label", labels: ["bunker", "priority:high", "bug"] }]);
-    expect(planActions(v("valid", { priority: "low" }), "label")[1]).toEqual({ kind: "label", labels: ["bunker", "priority:low"] });
+        expect(planActions(valid, "label")).toEqual([{ kind: "comment" }, { kind: "label", labels: ["bunker:queued", "priority:high", "bug"] }]);
+    expect(planActions(v("valid", { priority: "low" }), "label")[1]).toEqual({ kind: "label", labels: ["bunker:queued", "priority:low"] });
   });
 });
 
@@ -133,7 +133,7 @@ describe("runTriage()", () => {
     const { repo, writes } = await setup(open);
     await run(repo, all, "label");
     const edit = (await writes()).find((c) => c[1] === "edit")!;
-    expect(edit).toEqual(["issue", "edit", "4", "--add-label", "bunker", "--add-label", "priority:medium", "--add-label", "bug"]);
+    expect(edit).toEqual(["issue", "edit", "4", "--add-label", "bunker:queued", "--add-label", "priority:medium", "--add-label", "bug"]);
   });
 
   test("an issue that already has a triage comment is skipped and not shown to the agent", async () => {

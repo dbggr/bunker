@@ -70,7 +70,7 @@ describe("enforceLabeler()", () => {
     const g = await fakeGh(null, {});
     const logs: string[] = [];
     expect(await enforceLabeler(7, { cwd: process.cwd(), env: g.env, log: (t) => logs.push(t) })).toBe(false);
-    expect(logs.join("\n")).toContain("no `bunker` label event found on #7 (add the label first");
+    expect(logs.join("\n")).toContain("no `bunker:queued` label event found on #7 (add the label first");
     expect(await g.log()).not.toContain("issue edit");
   });
 

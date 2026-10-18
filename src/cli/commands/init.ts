@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { formatChecks, exec, LABELS, probeGhToken, runDoctor, userEnv, TOKEN_FIX, type Check, type RepoInfo } from "./doctor.ts";
 import { addSecrets, redact } from "../../core/redact.ts";
 import { PRIORITY_LABELS } from "../../core/priority.ts";
+import { labelCreateArgs } from "../../github/labels.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -189,7 +190,7 @@ export async function runInit(opts: { cwd: string; env?: Env; yes: boolean; io: 
     io.say("\n== Labels ==");
     if (await io.confirm(`Create the missing labels (${missingLabels.join(", ")}) with gh label create?`, true)) {
       for (const l of missingLabels) {
-        const r = await exec(["gh", "label", "create", l, "--repo", repo.slug, "--description", `bunker: ${l}`, ...(PRIORITY_LABELS.find((p) => p.name === l) ? ["--color", PRIORITY_LABELS.find((p) => p.name === l)!.color] : [])], { env: userEnv(env) });
+        const r = await exec(["gh", "label", "create", l, "--repo", repo.slug, ...(labelCreateArgs(l).length ? labelCreateArgs(l) : ["--description", `bunker: ${l}`]), ...(PRIORITY_LABELS.find((p) => p.name === l) ? ["--color", PRIORITY_LABELS.find((p) => p.name === l)!.color] : [])], { env: userEnv(env) });
         io.say(r.code === 0 ? `created label ${l}` : `could not create ${l}: ${redact(r.err.trim())}`);
       }
     }

@@ -80,7 +80,7 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
   };
 }
 
-export const retryCommand = (n: number) => `gh issue edit ${n} --remove-label bunker-failed --add-label bunker`;
+export const retryCommand = (n: number) => `gh issue edit ${n} --remove-label bunker:failed --add-label bunker:queued`;
 
 function readJson(file: string): unknown {
   try {
@@ -115,7 +115,7 @@ export interface StatusReport {
   };
   /** Runs in flight; empty when the watcher is not alive. */
   current: { issue: number; stage: string; sinceMs: number; logPath?: string }[];
-  /** Open `bunker` issues in priority order; null when GitHub could not be asked. */
+  /** Open `bunker:queued` issues in priority order; null when GitHub could not be asked. */
   queue: { number: number; title: string; priority: string; bug: boolean }[] | null;
   merged: MergedRun[];
   failed: (FailedRun & { retry: string })[];
@@ -126,7 +126,7 @@ export interface StatusOptions {
   /** The repo root (where `.bunker/` is). */
   repo: string;
   caps?: SpendCaps;
-  /** The open `bunker` issues, unordered; undefined when unavailable. */
+  /** The open `bunker:queued` issues, unordered; undefined when unavailable. */
   queue?: () => Promise<Queued[] | undefined>;
   alive: (pid: number) => boolean;
   now?: number;

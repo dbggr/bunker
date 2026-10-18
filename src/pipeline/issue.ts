@@ -4,6 +4,7 @@ import type { ReviewResult } from "./review.ts";
 import type { Timeouts, Sandbox } from "../sandboxes/exec.ts";
 import type { Agent, Usage } from "../agents/agent.ts";
 import { runIssueInner } from "./issue-run.ts";
+import { clearInProgress, markInProgress } from "../github/labels.ts";
 
 export interface IssueOptions extends Timeouts {
   issue: number;
@@ -79,13 +80,22 @@ export interface IssueResult {
 export async function runIssue(opts: IssueOptions): Promise<IssueResult> {
   const spent: { usage?: Usage } = {};
   let untrack = () => {};
+  // The label only displays the run: it is shown on start and cleared on any end, and nothing reads it back.
+  const cwd = opts.cwd ?? process.cwd();
+  const token = process.env.BUNKER_GH_TOKEN;
+  const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
+  await markInProgress(opts.issue, cwd, env);
+  let other = false; // another run holds this issue and owns its label
   try {
-    return await runIssueInner(opts, spent, (u) => (untrack = u));
+    const result = await runIssueInner(opts, spent, (u) => (untrack = u));
+    other = result.status === "already-in-progress";
+    return result;
   } catch (e) {
     // Whatever the agents already spent must not vanish with the error.
     if (spent.usage && !(e instanceof AgentFailure)) throw new AgentFailure(e instanceof Error ? e.message : String(e), spent.usage);
     throw e;
   } finally {
     untrack();
+    if (!other) await clearInProgress(opts.issue, cwd, env);
   }
 }

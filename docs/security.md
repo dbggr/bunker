@@ -5,7 +5,7 @@
 An agent runs in a container with the issue worktree and the Claude token. It does not get `BUNKER_GH_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, your SSH keys or your `gh` login: the docker sandbox never passes them, and `--no-sandbox` strips them from the agent's environment and runs it with a temporary empty `HOME` (see below). The agent cannot push or open PRs. bunker does that after review and verify, from the host.
 
 - **Workflow edits**: the token has no Workflows permission, so GitHub refuses a push that changes `.github/workflows/`. bunker has no code that blocks them; the token does. See [troubleshooting.md](troubleshooting.md).
-- **Queueing work**: agents can only file issues labelled `discovered`, never `bunker`. A human relabelling is the gate.
+- **Queueing work**: agents can only file issues labelled `discovered`, never `bunker:queued`. A human relabelling is the gate.
 - **Verify rules**: `.bunker/verify` is read from origin's default branch, so an agent can't rewrite the check it must pass.
 - **Prompt templates**: `.bunker/prompts/*.md` are read from origin's default branch, never a worktree, so the `` !`cmd` `` lines that run on the host always come from merged (human-reviewed, see below) changes.
 - **Merging**: nothing merges unless the repo's required CI checks pass on GitHub.
@@ -38,7 +38,7 @@ Public repos let anyone write an issue or a comment, and the issue text becomes 
 
 - The issue body is fenced and flagged as untrusted unless its author is the repo owner, a member or a collaborator. If the author association can't be fetched, bunker treats it as untrusted.
 - Only comments from the repo owner or users with admin/maintain permission are included in the prompt (a read/triage collaborator is not enough); others are dropped. `Blocked by #N` in the issue body counts only when its author has admin/maintain permission.
-- The `bunker` label is the trust gate. bunker also checks who added it (latest `labeled` event): only repo admins and maintainers count, plus anyone named by `--allow-labeler <login>` or `allow-labelers = ["login"]` in `~/.config/bunker/config.toml`. Otherwise the issue is skipped, the label removed and a comment left; if the permission lookup fails the issue is skipped (fail closed). Still only apply the label to issues you have read. `discovered` issues are never queued until you relabel them.
+- The `bunker:queued` label (or the old `bunker`, accepted for one release) is the trust gate; `bunker:in-progress`, `bunker:failed` and `bunker:review` are display only and never queue work. bunker also checks who added it (latest `labeled` event): only repo admins and maintainers count, plus anyone named by `--allow-labeler <login>` or `allow-labelers = ["login"]` in `~/.config/bunker/config.toml`. Otherwise the issue is skipped, the label removed and a comment left; if the permission lookup fails the issue is skipped (fail closed). Still only apply the label to issues you have read. `discovered` issues are never queued until you relabel them.
 
 ## Live view
 

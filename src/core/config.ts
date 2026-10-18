@@ -46,7 +46,7 @@ export const CONFIG_KEYS: KeySpec[] = [
   { key: "merge.ci_timeout", kind: "number", doc: "minutes --merge waits for CI", default: 30 },
   { key: "clean.logs_days", kind: "number", doc: "days to keep .bunker/runs logs; --watch / --queue start-up and `bunker clean` prune older ones", default: 30 },
   { key: "notify.enabled", kind: "boolean", doc: "desktop notifications from --watch (notify-send / osascript)", default: true },
-  { key: "notify.github_user", kind: "string", doc: "login @-mentioned when an issue becomes bunker-failed / bunker-blocked (default: the repo owner, if a user)" },
+  { key: "notify.github_user", kind: "string", doc: "login @-mentioned when an issue becomes bunker:failed / bunker-blocked (default: the repo owner, if a user)" },
 ];
 
 const EXPECTED: Record<Kind, string> = {
