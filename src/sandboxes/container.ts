@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { output } from "../core/output.ts";
 import { gitMountArgs, guardGit } from "./git-guard.ts";
+import type { RoleSkills } from "../core/skills.ts";
 import { killGroup, teeStdout, type Sandbox } from "./exec.ts";
 import baseDockerfile from "../../images/base/Dockerfile" with { type: "text" };
 
@@ -56,6 +57,8 @@ export interface DockerOptions {
   baseImage?: string;
   /** Env var names passed through to the container. */
   env?: string[];
+  /** Skill directories per role, mounted read-only into the container's ~/.claude/skills/<name>. */
+  skills?: RoleSkills;
   /** Container CLI to invoke. Defaults to the provider's own (`docker` / `podman`). */
   bin?: string;
 }
@@ -98,7 +101,7 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
     exec(cmd, ctx) {
       // Arrow function: `this.projectsDir` below still means this sandbox.
       return guardGit(ctx.worktree, ctx.gitCommonDir, async () => {
-      const { worktree, gitCommonDir, prefix, onLine, limits, isolate, stdin } = ctx;
+      const { worktree, gitCommonDir, prefix, onLine, limits, isolate, stdin, role } = ctx;
       const [entrypoint, ...args] = cmd;
       if (!entrypoint) throw new Error("empty agent command");
       if (!images.has(gitCommonDir)) images.set(gitCommonDir, resolveImage(bin, opts, worktree, gitCommonDir));
@@ -123,6 +126,7 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
         ...(isolate ? ["--network", "none"] : ["--network", "host", ...env.flatMap((name) => ["-e", name])]), // name only: value comes from our env, never argv
         ...identity,
         "-v", `${this.projectsDir}:/tmp/.claude/projects`,
+        ...(role ? opts.skills?.[role] ?? [] : []).flatMap((k) => ["-v", `${k.path}:/tmp/.claude/skills/${k.name}:ro`]),
         ...gitMountArgs(worktree, gitCommonDir),
         "-w", worktree,
         "--entrypoint", entrypoint,

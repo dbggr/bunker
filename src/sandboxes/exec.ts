@@ -1,6 +1,7 @@
 import { output } from "../core/output.ts";
 import { redact } from "../core/redact.ts";
 import { formatDuration } from "../agents/agent.ts";
+import type { RoleSkills, SkillRole } from "../core/skills.ts";
 
 /** Where the agent's command runs. Gets the worktree and the repo's shared .git dir. */
 export interface Sandbox {
@@ -29,6 +30,8 @@ export interface ExecContext {
   limits?: ExecLimits;
   /** Runs agent-written code that needs neither: no network and no Claude credentials (verify). */
   isolate?: boolean;
+  /** The agent role this command is for; the sandbox gives it that role's skills. */
+  role?: SkillRole;
   /** Written to the command's stdin, then closed. */
   stdin?: string;
 }

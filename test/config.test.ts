@@ -54,13 +54,14 @@ describe("parseConfig", () => {
       models: { implementer: "m-impl", reviewer: "m-rev", auditor: "m-aud", default: "m-def" },
       watch: { interval: 5, parallel: 3, max_cost_day: 10, max_cost_month: 100.5, audit_every: 30, triage_every: 12 },
       merge: { ci_timeout: 45 },
+      skills: {},
       clean: {},
       notify: { enabled: false, github_user: "carol" },
     });
   });
 
   test("empty file is an empty config", () => {
-    expect(parseConfig("").config).toEqual({ models: {}, watch: {}, merge: {}, notify: {}, clean: {} });
+    expect(parseConfig("").config).toEqual({ models: {}, skills: {}, watch: {}, merge: {}, notify: {}, clean: {} });
   });
 
   test("unknown keys warn, naming the key", () => {

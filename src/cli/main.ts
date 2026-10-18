@@ -8,6 +8,7 @@ import { AgentFailure, UsageLimit } from "../pipeline/errors.ts";
 import { review } from "../pipeline/review.ts";
 import { run, runAll } from "../pipeline/run.ts";
 import { worktreeAdmin } from "../worktree/admin.ts";
+import { SkillError, loadSkills } from "../core/skills.ts";
 import { docker } from "../sandboxes/container.ts";
 import { noSandbox } from "../sandboxes/no-sandbox.ts";
 import { formatDuration, formatUsage } from "../agents/agent.ts";
@@ -251,7 +252,12 @@ if (!watchOpts && (values.queue || values.issue !== undefined)) await runClean({
 const models = resolveModels(values, process.env, repoCfg.models);
 const agent = claudeCode({ model: models.implementer, json: true });
 const reviewerAgent = () => (models.reviewer === models.implementer ? agent : claudeCode({ model: models.reviewer, json: true }));
-const sandbox = values["no-sandbox"] ? noSandbox() : docker({ image: values.image });
+const skills = await loadSkills(process.cwd()).catch((e) => {
+  if (!(e instanceof SkillError)) throw e;
+  console.error(`bunker: ${e.message}`);
+  process.exit(2);
+});
+const sandbox = values["no-sandbox"] ? noSandbox({ skills }) : docker({ image: values.image, skills });
 
 if (values.audit) {
   let result;
