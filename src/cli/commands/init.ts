@@ -317,7 +317,8 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
       cmds.verify ??= tc.verify;
       say(`  ${yes ? "Detected" : "Chosen:"} ${tc.name}. Proposed commands:`);
       if (failing("setup")) say(`    setup:  ${cmds.setup}`);
-      if (failing("verify")) say(`    verify: ${cmds.verify}`);
+      if (failing("verify")) say(`    verify: ${cmds.verify || "(none)"}`);
+      if (!tc.verify && failing("verify")) todo.push({ what: "no verify command", fix: `add verify = "<your test command>" to .bunker/config.toml. ${tc.note ?? ""}`.trim() });
       if (tc.note) wrap(`Note: ${tc.note}`, 4);
       if (!yes && (await io.confirm("Edit these commands?", false))) {
         if (failing("setup")) cmds.setup = (await io.ask("setup: ", cmds.setup)).trim() || undefined;

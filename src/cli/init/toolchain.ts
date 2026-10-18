@@ -68,6 +68,103 @@ function nodeToolchain(root: string): Toolchain | undefined {
   return { name: pm, setup, verify, dockerfile, ...(notes.length ? { note: notes.join("; ") } : {}) };
 }
 
+const PHP_BUILTIN = new Set(["core", "ctype", "date", "filter", "hash", "iconv", "json", "libxml", "openssl", "pcre", "pdo", "phar", "posix", "pcntl", "random", "reflection", "session", "sodium", "spl", "standard", "tokenizer", "opcache", "zend opcache", "zlib"]);
+/** composer `ext-*` name -> Debian (sury) package suffix; "" means nothing to install. */
+const PHP_EXT: Record<string, string> = { pdo_pgsql: "pgsql", pgsql: "pgsql", pdo_mysql: "mysql", mysqli: "mysql", mysqlnd: "mysql", pdo_sqlite: "sqlite3", sqlite3: "sqlite3", dom: "xml", simplexml: "xml", xmlreader: "xml", xmlwriter: "xml", xml: "xml", mbstring: "mbstring", fileinfo: "", readline: "readline" };
+
+/** The composer.json nearest the root: the root itself, else the first subdirectory (two levels at most) that has one. */
+function findComposerDir(root: string): string | undefined {
+  if (existsSync(join(root, "composer.json"))) return ".";
+  const skip = (n: string) => n.startsWith(".") || n === "vendor" || n === "node_modules";
+  const subdirs = (rel: string) => {
+    try {
+      return readdirSync(join(root, rel), { withFileTypes: true }).filter((e) => e.isDirectory() && !skip(e.name)).map((e) => (rel === "." ? e.name : `${rel}/${e.name}`)).sort();
+    } catch {
+      return [];
+    }
+  };
+  const level1 = subdirs(".");
+  for (const d of level1) if (existsSync(join(root, d, "composer.json"))) return d;
+  for (const d of level1) for (const d2 of subdirs(d)) if (existsSync(join(root, d2, "composer.json"))) return d2;
+  return undefined;
+}
+
+/** The lowest PHP version a composer constraint allows, as `major.minor` (">=8.5" -> "8.5", "^8.2 || ^8.3" -> "8.2"). */
+function phpVersion(constraint: unknown): string | undefined {
+  if (typeof constraint !== "string") return undefined;
+  const found = [...constraint.matchAll(/(\d+)\.(\d+)/g)].map((m) => [Number(m[1]), Number(m[2])] as const);
+  if (!found.length) return undefined;
+  found.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  return `${found[0]![0]}.${found[0]![1]}`;
+}
+
+/** Whether the tests need a database service the sandbox lacks: CI `services:` or a non-local DB host in `.env.test`. */
+function phpNeedsDatabase(root: string, dir: string): boolean {
+  try {
+    for (const f of readdirSync(join(root, ".github", "workflows"))) if (/\.ya?ml$/.test(f) && /^\s*services:/m.test(readFileSync(join(root, ".github", "workflows", f), "utf8"))) return true;
+  } catch {}
+  const local = /^(localhost|127\.0\.0\.1|::1)$/;
+  for (const d of new Set([dir, "."])) {
+    try {
+      const env = readFileSync(join(root, d, ".env.test"), "utf8");
+      for (const m of env.matchAll(/^\s*([A-Z_]*(?:DATABASE|DB)[A-Z_]*)\s*=\s*["']?(.*?)["']?\s*$/gm)) {
+        const v = m[2]!;
+        const url = /^(pgsql|postgres(?:ql)?|mysql|mariadb|mongodb|sqlsrv):\/\/(?:[^@/]*@)?([^:/?]+)/i.exec(v);
+        if (url && !local.test(url[2]!)) return true;
+        if (/HOST$/.test(m[1]!) && /^[\w.-]+$/.test(v) && !local.test(v)) return true;
+      }
+    } catch {}
+  }
+  return false;
+}
+
+function phpToolchain(root: string): Toolchain | undefined {
+  const dir = findComposerDir(root);
+  if (dir === undefined) return undefined;
+  const composer = readJson(join(root, dir, "composer.json"));
+  const cd = dir === "." ? "" : `cd ${dir} && `;
+  const notes: string[] = [];
+  if (dir !== ".") notes.push(`composer.json is in ${dir}/, so setup and verify run from there`);
+  let verify = `${cd}${composer?.scripts?.test ? "composer test" : "vendor/bin/phpunit"}`;
+  if (phpNeedsDatabase(root, dir)) {
+    verify = "";
+    notes.push("the tests need a database (CI services or a DB host in .env.test) and the sandbox has none, so no verify command was written; add one that starts or fakes the database, or point .env.test at a local one");
+  }
+  const v = phpVersion(composer?.require?.php);
+  const exts = new Set(["cli", "xml", "mbstring"]);
+  const unknown: string[] = [];
+  for (const key of Object.keys(composer?.require ?? {})) {
+    const m = /^ext-(.+)$/.exec(key);
+    if (!m) continue;
+    const name = m[1]!.toLowerCase();
+    if (PHP_BUILTIN.has(name)) continue;
+    if (name in PHP_EXT) {
+      if (PHP_EXT[name]) exts.add(PHP_EXT[name]!);
+    } else {
+      exts.add(name);
+      unknown.push(name);
+    }
+  }
+  if (unknown.length) notes.push(`guessed the Debian packages for ext-${unknown.join(", ext-")}; check they exist`);
+  const pkgs = (prefix: string) => [...exts].map((e) => `${prefix}-${e}`).join(" ");
+  // distro apt lags behind composer's `require.php`, so a stated version comes from the sury repo
+  const runtime = v
+    ? [
+        apt("ca-certificates curl lsb-release unzip"),
+        "RUN curl -sSLo /tmp/sury.deb https://packages.sury.org/debsuryorg-archive-keyring.deb && dpkg -i /tmp/sury.deb && rm /tmp/sury.deb \\",
+        '    && echo "deb [signed-by=/usr/share/keyrings/debsuryorg-archive-keyring.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" > /etc/apt/sources.list.d/php.list',
+        apt(pkgs(`php${v}`)),
+      ].join("\n")
+    : apt(`${pkgs("php")} unzip`);
+  return {
+    name: "php",
+    setup: `${cd}composer install --no-interaction`,
+    verify,
+    dockerfile: `${runtime}\nCOPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer`,
+    ...(notes.length ? { note: notes.join("; ") } : {}),
+  };
+}
+
 /**
  * Every toolchain the repo's files point at, most likely first. More than one means the caller should ask;
  * none means it should ask for the commands.
@@ -77,8 +174,8 @@ export function detectToolchains(root: string): Toolchain[] {
   const out: Toolchain[] = [];
   const node = nodeToolchain(root);
   if (node) out.push(node);
-  if (has("composer.json"))
-    out.push({ name: "php", setup: "composer install --no-interaction", verify: "composer test", dockerfile: `${apt("php-cli php-xml php-mbstring unzip")}\nCOPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer` });
+  const php = phpToolchain(root);
+  if (php) out.push(php);
   if (has("pyproject.toml") || has("requirements.txt"))
     out.push({ name: "python", setup: has("pyproject.toml") ? "pip install -e ." : "pip install -r requirements.txt", verify: "pytest", dockerfile: apt("python3 python3-pip python3-venv") });
   if (has("Cargo.toml")) out.push({ name: "rust", setup: "cargo fetch", verify: "cargo test", dockerfile: apt("cargo") });
