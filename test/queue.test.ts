@@ -63,6 +63,11 @@ async function setup(issues: [number, string, string][], mergeMode: "ff" | "none
     join(bin, "gh"),
     `#!/bin/sh
 if [ "$1" = "api" ]; then case "$*" in *"/rules/branches/"*) echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]'; exit 0;; *graphql*|*renamed*) exit 0;; *created_at*) echo 2020-01-01T00:00:00Z; exit 0;; *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
+if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker:in-progress"; then echo '[]'; exit 0; fi
+if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker:queued"; then
+  if [ -f "${root}/queued-list.json" ]; then cat "${root}/queued-list.json"; else echo '[]'; fi
+  exit 0
+fi
 if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker-blocked"; then
   if [ -f "${root}/blocked-list.json" ]; then cat "${root}/blocked-list.json"; else echo '[]'; fi
   exit 0
@@ -97,7 +102,7 @@ if [ "$1 $2" = "issue edit" ] || [ "$1 $2" = "issue comment" ] || [ "$1 $2" = "l
   if [ "$1 $2" = "issue edit" ]; then
     case "$*" in
       *"--add-label bunker-blocked"*) sed -i 's/"name":"bunker"/"name":"bunker-blocked"/' "${root}/issue-$3.json" ;;
-      *"--add-label bunker"*) sed -i 's/"name":"bunker-blocked"/"name":"bunker"/' "${root}/issue-$3.json" ;;
+      *"--add-label bunker:queued"*) sed -i 's/"name":"bunker-blocked"/"name":"bunker"/' "${root}/issue-$3.json" ;;
     esac
   fi
   exit 0
@@ -467,7 +472,7 @@ describe("blocked issues", () => {
     await Bun.write(join(root, "blocked-list.json"), JSON.stringify([{ number: 1, title: "First", createdAt: "2026-01-01T00:00:00Z" }]));
     await runQueue({ cwd: repo, agent: fakeAgent(), sandbox: noSandbox(), listRetryMs: 10, limit: 1 });
     const edits = (await Bun.file(join(root, "edits.log")).exists()) ? await Bun.file(join(root, "edits.log")).text() : "";
-    expect(edits).not.toContain("issue edit");
+    expect(edits).not.toMatch(/issue edit \d+ --(add|remove)-label (?!bunker:in-progress)/);
   });
 });
 

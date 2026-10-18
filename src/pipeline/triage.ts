@@ -8,6 +8,7 @@ import { sumUsage, type Agent, type Usage } from "../agents/agent.ts";
 import { fetchDefaultBranch } from "./audit.ts";
 import { modelLabel } from "../agents/models.ts";
 import { neutralise } from "../core/redact.ts";
+import { isQueuedLabel, QUEUED_LABEL } from "../github/labels.ts";
 import { extractOutput, readTriageVerdict, triageOutput, type TriageVerdict } from "../core/structured.ts";
 
 /** `dry`: change nothing. `comment`: comment and close. `label`: also apply `bunker` + `priority:*` + `bug` to valid issues (the maintainer's `--yes`). */
@@ -90,7 +91,7 @@ export function planActions(v: TriageVerdict, mode: TriageMode): TriageAction[] 
     case "as-designed":
       return [{ kind: "close", reason: "not planned" }];
     case "valid":
-      return [{ kind: "comment" }, ...(mode === "label" ? [{ kind: "label" as const, labels: ["bunker", `priority:${v.priority}`, ...(v.bug ? ["bug"] : [])] }] : [])];
+      return [{ kind: "comment" }, ...(mode === "label" ? [{ kind: "label" as const, labels: [QUEUED_LABEL, `priority:${v.priority}`, ...(v.bug ? ["bug"] : [])] }] : [])];
   }
 }
 
@@ -134,7 +135,7 @@ async function triageRun({ agent, sandbox, cwd = process.cwd(), mode = "dry", li
   const alreadyTriaged = all.filter((i) => i.comments?.some((c) => c.body?.includes(TRIAGE_MARKER))).map((i) => i.number);
   // An issue a maintainer already queued is theirs to judge.
   const fresh = all
-    .filter((i) => !alreadyTriaged.includes(i.number) && !i.labels?.some((l) => l.name === "bunker"))
+    .filter((i) => !alreadyTriaged.includes(i.number) && !i.labels?.some((l) => isQueuedLabel(l.name)))
     .sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? "") || a.number - b.number)
     .slice(0, limit)
     .map((i): Candidate => ({ number: i.number, title: i.title, body: i.body ?? "" }));

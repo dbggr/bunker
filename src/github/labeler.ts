@@ -1,5 +1,6 @@
 import { $ } from "bun";
 import { readUserConfig } from "../core/user-config.ts";
+import { QUEUED_EVENT_JQ, unqueue } from "./labels.ts";
 
 type Env = Record<string, string>;
 
@@ -8,15 +9,15 @@ export const MAINTAINER_ROLES = new Set(["admin", "maintain"]);
 export type LabelerCheck = { ok: true; adder: string } | { ok: false; adder?: string; reason: string; denied: boolean; comment?: string };
 
 /**
- * Who added the current `bunker` label (latest `labeled` event) and whether they may queue work: a repo `admin` or
+ * Who added the current `bunker:queued` label (or the legacy `bunker`) (latest `labeled` event) and whether they may queue work: a repo `admin` or
  * `maintain`er, or one of `allow`. Any lookup failure is a refusal with `denied: false` (fail closed, nothing to tell the adder).
  */
 export async function checkLabeler(issue: number, opts: { cwd: string; env: Env; allow?: string[] }): Promise<LabelerCheck> {
   const { cwd, env } = opts;
-  const events = await $`gh api repos/{owner}/{repo}/issues/${issue}/events --paginate --jq ${'.[] | select(.event == "labeled" and .label.name == "bunker") | .actor.login'}`.cwd(cwd).env(env).nothrow().quiet();
+  const events = await $`gh api repos/{owner}/{repo}/issues/${issue}/events --paginate --jq ${`.[] | select(${QUEUED_EVENT_JQ}) | .actor.login`}`.cwd(cwd).env(env).nothrow().quiet();
   if (events.exitCode !== 0) return { ok: false, denied: false, reason: `could not read the label events of #${issue}: ${events.stderr.toString().trim()}` };
   const adder = events.stdout.toString().split("\n").map((l) => l.trim()).filter(Boolean).pop();
-  if (!adder) return { ok: false, denied: false, reason: `no \`bunker\` label event found on #${issue} (add the label first: --issue checks who labeled it)` };
+  if (!adder) return { ok: false, denied: false, reason: `no \`bunker:queued\` label event found on #${issue} (add the label first: --issue checks who labeled it)` };
   const allowed = (login: string) => opts.allow?.some((a) => a.toLowerCase() === login.toLowerCase()) ?? false;
   if (!allowed(adder)) {
     const denied = await checkPermission(adder, opts);
@@ -37,7 +38,7 @@ async function checkPermission(adder: string, opts: { cwd: string; env: Env }): 
 
 /**
  * The maintainer gate checks who labelled, but the body is read later: an outsider could swap it after the label. Refuse when the
- * body or title was edited after the latest `bunker` label by anyone who is not admin/maintain/allowed. Fails closed on any error.
+ * body or title was edited after the latest `bunker:queued` label by anyone who is not admin/maintain/allowed. Fails closed on any error.
  */
 async function checkEditedSince(issue: number, adder: string, opts: { cwd: string; env: Env }, allowed: (login: string) => boolean): Promise<LabelerCheck> {
   const { cwd, env } = opts;
@@ -61,7 +62,7 @@ async function checkEditedSince(issue: number, adder: string, opts: { cwd: strin
     if (kind === "last") last = t;
     else if (kind === "edit") edits.push({ at: t, login });
   }
-  const refuse = (): LabelerCheck => ({ ok: false, adder, denied: true, reason: `#${issue} was edited after it was labelled bunker`, comment: `@${adder} issue was edited after it was queued; re-check and relabel` });
+  const refuse = (): LabelerCheck => ({ ok: false, adder, denied: true, reason: `#${issue} was edited after it was labelled bunker:queued`, comment: `@${adder} issue was edited after it was queued; re-check and relabel` });
   const later = edits.filter((e) => e.at > labeledAt);
   if (later.length === 0 && last !== undefined && last > labeledAt) return refuse(); // edited, but by whom is unknown
   const trusted = new Map<string, boolean>();
@@ -81,9 +82,9 @@ async function checkEditedSince(issue: number, adder: string, opts: { cwd: strin
   return { ok: true, adder };
 }
 
-/** When the latest `bunker` label was added (ms since epoch); undefined if there is no such event or the lookup failed. */
+/** When the latest `bunker:queued` label was added (ms since epoch); undefined if there is no such event or the lookup failed. */
 export async function latestBunkerLabeledAt(issue: number, opts: { cwd: string; env: Env }): Promise<number | undefined> {
-  const events = await $`gh api repos/{owner}/{repo}/issues/${issue}/events --paginate --jq ${'.[] | select(.event == "labeled" and .label.name == "bunker") | .created_at'}`.cwd(opts.cwd).env(opts.env).nothrow().quiet();
+  const events = await $`gh api repos/{owner}/{repo}/issues/${issue}/events --paginate --jq ${`.[] | select(${QUEUED_EVENT_JQ}) | .created_at`}`.cwd(opts.cwd).env(opts.env).nothrow().quiet();
   if (events.exitCode !== 0) return undefined;
   const last = events.stdout.toString().split("\n").map((l) => l.trim()).filter(Boolean).pop();
   const at = last ? Date.parse(last) : NaN;
@@ -99,7 +100,7 @@ export async function enforceLabeler(issue: number, opts: { cwd: string; env: En
   opts.onRefused?.();
   if (r.denied) {
     const { cwd, env } = opts;
-    const edit = await $`gh issue edit ${issue} --remove-label bunker`.cwd(cwd).env(env).nothrow().quiet();
+    const edit = await unqueue(issue, cwd, env);
     if (edit.exitCode !== 0) log(`bunker: could not remove the label from #${issue}: ${edit.stderr.toString().trim()}`);
     await $`gh issue comment ${issue} --body ${r.comment ?? `@${r.adder} only maintainers can queue bunker work`}`.cwd(cwd).env(env).nothrow().quiet();
   }

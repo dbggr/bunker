@@ -101,7 +101,7 @@ describe("collectStatus()", () => {
         { number: 11, title: "low one", priority: "low", bug: false },
       ],
       merged: [{ issue: 3, prUrl: "https://github.com/o/r/pull/9", at: expect.any(Number) }],
-      failed: [{ issue: 5, status: "verify-failed", reason: "src/a.ts(1,1): error TS1: x", logPath: "/l/5.log", at: expect.any(Number), retry: "gh issue edit 5 --remove-label bunker-failed --add-label bunker" }],
+      failed: [{ issue: 5, status: "verify-failed", reason: "src/a.ts(1,1): error TS1: x", logPath: "/l/5.log", at: expect.any(Number), retry: "gh issue edit 5 --remove-label bunker:failed --add-label bunker:queued" }],
       spend: { day: { spentUsd: 2.5, capUsd: 10 }, month: { spentUsd: 2.5 } },
     });
     const text = formatStatus(s);

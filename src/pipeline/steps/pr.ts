@@ -1,6 +1,7 @@
 import { $ } from "bun";
 import { waitForMerge } from "../../github/branches.ts";
 import { neutralise } from "../../core/redact.ts";
+import { ensureLabel, REVIEW_LABEL } from "../../github/labels.ts";
 import { emit, emitStage } from "../../core/events.ts";
 import { tailLines } from "../../core/output.ts";
 import { STEERING } from "../../worktree/steering.ts";
@@ -79,10 +80,10 @@ export function publishIssue(ctx: IssueRunContext, input: PublishInput): Promise
     const diff = await $`git -C ${worktree} diff -z --name-only --no-renames ${baseSha} HEAD`.nothrow().quiet();
     const sensitive = diff.exitCode === 0 ? diff.stdout.toString().split("\0").filter((f) => /^\.(bunker|github)\//.test(f) || STEERING.test(f)) : [`(could not list the changed files: ${diff.stderr.toString().trim()})`];
     if (sensitive.length) {
-      await $`gh label create needs-human-review --color D93F0B --description "bunker will not auto-merge this PR" --force`.cwd(worktree).env(env).nothrow().quiet();
-      const labelled = await $`gh pr edit ${prUrl} --add-label needs-human-review`.cwd(worktree).env(env).nothrow().quiet();
+      await ensureLabel(REVIEW_LABEL, worktree, env);
+      const labelled = await $`gh pr edit ${prUrl} --add-label ${REVIEW_LABEL}`.cwd(worktree).env(env).nothrow().quiet();
       const shown = sensitive.slice(0, 10).join(", ") + (sensitive.length > 10 ? ", …" : "");
-      return fail("needs-review", { ...opened, error: `the PR changes ${shown}, which a human must review: bunker left auto-merge off${labelled.exitCode === 0 ? "" : " (could not add the needs-human-review label: " + labelled.stderr.toString().trim() + ")"}` });
+      return fail("needs-review", { ...opened, error: `the PR changes ${shown}, which a human must review: bunker left auto-merge off${labelled.exitCode === 0 ? "" : " (could not add the bunker:review label: " + labelled.stderr.toString().trim() + ")"}` });
     }
 
     // Without a required status check GitHub merges an already-mergeable PR the moment auto-merge is armed.

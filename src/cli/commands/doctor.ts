@@ -5,13 +5,17 @@ import { AUTH_VARS, loadBunkerEnv } from "../../core/env.ts";
 import { DEFAULT_MODEL_LABEL, resolveModels } from "../../agents/models.ts";
 import { ConfigError, effectiveSettings, formatValue, loadRepoConfig } from "../../core/config.ts";
 import { redact } from "../../core/redact.ts";
+import { FAILED_LABEL, IN_PROGRESS_LABEL, LEGACY_FAILED_LABEL, LEGACY_QUEUED_LABEL, LEGACY_REVIEW_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
 import { PRIORITY_LABELS } from "../../core/priority.ts";
 
 type Env = Record<string, string | undefined>;
 
+/** New label -> the pre-namespace name still accepted for one release; renaming it keeps it on existing issues. */
+export const LEGACY_NAMES: Record<string, string> = { [QUEUED_LABEL]: LEGACY_QUEUED_LABEL, [FAILED_LABEL]: LEGACY_FAILED_LABEL, [REVIEW_LABEL]: LEGACY_REVIEW_LABEL };
+
 /** Filed on follow-ups and audit findings; filing falls back to no severity label without them, so they are optional. */
 export const SEVERITY_LABELS = ["severity:high", "severity:medium"] as const;
-export const LABELS = ["bunker", "discovered", "bunker-failed", "bunker-blocked", ...PRIORITY_LABELS.map((p) => p.name), ...SEVERITY_LABELS] as const;
+export const LABELS = [QUEUED_LABEL, IN_PROGRESS_LABEL, FAILED_LABEL, REVIEW_LABEL, "discovered", "bunker-blocked", ...PRIORITY_LABELS.map((p) => p.name), ...SEVERITY_LABELS] as const;
 
 /** Total bytes of the files under `dir` (0 if missing); symlinks are not followed. */
 function dirSize(dir: string): number {
@@ -211,7 +215,7 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
       names = (JSON.parse(labels.out) as { name: string }[]).map((l) => l.name);
     } catch {}
     for (const l of LABELS) {
-      add({ id: `label-${l}`, group: "github", label: `label ${l}`, ok: !!names?.includes(l), required: !(SEVERITY_LABELS as readonly string[]).includes(l), fix: `gh label create ${l} --repo ${repo!.slug}` });
+      add({ id: `label-${l}`, group: "github", label: `label ${l}`, ok: !!names?.includes(l), required: !(SEVERITY_LABELS as readonly string[]).includes(l), fix: names?.includes(LEGACY_NAMES[l] ?? "") ? `gh label edit ${LEGACY_NAMES[l]} --name ${l} --repo ${repo!.slug} (keeps it on existing issues; the old name still works for one release)` : `gh label create ${l} --repo ${repo!.slug}` });
     }
     const branch = defaultBranch ?? "main";
     add({
@@ -260,7 +264,7 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
       group: "github",
       label: "token can look up who may queue work (collaborator permission)",
       ok: perm?.code === 0,
-      fix: "bunker only works issues whose `bunker` label a maintainer added, and fails closed when it can't read collaborator permissions; use a token that can (Metadata R, or a classic token with repo access) and a GitHub origin",
+      fix: "bunker only works issues whose `bunker:queued` label a maintainer added, and fails closed when it can't read collaborator permissions; use a token that can (Metadata R, or a classic token with repo access) and a GitHub origin",
     });
   }
 

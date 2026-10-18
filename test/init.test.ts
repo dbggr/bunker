@@ -23,7 +23,7 @@ function scripted(o: { no?: RegExp[]; asks?: string[]; secrets?: string[] } = {}
 }
 
 async function bunRepo(opts: Parameters<typeof fakeWorld>[0] = {}) {
-  const w = await fakeWorld({ files: { "labels.json": JSON.stringify([{ name: "bunker" }]) }, ...opts });
+  const w = await fakeWorld({ files: { "labels.json": JSON.stringify([{ name: "bunker:queued" }]) }, ...opts });
   await rm(join(w.repo, ".bunker/verify"));
   await Bun.write(join(w.repo, "bun.lock"), "");
   return w;
@@ -50,7 +50,7 @@ describe("detectToolchain", () => {
 
 describe("init --yes", () => {
   test("redacts secrets in gh label create stderr", async () => {
-    const w = await bunRepo({ files: { "label-create-err.txt": "denied for token github_pat_leakyleaky123", "labels.json": JSON.stringify([{ name: "bunker" }]) } });
+    const w = await bunRepo({ files: { "label-create-err.txt": "denied for token github_pat_leakyleaky123", "labels.json": JSON.stringify([{ name: "bunker:queued" }]) } });
     const s = scripted();
     await runInit({ cwd: w.repo, env: w.env, yes: true, io: s.io });
     expect(s.text()).toContain("could not create");
@@ -59,7 +59,7 @@ describe("init --yes", () => {
   });
 
   test("bun repo: writes setup/verify defaults, creates missing labels, changes no repo settings", async () => {
-    const w = await bunRepo({ files: { "repo.json": JSON.stringify({ default_branch: "main", allow_auto_merge: false }), "labels.json": JSON.stringify([{ name: "bunker" }]) } });
+    const w = await bunRepo({ files: { "repo.json": JSON.stringify({ default_branch: "main", allow_auto_merge: false }), "labels.json": JSON.stringify([{ name: "unrelated" }]) } });
     const s = scripted();
     await runInit({ cwd: w.repo, env: w.env, yes: true, io: s.io });
     const toml = Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text());
@@ -68,7 +68,7 @@ describe("init --yes", () => {
     expect(await exists(join(w.repo, ".bunker/verify"))).toBe(false);
     expect(await Bun.file(join(w.repo, ".bunker/Dockerfile")).text()).toContain("FROM bunker-claude");
     const log = await w.log();
-    for (const l of ["discovered", "bunker-failed", "bunker-blocked", "priority:high", "priority:medium", "priority:low", "severity:high", "severity:medium"]) expect(log).toContain(`gh label create ${l}`);
+    for (const l of ["discovered", "bunker:queued", "bunker:in-progress", "bunker:failed", "bunker:review", "bunker-blocked", "priority:high", "priority:medium", "priority:low", "severity:high", "severity:medium"]) expect(log).toContain(`gh label create ${l}`);
     expect(log).not.toContain("gh label create bunker ");
     // only GETs: no repo-settings writes
     expect(log).not.toMatch(/--method|-X |--input|-f |-F |PATCH|PUT|POST/);
@@ -100,7 +100,7 @@ describe("init --yes", () => {
     expect(await runInit({ cwd: w.repo, env: w.env, yes: true, io: s.io })).toBe(1);
     expect(s.text()).not.toContain("bunker --issue");
     const w2 = await bunRepo();
-    await Bun.write(join(w2.data, "labels.json"), JSON.stringify(["bunker", "discovered", "bunker-failed", "bunker-blocked", "priority:high", "priority:medium", "priority:low", "severity:high", "severity:medium"].map((name) => ({ name }))));
+    await Bun.write(join(w2.data, "labels.json"), JSON.stringify(["bunker:queued", "bunker:in-progress", "bunker:failed", "bunker:review", "discovered", "bunker-blocked", "priority:high", "priority:medium", "priority:low", "severity:high", "severity:medium"].map((name) => ({ name }))));
     const s2 = scripted();
     expect(await runInit({ cwd: w2.repo, env: w2.env, yes: true, io: s2.io })).toBe(0);
     expect(s2.text()).toContain("bunker --issue <n> --merge");

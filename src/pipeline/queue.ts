@@ -1,3 +1,4 @@
+import { hasQueuedLabel } from "../github/labels.ts";
 import { enforceLabeler } from "../github/labeler.ts";
 import { blockerRefs, isDone, isLiveShape, resumeBlocked, type IssueInfo } from "../github/issues.ts";
 import { markTrust } from "../github/trust.ts";
@@ -30,7 +31,7 @@ export interface QueueOptions extends Omit<IssueOptions, "issue"> {
    * at that point gets one fresh attempt from the new default branch. Needs `merge`.
    */
   parallel?: number;
-  /** GitHub logins besides repo admins and maintainers whose `bunker` label may queue work. */
+  /** GitHub logins besides repo admins and maintainers whose `bunker:queued` label may queue work. */
   allowLabelers?: string[];
   /** Called with an issue whose labeler check refused it (lookup failed or not permitted), so a long-lived caller can stop re-checking it. */
   onRefused?: (issue: number) => void;
@@ -44,7 +45,7 @@ export interface QueueEntry extends IssueResult {
 }
 
 /**
- * Works open issues labelled `bunker` (priority:high → medium → none → low; bugs first within a priority; then oldest first), `parallel` at a time (default one). Without `merge`
+ * Works open issues labelled `bunker:queued` (priority:high → medium → none → low; bugs first within a priority; then oldest first), `parallel` at a time (default one). Without `merge`
  * stops after the first PR opens; with `merge` continues only after `merged`.
  * Stops starting issues at the first other outcome, or after `limit` issues.
  */
@@ -173,7 +174,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       output.warn(`bunker: skipping #${q.number}, gh issue view returned unparseable output`);
       continue;
     }
-    if (live.state !== "OPEN" || !live.labels.some((l) => l.name === "bunker")) continue;
+    if (live.state !== "OPEN" || !hasQueuedLabel(live.labels)) continue;
     let waiting: number | undefined;
     await markTrust(live, cwd, env);
     for (const ref of blockerRefs(live)) {

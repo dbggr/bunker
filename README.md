@@ -9,7 +9,7 @@ bun run build && install -m 755 dist/bunker ~/.local/bin/bunker
 claude setup-token                  # put the token in ~/.config/bunker/.env
 cd your-repo                        # add .bunker/config.toml (setup, verify)
 bunker --issue 12                   # one issue to a PR
-bunker --queue --merge              # everything labelled `bunker`
+bunker --queue --merge              # everything labelled `bunker:queued`
 ```
 
 ## Features

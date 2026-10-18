@@ -26,7 +26,7 @@ describe("docs", () => {
   });
 
   test("every flag shown in the docs and README exists in --help", async () => {
-    const known = new Set(HELP.match(/--[a-z][a-z-]*/g));
+    const known = new Set([...(HELP.match(/--[a-z][a-z-]*/g) ?? []), "--name"]); // --name: `gh label edit` in the label migration
     for (const f of [...docs, "README.md"]) {
       for (const flag of new Set((await read(f)).match(/(?<![\w-])--[a-z][a-z-]*/g) ?? [])) {
         if (!known.has(flag)) throw new Error(`${f} mentions ${flag}, which is not in --help`);

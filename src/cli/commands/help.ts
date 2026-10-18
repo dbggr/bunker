@@ -9,7 +9,7 @@ Usage:
   bunker --task "<p>" --task "<p>" ...        parallel: one worktree per task
   bunker --review "<prompt>"                  implement -> review -> fix rounds
   bunker --issue <n>                          GitHub issue -> reviewed PR
-  bunker --queue                              work the \`bunker\` label queue
+  bunker --queue                              work the \`bunker:queued\` label queue
   bunker --watch                              keep working the queue unattended (implies --queue --merge)
   bunker status [--json]                      read-only watch summary: watcher, current run, queue, merged/failed with reasons, spend
   bunker ui [--port <n>]                      shared live view: one tab per repo (default port 4321)
@@ -43,15 +43,15 @@ Single prompt and --task:
 
 --issue and --queue:
   --issue <n>                implement GitHub issue n and open a PR
-  --queue                    run open issues labelled \`bunker\`, in order: \`priority:high\`, \`priority:medium\`, no priority,
+  --queue                    run open issues labelled \`bunker:queued\`, in order: \`priority:high\`, \`priority:medium\`, no priority,
                              \`priority:low\`; within a priority \`bug\` issues first; then oldest first (--watch re-orders between
                              issues). Prints the order with the reason per issue. Skips any with an open
                              \`Blocked by #N\` / \`Depends on #N\`. An agent that reports a blocked_by item in its <report>/<verdict> JSON
                              gets its blocker filed as \`discovered\` and the issue relabelled \`bunker-blocked\`
-                             (no PR, doesn't count toward --limit); it returns to \`bunker\` once the blockers close
-  --allow-labeler <login>    (--issue, --queue, --watch; repeatable) also accept the \`bunker\` label from this GitHub user. By
+                             (no PR, doesn't count toward --limit); it returns to \`bunker:queued\` once the blockers close
+  --allow-labeler <login>    (--issue, --queue, --watch; repeatable) also accept the \`bunker:queued\` label from this GitHub user. By
                              default only repo admins and maintainers may queue work: otherwise the issue is skipped, the label
-                             removed and a comment left. An issue never labeled "bunker" is refused too (no label
+                             removed and a comment left. An issue never labeled "bunker:queued" is refused too (no label
                              event to check): add the label first. Also: allow-labelers = ["login"] in ~/.config/bunker/config.toml.
                              If the permission lookup fails the issue is skipped (fail closed)
   --limit <n>                (--queue) max issues per run (default 5; blocked issues don't count)
@@ -90,7 +90,8 @@ Single prompt and --task:
   --max-cost-month <usd>     same for a rolling 30 days (default: no cap; config.toml: max-cost-month)
   --audit-every <days>       also run --audit at most once per this many days, kept in .bunker/watch-state.json (default off; 30 is a good value)
   --triage-every <hours>     also run triage at most once per this many hours, comment and close only (default off)
-  Failed issues get \`bunker-failed\` instead of \`bunker\` and are never retried automatically.
+  Failed issues get \`bunker:failed\` instead of \`bunker:queued\` and are never retried automatically; a running one shows \`bunker:in-progress\`.
+  The pre-namespace \`bunker\` label is still accepted as \`bunker:queued\` for one release.
 
 --audit:
   --audit                    read-only agent run that files issues

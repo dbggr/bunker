@@ -56,7 +56,7 @@ esac`,
     "permission.json": "admin",
     "pulls.json": "[]",
     "branch.json": "{}",
-    "labels.json": JSON.stringify(["bunker", "discovered", "bunker-failed", "bunker-blocked", "priority:high", "priority:medium", "priority:low"].map((name) => ({ name }))),
+    "labels.json": JSON.stringify(["bunker:queued", "bunker:in-progress", "bunker:failed", "bunker:review", "discovered", "bunker-blocked", "priority:high", "priority:medium", "priority:low"].map((name) => ({ name }))),
     "protection.json": JSON.stringify({ contexts: ["test"], checks: [{ context: "test" }] }),
     ...opts.files,
   };
