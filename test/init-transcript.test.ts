@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { InitInterrupted, runInit, type Io } from "../src/cli/commands/init.ts";
 import { detectToolchains, forPackage, workspacePackages } from "../src/cli/init/toolchain.ts";
 import { makeUi } from "../src/cli/init/ui.ts";
-import { setTomlKey } from "../src/cli/init/files.ts";
+import { removeTomlKey, setTomlKey } from "../src/cli/init/files.ts";
 import { findStep } from "../src/cli/init/guide.ts";
 import type { Sandbox } from "../src/sandboxes/exec.ts";
 import { cleanup, fakeWorld } from "./fakes.ts";
@@ -184,6 +184,15 @@ describe("transcript: a failing verify, then a fix", () => {
     expect(s.asked).toContain("Edit the commands and retry?");
     expect(sb.calls.map((c) => c.cmd)).toContain("(npm run check) 2>&1");
     expect(Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text())).toMatchObject({ verify: "npm run check" });
+    expect(s.text()).toContain("setup and verify pass in the sandbox");
+  });
+  test("a config kept from an earlier init that fails in the sandbox offers to regenerate from the detected toolchain", async () => {
+    const w = await repoWith({ "package.json": JSON.stringify({ scripts: { test: "x" } }), "package-lock.json": "{}", ".bunker/config.toml": 'setup = "make deps"\nverify = "make test"\n' });
+    const s = scripted();
+    const sb = fakeSandbox([{ code: 2, stdout: "make: not found" }, { code: 0 }, { code: 0 }]);
+    await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io, sandbox: sb.sandbox });
+    expect(s.asked.some((q) => /Replace .*detected/.test(q))).toBe(true);
+    expect(Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text())).toMatchObject({ setup: "npm ci", verify: "npm test" });
     expect(s.text()).toContain("setup and verify pass in the sandbox");
   });
   test("can add a line to the Dockerfile instead", async () => {
@@ -478,5 +487,14 @@ describe("setTomlKey", () => {
     expect(setTomlKey('a = 1\nb = "x"\n', "a", 2)).toBe('a = 2\nb = "x"\n');
     expect(setTomlKey("[watch]\nx = 1\n", "a", "v")).toBe('a = "v"\n\n[watch]\nx = 1\n');
     expect(setTomlKey("# c\nb = 1", "a", 3)).toBe("# c\nb = 1\na = 3\n");
+  });
+});
+
+describe("removeTomlKey", () => {
+  test("drops a stale top-level setup and keeps the rest", () => {
+    expect(removeTomlKey('setup = "make deps"\nverify = "make test"\n\n[services.db]\nsetup = "x"\n', "setup")).toBe('verify = "make test"\n\n[services.db]\nsetup = "x"\n');
+  });
+  test("is a no-op when the key is absent", () => {
+    expect(removeTomlKey('verify = "t"\n', "setup")).toBe('verify = "t"\n');
   });
 });
