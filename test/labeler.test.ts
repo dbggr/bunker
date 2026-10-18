@@ -134,11 +134,18 @@ describe("enforceLabeler()", () => {
 });
 
 describe("configAllowedLabelers()", () => {
-  test("reads allow-labelers from config.toml", async () => {
+  test("reads allow_labelers from config.toml", async () => {
     const home = await mkdtemp(join(tmpdir(), "bunker-cfg-"));
     dirs.push(home);
-    await Bun.write(join(home, "bunker", "config.toml"), 'allow-labelers = ["a", "b"]\n');
+    await Bun.write(join(home, "bunker", "config.toml"), 'allow_labelers = ["a", "b"]\n');
     expect(await configAllowedLabelers({ XDG_CONFIG_HOME: home })).toEqual(["a", "b"]);
     expect(await configAllowedLabelers({ XDG_CONFIG_HOME: join(home, "none") })).toEqual([]);
+  });
+
+  test("still reads the deprecated allow-labelers spelling", async () => {
+    const home = await mkdtemp(join(tmpdir(), "bunker-cfg-"));
+    dirs.push(home);
+    await Bun.write(join(home, "bunker", "config.toml"), 'allow-labelers = ["a"]\n');
+    expect(await configAllowedLabelers({ XDG_CONFIG_HOME: home })).toEqual(["a"]);
   });
 });

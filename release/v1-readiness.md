@@ -105,13 +105,13 @@ After 1.0.0, removing or renaming any of these needs 2.0:
 
 - **CLI:** 13 entry points (`init`, `doctor`, `status`, `clean`, `triage`, `ui`, `self-update`, plus `--issue`/`--queue`/`--watch`/`--audit`/`--review`/`--task`) and 45 flags (`docs/cli.md`)
 - **Repo config** (`.bunker/config.toml`): `setup verify verify_network copy models.* watch.* merge.ci_timeout clean.logs_days notify.*` (18 keys)
-- **User config** (`~/.config/bunker/config.toml`): `max-cost-day max-cost-month allow-labelers`
+- **User config** (`~/.config/bunker/config.toml`): `max_cost_day max_cost_month allow_labelers` (the kebab-case spellings are still read for one release, with a deprecation warning)
 - **Labels** (after #312): `bunker:queued`, `bunker:in-progress`, `bunker:failed`, `bunker:review`, plus `bunker-blocked`, `bunker-exclude`, `discovered`, `priority:*`, `severity:*`. The old `bunker`/`bunker-failed`/`needs-human-review` names are accepted for one release
 - **Library exports** (`src/index.ts`): 20 export lines
 - **Files:** `.bunker/` layout (`config.toml`, `Dockerfile`, `prompts/*.md`, `runs/`, `sessions/`), the `.env` locations, and the PR body format other tools may parse
 
 **Fix before freezing** (each would be a breaking change after 1.0):
-- **Config naming is inconsistent (#338):** the user config is kebab-case (`max-cost-day`) and the repo config snake_case (`watch.max_cost_day`). Pick one and accept the other for a release.
+- **Config naming (#338), resolved:** both files are snake_case now (`max_cost_day`, `watch.max_cost_day`); the user config's old kebab-case keys are read for one release with a deprecation warning, and `bunker doctor` flags them.
 - **The CLI mixes two styles (#340, your decision):** subcommands (`bunker status`, `bunker clean`) next to mode flags (`bunker --issue 7`, `bunker --watch`). Decide whether 1.0 is `bunker issue 7` / `bunker watch`, with the flags kept as aliases, or keeps the flags.
 - **Internal plumbing is exported (#339):** `worktreeAdmin`, `worktreeAdminLockPath`, `runSetup`, `buildBaseImage`, `hardenHostGit`, `IdleTimeout` and the `DEFAULT_*_MS` constants. Trim the library surface to what an embedder needs (`run`, `runAll`, `review`, the agent and sandbox factories, and their types).
 - **Labels:** #312 landed (PR #331). `bunker-blocked` and `bunker-exclude` are still outside the `bunker:` namespace; move them too, or accept the mix, before the freeze.

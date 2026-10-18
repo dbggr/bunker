@@ -107,12 +107,12 @@ export async function enforceLabeler(issue: number, opts: { cwd: string; env: En
   return false;
 }
 
-/** `allow-labelers = ["login", ...]` from ~/.config/bunker/config.toml (user-level only: a repo file could widen its own gate). */
+/** `allow_labelers = ["login", ...]` from ~/.config/bunker/config.toml (user-level only: a repo file could widen its own gate). */
 export async function configAllowedLabelers(env: Record<string, string | undefined> = process.env): Promise<string[]> {
   const parsed = await readUserConfig(env);
-  const v = parsed["allow-labelers"];
+  const v = parsed["allow_labelers"];
   if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) {
-    if (v !== undefined) throw new Error("config.toml: allow-labelers must be a list of GitHub logins");
+    if (v !== undefined) throw new Error("config.toml: allow_labelers must be a list of GitHub logins");
     return [];
   }
   return v;
