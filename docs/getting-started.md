@@ -2,7 +2,20 @@
 
 ## Quick path
 
-After installing (step 1), run `bunker init` in the repo: it checks everything, walks you through the Claude token, the scoped GitHub token, the `.bunker/` files, models and labels, and ends by running `bunker doctor` and printing the first command to use. `bunker init --yes` accepts the proposed defaults non-interactively (it never overwrites existing files and skips the steps that need a secret). `bunker doctor` is read-only and safe to re-run any time; it exits 1 while anything required is missing. `init` never changes repo settings; for auto-merge and the required check it prints what to set. The steps below are the same setup done by hand.
+After installing (step 1), run `bunker init` in the repo. It is the whole first run in one guided pass, eight steps with a progress line, a one-line "why this matters" for each, and a default on every question:
+
+```text
+[1/8] Welcome            what bunker does, needs and writes; a rough cost note
+[2/8] Claude token       `claude setup-token`, validated
+[3/8] GitHub identity    the exact token checklist + a pre-filled link, validated live
+[4/8] Toolchain          detects npm/pnpm/yarn/bun, composer, python, cargo, go, monorepos; you can edit setup and verify
+[5/8] Sandbox image      builds the image, runs setup and verify once as an unattended run will, shows the tail
+[6/8] Merge safety       a CI workflow (as a PR) and a ruleset requiring it, or the exact clicks
+[7/8] Spend and models   a daily cap (default $20), optional monthly cap, models
+[8/8] Labels             then a guided first task: a tiny issue, run attended, no auto-merge
+```
+
+Nothing is written or created before a confirm that names the file or setting. Re-running `bunker init` skips what is already ✓ and says so, and Ctrl-C leaves no half-written files. `bunker init --yes` takes every default and never reads input; it does not open PRs or change repo settings, and lists at the end the steps that need you. `bunker init --explain <step>` re-reads a step (for example `--explain github`). `NO_COLOR=1` turns off colour and glyphs. `bunker doctor` is read-only and safe to re-run any time; it exits 1 while anything required is missing. The steps below are the same setup done by hand.
 
 ## 1. Install
 

@@ -41,6 +41,10 @@ case "$*" in
   "api repos/o/r/issues?per_page=1") f issues.json;;
   "api repos/o/r/pulls?per_page=1") f pulls.json;;
   "api repos/o/r/branches/main") f branch.json;;
+  "api repos/o/r --method PATCH"*) if [ -f "$d/patch-err.txt" ]; then cat "$d/patch-err.txt" >&2; exit 1; fi; echo '{}';;
+  "api repos/o/r/rulesets --method POST"*) if [ -f "$d/ruleset-err.txt" ]; then cat "$d/ruleset-err.txt" >&2; exit 1; fi; echo '{"id":1}';;
+  "pr create"*) echo "https://github.com/o/r/pull/1";;
+  "issue create"*) echo "https://github.com/o/r/issues/7";;
   "label list"*) f labels.json;;
   "label create"*) if [ -f "$d/label-create-err.txt" ]; then cat "$d/label-create-err.txt" >&2; exit 1; fi; exit 0;;
   "api repos/o/r/branches/main/protection/required_status_checks") f protection.json;;

@@ -32,7 +32,7 @@ The installer checks prerequisites first and never installs them; for each missi
 
 ```sh
 cd your-repo
-bunker init          # tokens, .bunker/config.toml (setup, verify), sandbox image, labels
+bunker init          # 8 guided steps: tokens, toolchain, a sandbox test run, CI + ruleset, spend cap, labels, a first task
 bunker doctor        # every ✓/✗ with the fix for each ✗
 bunker issue 12      # one issue, start to finish, and watch it work
 bunker watch         # then: work everything labelled bunker:queued, unattended

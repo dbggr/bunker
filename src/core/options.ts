@@ -28,6 +28,7 @@ export const options = {
   queue: { type: "boolean", default: false },
   "allow-labeler": { type: "string", multiple: true },
   limit: { type: "string" },
+  explain: { type: "string" },
   parallel: { type: "string" },
   watch: { type: "boolean", default: false },
   interval: { type: "string" },

@@ -71,7 +71,7 @@ describe("init --yes", () => {
     for (const l of ["discovered", "bunker:queued", "bunker:in-progress", "bunker:failed", "bunker:review", "bunker:awaiting-review", "bunker-blocked", "priority:high", "priority:medium", "priority:low", "severity:high", "severity:medium"]) expect(log).toContain(`gh label create ${l}`);
     expect(log).not.toContain("gh label create bunker ");
     // only GETs: no repo-settings writes
-    expect(log).not.toMatch(/--method|-X |--input|-f |-F |PATCH|PUT|POST/);
+    expect(log.split("\n").filter((l) => l.startsWith("gh ")).join("\n")).not.toMatch(/--method|-X |--input|-f |-F |PATCH|PUT|POST/);
     expect(log).not.toMatch(/gh repo edit/);
     expect(s.text()).toMatch(/auto-merge/i);
     expect(s.text()).toMatch(/IaC/);
@@ -185,7 +185,7 @@ describe("init interactive", () => {
 
   test("declining a file writes nothing; models go to the repo's .bunker/.env", async () => {
     const w = await bunRepo();
-    const s = scripted({ no: [/config\.toml/, /\.bunker\/Dockerfile/, /label/i], asks: ["claude-sonnet-5-5", "claude-opus-5-5", "repo"] });
+    const s = scripted({ no: [/config\.toml/, /\.bunker\/Dockerfile/, /label/i], asks: ["20", "", "claude-sonnet-5-5", "claude-opus-5-5", "repo"] });
     await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io });
     expect(await exists(join(w.repo, ".bunker/config.toml"))).toBe(false);
     expect(await exists(join(w.repo, ".bunker/Dockerfile"))).toBe(false);

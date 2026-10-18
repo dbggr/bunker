@@ -27,9 +27,9 @@ import { rerunHint } from "./pipeline-commands.ts";
 
 export async function doctorOrInitCommand(values: CliValues, positionals: string[]) {
   const cmd = positionals[0];
-  const others = Object.entries(values).filter(([k, v]) => !(k === "yes" && cmd === "init") && k !== "verbose" && v !== false && v !== undefined);
+  const others = Object.entries(values).filter(([k, v]) => !((k === "yes" || k === "explain") && cmd === "init") && k !== "verbose" && v !== false && v !== undefined);
   if (others.length) {
-    console.error(`bunker: ${cmd} only takes ${cmd === "init" ? "--yes" : "no options"}`);
+    console.error(`bunker: ${cmd} only takes ${cmd === "init" ? "--yes and --explain <step>" : "no options"}`);
     process.exit(2);
   }
   if (cmd === "doctor") {
@@ -37,11 +37,14 @@ export async function doctorOrInitCommand(values: CliValues, positionals: string
     console.log(formatChecks(r.checks));
     process.exit(r.code);
   }
+  if (values.explain !== undefined) process.exit(await runInit({ cwd: process.cwd(), yes: false, explain: values.explain, tty: !!process.stdout.isTTY, columns: process.stdout.columns, io: terminalIo() }));
   if (!values.yes && !process.stdin.isTTY) {
     console.error("bunker: init is interactive and needs a terminal; pass --yes to accept the proposed defaults");
     process.exit(2);
   }
-  process.exit(await runInit({ cwd: process.cwd(), yes: !!values.yes, io: terminalIo() }));
+  // Ctrl-C outside a prompt (a docker build, say): exit through the normal hooks so containers are stopped
+  process.on("SIGINT", () => process.exit(130));
+  process.exit(await runInit({ cwd: process.cwd(), yes: !!values.yes, tty: !!process.stdout.isTTY, columns: process.stdout.columns, io: terminalIo() }));
 }
 
 export async function statusCommand(values: CliValues) {

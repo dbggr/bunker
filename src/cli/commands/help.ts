@@ -3,7 +3,7 @@ import { CONFIG_HELP } from "../../core/config.ts";
 export const HELP = `bunker - run coding agents in sandboxed git worktrees
 
 Usage:
-  bunker init [--yes]                         set up this repo: tokens, .bunker/ files, models, labels (--yes: accept defaults)
+  bunker init [--yes | --explain <step>]      guided first-run setup in 8 steps (--yes: accept defaults; --explain: re-read a step)
   bunker doctor                               read-only setup check: ✓/✗ with a fix for each; exit 1 if anything required is missing
   bunker "<prompt>" [options]                 single prompt: one agent run, merged back
   bunker task "<p>" "<p>" ...                 parallel: one worktree per task
@@ -123,15 +123,25 @@ init and doctor:
                              required check, the model per role, and the effective value and source of every .bunker/config.toml
                              key (config.toml is validated). Prints ✓/✗ with a one-line fix; exit 1 if anything
                              required is missing
-  bunker init                interactive, per repo: runs doctor, then walks each ✗: Claude token (via \`claude setup-token\`)
-                             and the scoped GitHub token (hidden input, validated, stored 0600 in ~/.config/bunker/.env),
-                             .bunker/config.toml (setup, verify) and Dockerfile for the detected toolchain (asks before each write, never
-                             overwrites), models, and every label bunker uses. It never changes repo settings (auto-merge, branch
-                             protection, required checks): it prints what to set. Ends with doctor and the first command to run
+  bunker init                interactive, per repo, in 8 steps with a progress line: [1/8] Welcome, [2/8] Claude token (via
+                             \`claude setup-token\`, validated), [3/8] GitHub identity (the exact fine-grained token checklist and a
+                             pre-filled link; hidden input, validated live, stored 0600 in ~/.config/bunker/.env; a GitHub App or bot
+                             account is offered as advanced), [4/8] Toolchain (npm/pnpm/yarn/bun, composer, python, cargo, go,
+                             monorepos; asks when unsure; setup and verify are editable), [5/8] Sandbox image (builds it and runs
+                             setup and verify once as an unattended run will, isolated; offers to edit and retry on failure),
+                             [6/8] Merge safety (offers a CI workflow with a \`test\` job as a PR, a ruleset requiring it, and
+                             auto-merge, through your own gh login; or prints the exact clicks), [7/8] Spend and models (daily cap,
+                             default $20, in ~/.config/bunker/config.toml), [8/8] Labels, then an optional guided first task: a
+                             tiny issue run attended without --merge. Nothing is written before a confirm that names the file or
+                             setting; every question shows its default. Re-running skips what is already ✓ and says so; Ctrl-C
+                             leaves no half-written files. Ends with doctor, a summary of what was written and what is still ✗,
+                             and the first command to run. NO_COLOR is honoured; links are clickable where the terminal allows
+  bunker init --explain <step>   re-read one step's guidance (a number 1-8 or a name: welcome, claude, github, toolchain,
+                             sandbox, merge, spend, labels)
   A one-word prompt "init" or "doctor" is read as the subcommand; to use it as a prompt put -- first: bunker -- init
                              (or make it longer than one word).
-  --yes                      (init) accept every proposed default without asking; still never overwrites a file and skips the
-                             steps that need a secret from you
+  --yes                      (init) accept every default without asking; never overwrites a file, opens no PR and changes no
+                             repo setting; the steps that need you (secrets, CI, ruleset) are listed at the end
 
 status:
   bunker status              read-only, run in the repo. Prints whether \`bunker watch\` is alive (from .bunker/watch.lock: pid, version,
