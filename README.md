@@ -18,8 +18,8 @@ It checks prerequisites first (git and bun to build; docker, gh logged in, and c
 bun run build && install -m 755 dist/bunker ~/.local/bin/bunker
 claude setup-token                  # put the token in ~/.config/bunker/.env
 cd your-repo                        # add .bunker/config.toml (setup, verify)
-bunker --issue 12                   # one issue to a PR
-bunker --queue --merge              # everything labelled `bunker:queued`
+bunker issue 12                   # one issue to a PR
+bunker queue --merge              # everything labelled `bunker:queued`
 ```
 
 ## Features
@@ -27,12 +27,12 @@ bunker --queue --merge              # everything labelled `bunker:queued`
 - Worktree and docker sandbox per issue; your checkout is never touched
 - Implement, review, fix rounds, then verify in the sandbox
 - PR with GitHub auto-merge and a landing check
-- Work queue by label, and unattended `--watch` with optional daily and monthly spend caps
-- Opt-in `--parallel <n>` for `--queue --merge` and `--watch`: n issues at once, merges still serial and each branch updated to the latest main and re-verified first. The trade-off is more concurrent spend and rework when issues touch the same files; 2 is a good choice
+- Work queue by label, and unattended `bunker watch` with optional daily and monthly spend caps
+- Opt-in `--parallel <n>` for `bunker queue --merge` and `bunker watch`: n issues at once, merges still serial and each branch updated to the latest main and re-verified first. The trade-off is more concurrent spend and rework when issues touch the same files; 2 is a good choice
 - Agents file out-of-scope findings as `discovered` issues for human triage
 - Scoped GitHub token and output redaction; agents never see GitHub credentials
 - Live multi-repo view with `bunker ui`
-- Read-only `--audit` that files improvement ideas
+- Read-only `bunker audit` that files improvement ideas
 - `bunker triage`: a read-only agent verifies `discovered` issues (fixed, as designed, duplicate, valid); queueing stays with you
 - Starts each run with a safe `git pull --ff-only` of your checkout (clean, default branch only; `--no-pull` disables it), and `bunker self-update` rebuilds the binary from its own checkout
 

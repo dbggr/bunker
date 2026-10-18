@@ -282,7 +282,7 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
   const userKeys = await readUserConfigRaw(env).catch(() => ({}));
   for (const k of deprecatedUserKeys(userKeys)) add({ id: "config-deprecated", group: "config", label: "deprecated config key", ok: false, required: false, detail: `${k.old} in ${userConfigPath(env)}`, fix: `rename ${k.old} to ${k.new}` });
 
-  // spend (notional USD logged by --watch)
+  // spend (notional USD logged by bunker watch)
   const caps = await loadSpendCaps(env).catch(() => ({}));
   add({ id: "spend", group: "spend", label: "spend so far", ok: true, required: false, detail: formatSpend(join(cwd, ".bunker", "watch-spend.json"), caps) });
 

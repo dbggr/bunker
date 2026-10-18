@@ -15,7 +15,7 @@ export function rerunHint(resetAt?: number): string {
   return resetAt !== undefined ? `re-run after ${new Date(resetAt).toISOString()} to resume` : "re-run later to resume (no reset time was given)";
 }
 
-/** What the --queue and --issue handlers take from main.ts. */
+/** What the bunker queue and bunker issue handlers take from main.ts. */
 export interface PipelineContext {
   /** Manual-merge mode: runs end at an open PR labelled `bunker:awaiting-review`. */
   manual: boolean;
@@ -65,7 +65,7 @@ export async function queueCommand({ manual, values, repoCfg, onEvent, agent, re
 export async function issueCommand({ manual, values, repoCfg, onEvent, agent, reviewerAgent, sandbox, maxRounds, resume, ciTimeoutMin, timeouts, allowLabelers, publisher, tty }: PipelineContext) {
   const issue = Number(values.issue);
   if (!Number.isInteger(issue) || issue < 1) {
-    console.error("bunker: --issue must be a positive integer");
+    console.error("bunker: issue number must be a positive integer");
     await publisher?.flush();
     process.exit(2);
   }

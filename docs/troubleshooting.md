@@ -12,7 +12,7 @@ Each entry is symptom, cause, fix. The run log (`.bunker/runs/<N>-<timestamp>.lo
 
 - **Symptom**: an issue you just labelled `bunker:queued` isn't picked up, or a just-closed one still is.
 - **Cause**: GitHub's issue search index lags behind label changes by seconds to minutes.
-- **Fix**: wait and re-run `bunker --queue`, or run `bunker --issue N` directly. `--watch` picks it up on a later pass.
+- **Fix**: wait and re-run `bunker queue`, or run `bunker issue N` directly. `bunker watch` picks it up on a later pass.
 
 ## Auto-merge is slow to fire
 
@@ -30,11 +30,11 @@ Each entry is symptom, cause, fix. The run log (`.bunker/runs/<N>-<timestamp>.lo
 
 - **Symptom**: status `idle-timeout`; the error says an agent, reviewer, setup or verify "produced no output" or "timed out".
 - **Cause**: an agent or reviewer printed nothing for `--idle-timeout` minutes (default 10), or setup/verify ran longer than `--step-timeout` minutes (default 30). The process (for a container, the container itself) was killed.
-- **Fix**: raise the limit if the step is legitimately slow; otherwise look at the run log to see where it hung. The worktree and branch are kept. Under `--watch` the issue is relabelled `bunker:failed`. An agent that finishes but doesn't exit is killed `--completion-timeout` seconds (default 60) after its final result event, and counts as done, with a warning.
+- **Fix**: raise the limit if the step is legitimately slow; otherwise look at the run log to see where it hung. The worktree and branch are kept. Under `bunker watch` the issue is relabelled `bunker:failed`. An agent that finishes but doesn't exit is killed `--completion-timeout` seconds (default 60) after its final result event, and counts as done, with a warning.
 
 ## Issue relabelled `bunker:failed`
 
-- **Symptom**: `--watch` removed `bunker:queued` from an issue, added `bunker:failed` and left a comment.
+- **Symptom**: `bunker watch` removed `bunker:queued` from an issue, added `bunker:failed` and left a comment.
 - **Cause**: the issue ended in anything other than `merged`. It is never retried automatically, so a broken issue can't burn budget in a loop.
 - **Fix**: read the one-line reason in the comment (or run `bunker status` for every failure with its reason, link and retry command) and the run log, fix the cause (or the issue text), then re-add `bunker:queued` to retry.
 
@@ -60,7 +60,7 @@ Each entry is symptom, cause, fix. The run log (`.bunker/runs/<N>-<timestamp>.lo
 
 ## `paused-usage-limit`
 
-- **Symptom**: status `paused-usage-limit`; `--issue` exits with code 3.
+- **Symptom**: status `paused-usage-limit`; `bunker issue` exits with code 3.
 - **Cause**: `claude` hit your plan's usage limit mid-issue. This is not a failure: the worktree, branch and agent session are kept, and the issue keeps its `bunker:queued` label (it is never relabelled `bunker:failed`).
-- **Fix**: nothing under `--watch`: it sleeps until the reset time (or `--interval` if none was given), then resumes the same session. Otherwise re-run `--issue N` after the printed reset time; it resumes the interrupted step.
-- **Plain `--review` and `bunker "<prompt>"`**: these also exit with code 3 and print the reset time, but nothing resumes them. The worktree and agent session are discarded; `--review` keeps the branch with the work committed so far. Re-run the command after the reset time.
+- **Fix**: nothing under `bunker watch`: it sleeps until the reset time (or `--interval` if none was given), then resumes the same session. Otherwise re-run `bunker issue N` after the printed reset time; it resumes the interrupted step.
+- **Plain `bunker review` and `bunker "<prompt>"`**: these also exit with code 3 and print the reset time, but nothing resumes them. The worktree and agent session are discarded; `bunker review` keeps the branch with the work committed so far. Re-run the command after the reset time.

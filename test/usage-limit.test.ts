@@ -250,7 +250,7 @@ echo '${out({ result: "done", session_id: "sess-1" })}'
     await chmod(join(bin, "claude"), 0o755);
     const cli = join(import.meta.dir, "..", "src", "cli.ts");
     const run = async () => {
-      const proc = Bun.spawn(["bun", cli, "--issue", "1", "--no-sandbox", "--verify", "true"], { cwd: repo, env: process.env, stdout: "pipe", stderr: "pipe" });
+      const proc = Bun.spawn(["bun", cli, "issue", "1", "--no-sandbox", "--verify", "true"], { cwd: repo, env: process.env, stdout: "pipe", stderr: "pipe" });
       const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
       return { stdout, code };
     };
@@ -289,7 +289,7 @@ echo '${out({ is_error: true, result: "Claude AI usage limit reached", session_i
 
   test("--review exits 3 with a re-run hint and leaves no worktree behind", async () => {
     const { repo, resetAt, run } = await limitedClaude();
-    const r = await run("--review", "do it");
+    const r = await run("review", "do it");
     expect(r.code).toBe(3);
     expect(r.stdout).toContain("[paused-usage-limit]");
     expect(r.stdout).toContain(`re-run after ${resetAt}`);

@@ -105,8 +105,8 @@ describe("cli", () => {
 
   // `--issue 0` fails validation right after the pull step, so nothing else (agent, gh, docker) runs.
   const runIssue0 = (repo: string, ...flags: string[]) =>
-    Bun.spawnSync(["bun", CLI, "--issue", "0", ...flags], { cwd: repo, env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "sk-test-token-0123456789" } });
-  const CONTINUED = "--issue must be a positive integer";
+    Bun.spawnSync(["bun", CLI, "issue", "0", ...flags], { cwd: repo, env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "sk-test-token-0123456789" } });
+  const CONTINUED = "issue number must be a positive integer";
 
   test("pulls by default, not with --no-pull", async () => {
     const f = await fixture();

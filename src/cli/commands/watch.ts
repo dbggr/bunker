@@ -40,7 +40,7 @@ export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "ke
   signal?: AbortSignal;
   /** `git pull --ff-only` the checkout before each pass (when clean, on the default branch). */
   pull?: boolean;
-  /** Run `--audit` at most once per this many days (state in `.bunker/watch-state.json`). Off by default. */
+  /** Run `bunker audit` at most once per this many days (state in `.bunker/watch-state.json`). Off by default. */
   auditEveryDays?: number;
   /** Run `bunker triage` (comment and close only, never labelling) at most once per this many hours. Off by default. */
   triageEveryHours?: number;
@@ -97,7 +97,7 @@ function acquireLock(file: string): () => void {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
       const pid = Number(readFileSync(file, "utf8").trim());
-      if (Number.isInteger(pid) && pid > 0 && alive(pid)) throw new Error(`another bunker --watch is already running here (pid ${pid}, ${file})`);
+      if (Number.isInteger(pid) && pid > 0 && alive(pid)) throw new Error(`another bunker watch is already running here (pid ${pid}, ${file})`);
       rmSync(file, { force: true });
     }
   }
@@ -119,7 +119,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   const missing = ["/.bunker/watch.lock", "/.bunker/watch-spend.json", "/.bunker/watch-state.json", "/.bunker/watch-status.json"].filter((p) => !excluded.split("\n").includes(p));
   if (missing.length) await appendFile(exclude, `${excluded && !excluded.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
   const release = acquireLock(join(dir, "watch.lock"));
-  // Crash recovery, whether or not the worktree cleanup runs: the lock is ours, so no `--watch` run of ours is live.
+  // Crash recovery, whether or not the worktree cleanup runs: the lock is ours, so no `bunker watch` run of ours is live.
   const stale = await clearStaleInProgress(repo, (process.env.BUNKER_GH_TOKEN ? { ...process.env, GH_TOKEN: process.env.BUNKER_GH_TOKEN } : process.env) as Record<string, string>);
   if (stale.length) log(`bunker: cleared a stale bunker:in-progress from ${stale.map((n) => `#${n}`).join(", ")}`);
   if (cleanOnStart) await runClean({ cwd: repo, yes: true, auto: true, ...(logsDays === undefined ? {} : { logsDays }) });
@@ -223,7 +223,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     status.failed({ issue: e.issue, status: e.status, reason, ...(e.prUrl ? { prUrl: e.prUrl } : {}), ...(e.logPath ? { logPath: e.logPath } : {}) });
     notify(`bunker: #${e.issue} failed`, `${e.status}: ${reason}${e.prUrl ? ` · ${e.prUrl}` : ""}`);
     const body = redact([
-      `${mention ? `${mention} ` : ""}bunker --watch did not merge this issue: status \`${e.status}\`.`,
+      `${mention ? `${mention} ` : ""}bunker watch did not merge this issue: status \`${e.status}\`.`,
       "",
       `Reason: ${codeSpan(reason)}`,
       ...(e.error ? ["", "```", e.error.trimEnd(), "```"] : []),

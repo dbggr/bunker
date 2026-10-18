@@ -184,7 +184,7 @@ describe("cli", () => {
   test("bad type exits 2 with the key and expected type", async () => {
     const w = await fakeWorld();
     await Bun.write(join(w.repo, ".bunker/config.toml"), "[watch]\ninterval = 'soon'\n");
-    const r = await run(w.repo, w.env, "--issue", "1", "--no-pull");
+    const r = await run(w.repo, w.env, "issue", "1", "--no-pull");
     expect(r.code).toBe(2);
     expect(r.err).toContain("watch.interval");
     expect(r.err).toContain("positive number");
@@ -193,9 +193,9 @@ describe("cli", () => {
   test("unknown key warns but proceeds", async () => {
     const w = await fakeWorld();
     await Bun.write(join(w.repo, ".bunker/config.toml"), "bogus = 1\n");
-    const r = await run(w.repo, w.env, "--issue", "x", "--no-pull");
+    const r = await run(w.repo, w.env, "issue", "x", "--no-pull");
     expect(r.err).toContain("bogus");
-    expect(r.err).toContain("--issue must be a positive integer");
+    expect(r.err).toContain("issue number must be a positive integer");
   });
 
   test("doctor shows each setting's value and source", async () => {

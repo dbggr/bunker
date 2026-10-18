@@ -22,7 +22,7 @@ export interface QueueOptions extends Omit<IssueOptions, "issue"> {
   shouldStop?: () => boolean;
   /** Issues for which this returns true are not started. */
   skip?: (issue: number) => boolean | Promise<boolean>;
-  /** Re-list between issues so a newly labelled bug or `priority:high` issue runs next. For long-lived callers (`--watch`). */
+  /** Re-list between issues so a newly labelled bug or `priority:high` issue runs next. For long-lived callers (`bunker watch`). */
   relist?: boolean;
   /** Called after each issue run (not before the next one starts when `parallel` > 1). */
   onResult?: (entry: QueueEntry) => void | Promise<void>;

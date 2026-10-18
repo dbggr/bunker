@@ -149,7 +149,7 @@ describe("cli", () => {
     const repo = await tempDir();
     await $`git init -q ${repo}`;
 
-    const proc = Bun.spawn(["bun", cli, "--issue", "1", "--merge"], { cwd: repo, env: bareEnv, stderr: "pipe" });
+    const proc = Bun.spawn(["bun", cli, "issue", "1", "--merge"], { cwd: repo, env: bareEnv, stderr: "pipe" });
 
     await proc.exited;
     const err = await new Response(proc.stderr).text();
@@ -164,7 +164,7 @@ describe("cli", () => {
     await $`mkdir -p ${repo}/.bunker`;
     await Bun.write(`${repo}/.bunker/verify`, "true\n");
 
-    const proc = Bun.spawn(["bun", cli, "--queue", "--merge"], { cwd: repo, env: bareEnv, stderr: "pipe" });
+    const proc = Bun.spawn(["bun", cli, "queue", "--merge"], { cwd: repo, env: bareEnv, stderr: "pipe" });
 
     await proc.exited;
     const err = await new Response(proc.stderr).text();
@@ -173,17 +173,17 @@ describe("cli", () => {
     expect(err).not.toContain("TypeError");
   }, 30_000);
 
-  test("a positional prompt together with --task exits 2 and prints usage", async () => {
+  test("task without a prompt exits 2 and names the usage", async () => {
     const repo = await tempDir();
     await $`git init -q ${repo}`;
 
-    const proc = Bun.spawn(["bun", cli, "--task", "a thing", "do a thing"], {
+    const proc = Bun.spawn(["bun", cli, "task", "--no-sandbox"], {
       cwd: repo,
       env: bareEnv,
       stderr: "pipe",
     });
 
     expect(await proc.exited).toBe(2);
-    expect(await new Response(proc.stderr).text()).toContain("--task");
+    expect(await new Response(proc.stderr).text()).toContain("task needs a prompt");
   });
 });

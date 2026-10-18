@@ -93,7 +93,7 @@ export async function selfUpdate(opts: SelfUpdateOptions = {}): Promise<number> 
   try {
     const pid = Number(readFileSync(join(home, ".bunker", "watch.lock"), "utf8").trim());
     if (Number.isInteger(pid) && pid > 0 && alive(pid)) {
-      console.error(`bunker: self-update refused: a bunker --watch (pid ${pid}) is running for ${home}`);
+      console.error(`bunker: self-update refused: a bunker watch (pid ${pid}) is running for ${home}`);
       return 2;
     }
   } catch {}

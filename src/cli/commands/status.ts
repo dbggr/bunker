@@ -31,7 +31,7 @@ export interface FailedRun {
   at: number;
 }
 
-/** What a running (or last-run) `--watch` leaves in `.bunker/watch-status.json`. */
+/** What a running (or last-run) `bunker watch` leaves in `.bunker/watch-status.json`. */
 export interface WatchStatusFile {
   pid: number;
   version: string;
