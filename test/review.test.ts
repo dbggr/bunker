@@ -86,7 +86,7 @@ describe("review()", () => {
   test("never approved → rejected, not merged, branch kept", async () => {
     const repo = await makeRepo();
     const { agent } = fakeAgent(() => `echo '<verdict>{"approved":false,"required_changes":["no"]}</verdict>'`);
-    const r = await review({ cwd: repo, prompt: "do it", agent, sandbox: noSandbox(), maxRounds: 2 });
+    const r = await review({ cwd: repo, prompt: "do it", agent, sandbox: noSandbox() });
     expect(r.status).toBe("rejected");
     expect(r.rounds).toHaveLength(2);
     expect(await Bun.file(join(repo, "f1.txt")).exists()).toBe(false);
@@ -131,6 +131,25 @@ describe("review()", () => {
     expect(out).toContain("No such file");
     // The agent's version is what gets merged.
     expect(await Bun.file(join(repo, "CLAUDE.md")).text()).toBe("evil\n");
+  });
+
+  test("gitignored steering files are hidden from the reviewer and back afterwards", async () => {
+    const repo = await makeRepo();
+    await Bun.write(join(repo, ".gitignore"), ".claude/\nCLAUDE.local.md\n");
+    await $`git -C ${repo} add -A && git -C ${repo} commit -qm ignore`;
+    const seen = join(await mkdtemp(join(tmpdir(), "bunker-seen-")), "seen");
+    dirs.push(join(seen, ".."));
+    const agent: Agent = {
+      command(_p, mode = "write") {
+        if (mode === "write") return ["sh", "-c", `mkdir -p .claude && echo evil > .claude/settings.local.json && echo evil > CLAUDE.local.md && echo 1 > f.txt && git add -A && git commit -qm impl`];
+        return ["sh", "-c", `{ ls -A .claude 2>&1; ls CLAUDE.local.md 2>&1; } > ${seen}; echo '${APPROVE}'`];
+      },
+    };
+    const r = await review({ cwd: repo, prompt: "x", agent, sandbox: noSandbox() });
+    expect(r.status).toBe("approved");
+    const out = await Bun.file(seen).text();
+    expect(out).not.toContain("settings.local.json");
+    expect(out).toContain("No such file");
   });
 
   test("reviewer prompt has the task, the diff and instructions", async () => {

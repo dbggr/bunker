@@ -28,7 +28,7 @@ Output is passed through a redactor before it reaches the terminal, run logs, th
 
 A merged PR controls inputs used on your host: `.bunker/Dockerfile` is built by the host docker daemon, and the `copy` globs in `.bunker/config.toml` decide which untracked host files enter the sandbox. So with `--merge`, a PR that changes anything under `.bunker/` or `.github/` is never auto-merged by bunker. It opens the PR, leaves auto-merge off, labels it `needs-human-review` and reports `needs-review`. The issue is not marked failed. Review and merge such a PR yourself.
 
-`.claude/` (skills, `settings.json`, hooks, commands), `CLAUDE.md` and `AGENTS.md`, at any depth, are gated the same way: they steer every later agent, so a PR that touches them is labelled `needs-human-review` and never auto-merged. The reviewer also never reads the agent's versions: before each review bunker replaces those paths in the worktree with the default branch's (removing any the agent added), then discards the checkout, so an agent cannot plant instructions or hooks that steer its own reviewer.
+`.claude/` (skills, `settings.json`, hooks, commands), `CLAUDE.md`, `CLAUDE.local.md` and `AGENTS.md`, at any depth, are gated the same way: they steer every later agent, so a PR that touches them is labelled `needs-human-review` and never auto-merged. The reviewer also never reads the agent's versions: before each review bunker replaces those paths in the worktree with the default branch's (removing any the agent added; gitignored ones such as `.claude/settings.local.json` are moved aside and put back after the review), then discards the checkout, so an agent cannot plant instructions or hooks that steer its own reviewer.
 
 ## `--no-sandbox` is not isolation
 

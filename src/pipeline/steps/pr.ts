@@ -1,9 +1,9 @@
-import { STEERING } from "../../worktree/steering.ts";
 import { $ } from "bun";
 import { waitForMerge } from "../../github/branches.ts";
 import { neutralise } from "../../core/redact.ts";
 import { emit, emitStage } from "../../core/events.ts";
 import { tailLines } from "../../core/output.ts";
+import { STEERING } from "../../worktree/steering.ts";
 import { worktreeAdmin } from "../../worktree/admin.ts";
 import type { Agent } from "../../agents/agent.ts";
 import type { ReviewResult } from "../review.ts";

@@ -139,6 +139,7 @@ export async function review({
   const store = await sessionStore(sessionsDir);
   let prev: Session | undefined;
   let copied: string[] = [];
+  let undoSteering = async () => {};
   /** The step in flight, for the pause record. */
   let step: { role: "implementer" | "reviewer"; round: number; implOutput?: string; implSessionId?: string } = { role: "implementer", round: 1 };
   try {
@@ -195,7 +196,7 @@ export async function review({
       emitStage(revTarget, "review", undefined, modelLabel(reviewer));
       const revHook = lineHook(reviewer, revTarget);
       // The reviewer reads the default branch's .claude/, CLAUDE.md and AGENTS.md, never the agent's (reset away below).
-      await restoreSteering(wt.path, base);
+      undoSteering = await restoreSteering(wt.path, base);
       // Reviewers never resume: each review is independent.
       const revPrompt = reviewerPrompt(prompt, diff, reviewerInstruction);
       const revResumed = resuming?.role === "reviewer" ? savedSession : undefined;
@@ -223,6 +224,7 @@ export async function review({
       // Only the implementer's commits survive, whatever the reviewer did.
       await $`git -C ${wt.path} reset -q --hard ${head}`.quiet();
       await $`git -C ${wt.path} clean -qfd`.quiet();
+      await undoSteering();
       attempts.push(revOut.usage);
       usages.push(...attempts);
       if (rev.code !== 0) throw new Error(`reviewer exited with ${rev.code}; work kept on ${wt.branch}`);
@@ -242,6 +244,7 @@ export async function review({
       }
     }
   } catch (e) {
+    await undoSteering().catch(() => {}); // a paused run keeps its worktree
     if (e instanceof UsageLimit) {
       status = "paused-usage-limit";
       error = e.message;
