@@ -28,7 +28,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { redact } from "./core/redact.ts";
 import { createProgress, emit, type BunkerEvent, hyperlink } from "./core/events.ts";
-import { connectHub, hubReachable, readToken, repoId, startHub, viewUrlFor, type Hub, type Publisher } from "./ui.ts";
+import { connectHub, hubReachable, readToken, repoId, startHub, viewUrlFor, type Hub, type Publisher } from "./ui/ui.ts";
 import { HELP } from "./help.ts";
 import { options } from "./core/options.ts";
 import { output } from "./core/output.ts";
