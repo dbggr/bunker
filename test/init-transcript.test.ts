@@ -433,6 +433,31 @@ describe("toolchain detection", () => {
     expect(detectToolchains(await at({ "requirements.txt": "" }))[0]).toMatchObject({ name: "python", setup: "pip install -r requirements.txt" });
     expect(detectToolchains(await at({}))).toEqual([]);
   });
+  test("php: composer.json in a subdirectory, no test script, version and extensions", async () => {
+    const composer = JSON.stringify({ require: { php: ">=8.5", "ext-intl": "*", "ext-pdo_pgsql": "*", "ext-redis": "*", "ext-ctype": "*" } });
+    const tc = detectToolchains(await at({ "backend/composer.json": composer }))[0]!;
+    expect(tc.name).toBe("php");
+    expect(tc.setup).toBe("cd backend && composer install --no-interaction");
+    expect(tc.verify).toBe("cd backend && vendor/bin/phpunit");
+    expect(tc.dockerfile).toContain("php8.5-cli");
+    expect(tc.dockerfile).toContain("packages.sury.org");
+    for (const e of ["php8.5-intl", "php8.5-pgsql", "php8.5-redis"]) expect(tc.dockerfile).toContain(e);
+    expect(tc.dockerfile).not.toContain("ctype");
+  });
+  test("php: uses the composer test script when it exists, at the root", async () => {
+    const tc = detectToolchains(await at({ "composer.json": JSON.stringify({ require: { php: "^8.2" }, scripts: { test: "phpunit" } }) }))[0]!;
+    expect(tc).toMatchObject({ setup: "composer install --no-interaction", verify: "composer test" });
+    expect(tc.dockerfile).toContain("php8.2-cli");
+  });
+  test("php: tests that need a database get no verify and a note", async () => {
+    const ci = await at({ "composer.json": "{}", ".github/workflows/ci.yml": "jobs:\n  t:\n    services:\n      postgres:\n        image: postgres:18.1-alpine\n" });
+    expect(detectToolchains(ci)[0]).toMatchObject({ verify: "" });
+    expect(detectToolchains(ci)[0]!.note).toMatch(/database/i);
+    const env = await at({ "composer.json": "{}", ".env.test": "DATABASE_URL=postgresql://app:pw@database:5432/app\n" });
+    expect(detectToolchains(env)[0]!.verify).toBe("");
+    const local = await at({ "composer.json": "{}", ".env.test": "DATABASE_URL=sqlite:///var/test.db\n" });
+    expect(detectToolchains(local)[0]!.verify).not.toBe("");
+  });
   test("a placeholder test script falls back to build, with a note", async () => {
     const tc = detectToolchains(await at({ "package.json": JSON.stringify({ scripts: { test: 'echo "Error: no test specified" && exit 1', build: "tsc" } }), "package-lock.json": "{}" }))[0]!;
     expect(tc.verify).toBe("npm run build");
