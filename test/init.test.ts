@@ -185,7 +185,7 @@ describe("init interactive", () => {
 
   test("declining a file writes nothing; models go to the repo's .bunker/.env", async () => {
     const w = await bunRepo();
-    const s = scripted({ no: [/config\.toml/, /\.bunker\/Dockerfile/, /label/i], asks: ["20", "", "claude-sonnet-5-5", "claude-opus-5-5", "repo"] });
+    const s = scripted({ no: [/config\.toml/, /\.bunker\/Dockerfile/, /label/i], asks: ["1", "20", "", "claude-sonnet-5-5", "claude-opus-5-5", "repo"] });
     await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io });
     expect(await exists(join(w.repo, ".bunker/config.toml"))).toBe(false);
     expect(await exists(join(w.repo, ".bunker/Dockerfile"))).toBe(false);

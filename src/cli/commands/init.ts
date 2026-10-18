@@ -14,7 +14,7 @@ import type { Sandbox } from "../../sandboxes/exec.ts";
 import { atomicWrite, readText, setTomlKey } from "../init/files.ts";
 import { findStep, STEPS } from "../init/guide.ts";
 import { makeUi } from "../init/ui.ts";
-import { detectToolchains, forPackage, workspacePackages, type Toolchain } from "../init/toolchain.ts";
+import { combineToolchains, detectToolchains, toolchainPresets, forPackage, workspacePackages, type Toolchain } from "../init/toolchain.ts";
 import { sandboxDryRun } from "../init/dry-run.ts";
 import { CI_FILE, CI_JOB, createRuleset, iacTool, openCiPr, whyDenied } from "../init/merge-safety.ts";
 
@@ -267,14 +267,20 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
     if (tcMemo) return tcMemo.tc;
     const found = detectToolchains(root);
     let tc = found[0];
-    if (found.length > 1) {
+    if (!yes) {
+      const presets = toolchainPresets().map((p) => found.find((f) => f.name === p.name) ?? p);
+      const detected = presets.map((p, i) => (found.some((f) => f.name === p.name) ? i + 1 : 0)).filter(Boolean);
+      const custom = presets.length + 1;
+      say(found.length ? "  Pick the toolchain(s) bunker sets up and verifies (detected ones are marked):" : "  Pick the toolchain(s) bunker sets up and verifies:");
+      presets.forEach((p, i) => say(`    ${detected.includes(i + 1) ? "[x]" : "[ ]"} ${i + 1}) ${p.name}: setup ${p.setup}, verify ${p.verify}`));
+      say(`    [ ] ${custom}) custom: type your own commands`);
+      const raw = (await io.ask(`Numbers, separated by spaces (${custom} or blank for custom) `, detected.join(" "))).trim();
+      const picks = new Set(raw.split(/[\s,]+/).map((w) => (/^custom$/i.test(w) ? custom : Number(w))).filter((n) => Number.isInteger(n) && n >= 1 && n <= custom));
+      tc = picks.has(custom) ? undefined : combineToolchains(presets.filter((_, i) => picks.has(i + 1)));
+    } else if (found.length > 1) {
       say("  This repo looks like more than one kind of project:");
       found.forEach((f, i) => say(`    ${i + 1}) ${f.name}: setup \`${f.setup}\`, verify \`${f.verify}\``));
-      if (yes) say(`  --yes: using the first (${tc!.name}). Edit .bunker/config.toml if that's wrong.`);
-      else {
-        const a = Number((await io.ask(`Which one does bunker verify? [1-${found.length}] `, "1")).trim());
-        tc = found[a >= 1 && a <= found.length ? a - 1 : 0];
-      }
+      say(`  --yes: using the first (${tc!.name}). Edit .bunker/config.toml if that's wrong.`);
     }
     if (tc && ["bun", "pnpm", "yarn", "npm"].includes(tc.name)) {
       const pkgs = workspacePackages(root);
@@ -296,7 +302,8 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
   else {
     const tc = await chooseToolchain();
     if (!tc) {
-      say("  Couldn't recognise the toolchain (looked for package.json, lockfiles, composer.json, pyproject.toml, requirements.txt, Cargo.toml, go.mod).");
+      if (yes) say("  Couldn't recognise the toolchain (looked for package.json, lockfiles, composer.json, pyproject.toml, requirements.txt, Cargo.toml, go.mod).");
+      else say("  Custom commands:");
       if (yes) todo.push({ what: "no setup/verify command", fix: 'add verify = "<your test command>" (and setup = "<install command>") to .bunker/config.toml' });
       else {
         const setup = (await io.ask("Setup command, run once in a fresh checkout (blank = none): ", "")).trim();
@@ -308,7 +315,7 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
     } else {
       cmds.setup ??= tc.setup;
       cmds.verify ??= tc.verify;
-      say(`  Detected ${tc.name}. Proposed commands:`);
+      say(`  ${yes ? "Detected" : "Chosen:"} ${tc.name}. Proposed commands:`);
       if (failing("setup")) say(`    setup:  ${cmds.setup}`);
       if (failing("verify")) say(`    verify: ${cmds.verify}`);
       if (tc.note) wrap(`Note: ${tc.note}`, 4);
@@ -329,6 +336,7 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
         else for (const [k, v] of add) text = setTomlKey(text, k, v);
         await atomicWrite(configPath, text);
         say(`  wrote .bunker/config.toml (commit it)`);
+        wrap(`Customise later by editing setup and verify in .bunker/config.toml. Written: ${add.map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join(", ")}`, 4);
         wrote.push(".bunker/config.toml");
       } else todo.push({ what: "setup/verify not written", fix: `add ${add.map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join(" and ")} to .bunker/config.toml` });
     }
