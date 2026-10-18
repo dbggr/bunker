@@ -17,7 +17,10 @@ export const ISSUE_CONVENTION =
   "If this issue cannot be done until something else is done, do not work around it: report what blocks it and stop. " +
   'Report by ending your answer with <report>{"issues": [{"title": "short title", "body": "one-paragraph body", "bug": true if it is a defect, "severity": "high|medium|low"}], ' +
   "Never set a priority; a human does that when triaging. " + SEVERITY_HELP + " At most one follow-up is filed per run, the most severe; the rest are only listed, so report only what matters. " +
-  '"blocked_by": [{"title": "short title", "body": "why it blocks, plus acceptance criteria"}]}</report> (valid JSON; both lists optional, omit the whole block if there is nothing to report; only the last <report> counts).';
+  '"blocked_by": [{"title": "short title", "body": "why it blocks, plus acceptance criteria"}]}</report> (valid JSON; both lists optional, omit the whole block if there is nothing to report; only the last <report> counts). ' +
+  "If after checking you find there is nothing to change (the issue is already fixed on the default branch, the behaviour is as designed, it duplicates another issue, or it cannot be reproduced), make no commits and end with " +
+  '<no-change>{"verdict": "fixed" | "as-designed" | "duplicate" | "cannot-reproduce", "reason": "why, for the maintainer", "evidence": ["file:line", "#PR", "commit hash"], "duplicate_of": 7}</no-change> instead ("duplicate_of" only for "duplicate"). ' +
+  "Every piece of evidence is checked against the default branch: a file:line, a commit or a PR that does not exist gets the verdict rejected. A reviewer must agree with it too. If in doubt, do the work.";
 
 export const REVIEWER_CONVENTION =
   "Out-of-scope problems you find go in the verdict's \"issues\" (do not ask for them to be fixed). " +

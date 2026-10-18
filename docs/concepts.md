@@ -42,7 +42,7 @@ Under `bunker watch` the run ends as soon as the PR is open and auto-merge is ar
 
 Under `bunker watch` the shepherd does read CI: the required checks, and the logs of failed jobs (see below).
 
-Outcomes: `idle-timeout` (an agent went quiet, or setup/verify ran too long; worktree and branch kept), `merged`, `ci-timeout` (PR left open, auto-merge still armed), `merge-failed`, `merge-unverified` (merged, but files differ on the default branch), plus `rejected`, `failed`, `conflict`, `verify-failed`, `bad-output` (an agent's report couldn't be parsed), `blocked`, `already-in-progress`, `paused-usage-limit` (usage limit hit; resumes later), `needs-review` (a human must review the PR), `awaiting-merge` (auto-merge armed under `bunker watch`), `awaiting-review` (manual-merge mode) and `pr-opened` (no `--merge`).
+Outcomes: `idle-timeout` (an agent went quiet, or setup/verify ran too long; worktree and branch kept), `merged`, `ci-timeout` (PR left open, auto-merge still armed), `merge-failed`, `merge-unverified` (merged, but files differ on the default branch), plus `rejected`, `failed`, `conflict`, `verify-failed`, `bad-output` (an agent's report couldn't be parsed), `blocked`, `already-in-progress`, `paused-usage-limit` (usage limit hit; resumes later), `needs-review` (a human must review the PR), `awaiting-merge` (auto-merge armed under `bunker watch`), `awaiting-review` (manual-merge mode), `pr-opened` (no `--merge`) and `no-change` (the agent found nothing to change, the reviewer agreed after checking the verdict and its evidence against the default branch, and bunker closed the issue with an explained comment; reopen it and re-add `bunker:queued` to disagree).
 
 ## Labels
 

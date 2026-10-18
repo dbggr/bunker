@@ -21,6 +21,15 @@ export interface MergedRun {
   at: number;
 }
 
+/** An issue bunker closed without a change; not a failure and not a merge. */
+export interface NoChangeRun {
+  issue: number;
+  verdict: string;
+  /** One line, redacted. */
+  reason: string;
+  at: number;
+}
+
 export interface FailedRun {
   issue: number;
   status: string;
@@ -38,13 +47,14 @@ export interface WatchStatusFile {
   startedAt: number;
   current: CurrentRun[];
   merged: MergedRun[];
+  noChange: NoChangeRun[];
   failed: FailedRun[];
 }
 
 /** Keeps the status file current for a watcher; every change is written straight away. */
 export function createStatusRecorder(dir: string, init: { pid: number; version: string }) {
   const file = join(dir, STATUS_FILE);
-  const state: WatchStatusFile = { ...init, startedAt: Date.now(), current: [], merged: [], failed: [] };
+  const state: WatchStatusFile = { ...init, startedAt: Date.now(), current: [], merged: [], noChange: [], failed: [] };
   const save = () => {
     try {
       mkdirSync(dir, { recursive: true });
@@ -71,6 +81,11 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
     },
     merged(r: Omit<MergedRun, "at">) {
       state.merged.push({ ...r, at: Date.now() });
+      state.failed = state.failed.filter((f) => f.issue !== r.issue);
+      save();
+    },
+    noChange(r: Omit<NoChangeRun, "at">) {
+      state.noChange.push({ ...r, at: Date.now() });
       state.failed = state.failed.filter((f) => f.issue !== r.issue);
       save();
     },
@@ -101,6 +116,7 @@ function readStatusFile(dir: string): WatchStatusFile | undefined {
     startedAt: raw.startedAt,
     current: Array.isArray(raw.current) ? raw.current : [],
     merged: Array.isArray(raw.merged) ? raw.merged : [],
+    noChange: Array.isArray(raw.noChange) ? raw.noChange : [],
     failed: Array.isArray(raw.failed) ? raw.failed : [],
   };
 }
@@ -120,6 +136,8 @@ export interface StatusReport {
   /** Open `bunker:queued` issues in priority order; null when GitHub could not be asked. */
   queue: { number: number; title: string; priority: string; bug: boolean }[] | null;
   merged: MergedRun[];
+  /** Closed without a change, with the reviewed verdict's reason. */
+  noChange: NoChangeRun[];
   failed: (FailedRun & { retry: string })[];
   spend: { day: { spentUsd: number; capUsd?: number }; month: { spentUsd: number; capUsd?: number } };
 }
@@ -167,6 +185,7 @@ export async function collectStatus({ repo, caps = {}, queue, alive, now = Date.
         }))
       : null,
     merged: mine?.merged ?? [],
+    noChange: mine?.noChange ?? [],
     failed: (mine?.failed ?? [])
       .filter((f) => !(mine?.merged ?? []).some((m) => m.issue === f.issue && m.at >= f.at))
       .map((f) => ({ ...f, retry: retryCommand(f.issue) })),
@@ -197,6 +216,10 @@ export function formatStatus(r: StatusReport): string {
   else r.queue.forEach((q, i) => out.push(`  ${i + 1}. #${q.number} ${q.title}${q.priority !== "none" || q.bug ? ` (${[q.priority !== "none" ? q.priority : "", q.bug ? "bug" : ""].filter(Boolean).join(", ")})` : ""}`));
   out.push("", `merged${w.alive ? " since the watcher started" : " in the last run"}: ${r.merged.length}`);
   for (const m of r.merged) out.push(`  #${m.issue}${m.prUrl ? ` · ${m.prUrl}` : ""}`);
+  if (r.noChange.length) {
+    out.push("", `closed without a change: ${r.noChange.length}`);
+    for (const n of r.noChange) out.push(`  #${n.issue} no-change (${n.verdict}): ${n.reason}`);
+  }
   out.push("", `failed: ${r.failed.length}`);
   for (const f of r.failed) {
     out.push(`  #${f.issue} ${f.status}: ${f.reason}`, `    ${f.prUrl ?? f.logPath ?? "no PR or log"}`, `    retry: ${f.retry}`);

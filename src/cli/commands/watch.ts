@@ -7,7 +7,7 @@ import { addSpend, budgetSnapshot, DAY_MS, exceededCaps, formatSpend, type Spend
 import { safePull } from "../../github/pull.ts";
 import { clearStaleInProgress, runClean } from "./clean.ts";
 import { codeSpan, redact } from "../../core/redact.ts";
-import { failureReason } from "../../core/reason.ts";
+import { failureReason, oneLine } from "../../core/reason.ts";
 import { createStatusRecorder } from "./status.ts";
 import pkg from "../../../package.json" with { type: "json" };
 import { runAudit } from "../../pipeline/audit.ts";
@@ -58,6 +58,8 @@ export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "ke
 export interface WatchSummary {
   passes: number;
   merged: number;
+  /** Issues closed without a change: successes, neither failed nor merged. */
+  noChange?: number;
   failed: number;
   spentUsd: number;
 }
@@ -322,6 +324,13 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
             merged++;
             summary.merged++;
             status.merged({ issue: e.issue, ...(e.prUrl ? { prUrl: e.prUrl } : {}) });
+          } else if (e.status === "no-change") {
+            // A success: the issue is closed with an explained comment.
+            summary.noChange = (summary.noChange ?? 0) + 1;
+            const v = e.noChange;
+            const reason = oneLine(v?.reason ?? "no change needed");
+            status.noChange({ issue: e.issue, verdict: v?.verdict ?? "unknown", reason });
+            notify(`bunker: #${e.issue} closed, no change needed`, `${v?.verdict ?? ""}: ${reason}`);
           } else if (e.status === "already-in-progress") {
             giveUp(e.issue);
           } else if (e.status === "awaiting-merge") {

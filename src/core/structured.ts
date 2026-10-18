@@ -181,3 +181,40 @@ export function readTriageVerdict(x: unknown): { ok: true; value: TriageVerdict 
   }
   return { ok: true, value };
 }
+
+export const NO_CHANGE_VERDICTS = ["fixed", "as-designed", "duplicate", "cannot-reproduce"] as const;
+export type NoChangeKind = (typeof NO_CHANGE_VERDICTS)[number];
+
+/** The implementer's `<no-change>`: the issue needs no change, and why. */
+export interface NoChange {
+  verdict: NoChangeKind;
+  reason: string;
+  /** `file:line`, `#PR` or issue, or a commit hash; checked against the default branch before anything is closed. */
+  evidence: string[];
+  /** With `duplicate`: the issue that covers this one. */
+  duplicate_of?: number;
+}
+
+const MAX_EVIDENCE = 20;
+
+export const noChangeSchema: Schema<NoChange> = {
+  parse(v) {
+    if (!isObj(v)) throw new Error("expected a JSON object");
+    if (!NO_CHANGE_VERDICTS.includes(v.verdict as NoChangeKind)) throw new Error('"verdict" must be fixed, as-designed, duplicate or cannot-reproduce');
+    if (typeof v.reason !== "string" || !v.reason.trim()) throw new Error('"reason" must be a non-empty string');
+    const evidence = v.evidence ?? [];
+    if (!Array.isArray(evidence) || !evidence.every((e) => typeof e === "string" && e.trim()) || evidence.length > MAX_EVIDENCE) {
+      throw new Error(`"evidence" must be an array of at most ${MAX_EVIDENCE} non-empty strings`);
+    }
+    const value: NoChange = { verdict: v.verdict as NoChangeKind, reason: v.reason.trim(), evidence: (evidence as string[]).map((e) => e.trim()) };
+    if (value.verdict === "duplicate") {
+      if (!Number.isInteger(v.duplicate_of) || (v.duplicate_of as number) < 1) throw new Error('"duplicate_of" must be the number of the duplicate issue');
+      value.duplicate_of = v.duplicate_of as number;
+    } else if ((value.verdict === "fixed" || value.verdict === "as-designed") && !value.evidence.length) {
+      throw new Error(`"evidence" must name at least one file:line, commit or PR for "${value.verdict}"`);
+    }
+    return value;
+  },
+};
+
+export const noChangeOutput = Output.object({ tag: "no-change", schema: noChangeSchema });

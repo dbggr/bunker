@@ -144,7 +144,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
         queue = orderQueue([...queue, ...more.filter((m) => !known.has(m.number))]);
       }
       else if (result.status === "blocked") return;
-      if (!keepGoing && (!opts.merge || result.status !== "merged")) stop = true;
+      if (!keepGoing && (!opts.merge || (result.status !== "merged" && result.status !== "no-change"))) stop = true;
     } catch (e) {
       fatal ??= { error: e };
       stop = true;
