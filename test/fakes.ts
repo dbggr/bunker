@@ -49,6 +49,8 @@ case "$*" in
   "label create"*) if [ -f "$d/label-create-err.txt" ]; then cat "$d/label-create-err.txt" >&2; exit 1; fi; exit 0;;
   "api repos/o/r/branches/main/protection/required_status_checks") f protection.json;;
   "api repos/o/r/rules/branches/main") f rules.json;;
+  "api repos/o/r/commits/main/check-runs"*) f check-runs.json;;
+  "api repos/o/r/commits/main/status"*) f status.json;;
   *) echo "fake gh: unhandled $*" >&2; exit 1;;
 esac`,
   );

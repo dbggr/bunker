@@ -17,7 +17,7 @@ import { findStep, STEPS } from "../init/guide.ts";
 import { makeUi } from "../init/ui.ts";
 import { combineToolchains, detectToolchains, toolchainPresets, forPackage, workspacePackages, type Toolchain } from "../init/toolchain.ts";
 import { sandboxDryRun } from "../init/dry-run.ts";
-import { CI_FILE, CI_JOB, createRuleset, iacTool, openCiPr, whyDenied } from "../init/merge-safety.ts";
+import { CI_FILE, CI_JOB, createRuleset, iacTool, openCiPr, prJobNames, reportedChecks, requiredChecks, whyDenied } from "../init/merge-safety.ts";
 
 export { detectToolchain, type Toolchain } from "../init/toolchain.ts";
 
@@ -445,7 +445,7 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
 
   // 6. merge safety
   step(5);
-  wrap("That takes three things: auto-merge allowed on the repo, a CI workflow with a job named `test`, and a ruleset (GitHub's newer branch protection) that requires it. Classic branch protection (Settings -> Branches) doesn't count: bunker's scoped token can't read it.");
+  wrap("That takes three things: auto-merge allowed on the repo, a CI workflow (bunker init writes one with a job named `test` if you have none), and a ruleset (GitHub's newer branch protection) that requires it. Classic branch protection (Settings -> Branches) doesn't count: bunker's scoped token can't read it.");
   const slug = repo?.slug;
   const branch = first.defaultBranch ?? "main";
   const iac = iacTool(root);
@@ -488,19 +488,41 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
     }
     if (!failing("required-check")) skip(`${branch} requires a status check (ruleset)`);
     else {
-      say(`  ✗ ${branch} has no ruleset requiring a status check.`);
-      let made = false;
-      if (!yes && !iac && (await io.confirm(`Create a ruleset on ${slug} requiring the \`${CI_JOB}\` check on ${branch} (with your own gh login)?`, true))) {
-        const r = await createRuleset(slug, env);
-        made = r.code === 0;
-        if (made) {
-          say(`  ✓ ruleset created: ${branch} now requires \`${CI_JOB}\``);
-          wrote.push(`ruleset on ${slug} requiring \`${CI_JOB}\``);
-        } else say(`  Could not create it: ${whyDenied(r)}${/rules|managed|403/i.test(r.err) ? "; if the repo is IaC-managed (terraform, probot settings), change it there" : ""}`);
-      }
-      if (!made) {
-        wrap(`By hand: ${ui.link(settingsUrl("/rules"))} -> New ruleset -> New branch ruleset -> target ${branch} -> tick "Require status checks to pass" -> add \`${CI_JOB}\` -> Create. (Settings -> Branches is classic protection and does not count.)`, 4);
-        todo.push({ what: `no ruleset requiring a check on ${branch}`, fix: `create one at ${settingsUrl("/rules")} requiring \`${CI_JOB}\`${iac ? `; settings are managed by ${iac}, so change it there` : ""}` });
+      const already = await requiredChecks(slug, branch, env);
+      const list = (cs: string[]) => cs.map((c) => `\`${c}\``).join(", ");
+      // an existing CI workflow keeps its own job names; `test` is only the job bunker init writes itself
+      const ownCi = !failing("ci");
+      const jobs = ownCi ? prJobNames(root) : [];
+      const checks = ownCi ? jobs : [CI_JOB];
+      if (already.length) {
+        say(`  ✓ ${branch} already requires ${list(already)} (branch protection or a ruleset); adding no ruleset.`);
+        wrap("bunker --merge reads rulesets only: if it reports no required check, recreate that rule as a ruleset (Settings -> Rules) rather than adding a second check.", 4);
+      } else if (!checks.length) {
+        say(`  ✗ ${branch} has no ruleset requiring a status check, and none of the CI jobs that run on pull_request could be identified.`);
+        wrap(`By hand: ${ui.link(settingsUrl("/rules"))} -> New ruleset -> target ${branch} -> "Require status checks to pass" -> add your CI job's name -> Create.`, 4);
+        todo.push({ what: `no ruleset requiring a check on ${branch}`, fix: `create one at ${settingsUrl("/rules")} requiring your CI job (no pull_request job found in .github/workflows/)${iac ? `; settings are managed by ${iac}, so change it there` : ""}` });
+      } else {
+        say(`  ✗ ${branch} has no ruleset requiring a status check.`);
+        let made = false;
+        let unreported: string[] = [];
+        if (ownCi) {
+          const seen = await reportedChecks(slug, branch, env);
+          unreported = checks.filter((c) => !seen.has(c));
+        }
+        if (unreported.length) {
+          say(`  ✗ ${list(unreported)} hasn't reported on a recent ${branch} commit, so requiring it could block every PR forever. Not creating a ruleset.`);
+        } else if (!yes && !iac && (await io.confirm(`Create a ruleset on ${slug} requiring ${list(checks)} on ${branch} (with your own gh login)?`, true))) {
+          const r = await createRuleset(slug, env, checks);
+          made = r.code === 0;
+          if (made) {
+            say(`  ✓ ruleset created: ${branch} now requires ${list(checks)}`);
+            wrote.push(`ruleset on ${slug} requiring ${list(checks)}`);
+          } else say(`  Could not create it: ${whyDenied(r)}${/rules|managed|403/i.test(r.err) ? "; if the repo is IaC-managed (terraform, probot settings), change it there" : ""}`);
+        }
+        if (!made) {
+          wrap(`By hand: ${ui.link(settingsUrl("/rules"))} -> New ruleset -> New branch ruleset -> target ${branch} -> tick "Require status checks to pass" -> add ${list(unreported.length ? unreported : checks)} -> Create. (Settings -> Branches is classic protection and does not count.)`, 4);
+          todo.push({ what: `no ruleset requiring a check on ${branch}`, fix: `create one at ${settingsUrl("/rules")} requiring ${list(checks)}${unreported.length ? " once it has run on a PR or push" : ""}${iac ? `; settings are managed by ${iac}, so change it there` : ""}` });
+        }
       }
     }
   }

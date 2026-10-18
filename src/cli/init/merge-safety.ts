@@ -24,21 +24,81 @@ export function iacTool(root: string): string | undefined {
   return undefined;
 }
 
-/** A branch ruleset on the default branch that requires the `test` check. */
-export const rulesetBody = (check = CI_JOB) => ({
-  name: `bunker: require ${check}`,
+/** Names of the jobs the repo's own workflows run on pull_request, as GitHub reports them as checks. Matrix and templated names can't be known from the file, so they are left out. */
+export function prJobNames(root: string): string[] {
+  const names: string[] = [];
+  let files: string[] = [];
+  try {
+    files = readdirSync(join(root, ".github", "workflows")).filter((f) => /\.ya?ml$/.test(f)).sort();
+  } catch {}
+  for (const f of files) {
+    let doc: any;
+    try {
+      doc = Bun.YAML.parse(readFileSync(join(root, ".github", "workflows", f), "utf8"));
+    } catch {
+      continue;
+    }
+    const on = doc?.on ?? doc?.[String(true)];
+    const triggers: string[] = typeof on === "string" ? [on] : Array.isArray(on) ? on : on && typeof on === "object" ? Object.keys(on) : [];
+    if (!triggers.some((t) => t === "pull_request" || t === "pull_request_target")) continue;
+    for (const [id, job] of Object.entries<any>(doc?.jobs ?? {})) {
+      if (!job || typeof job !== "object" || job.uses || job.strategy?.matrix || job.if === false) continue;
+      const name = typeof job.name === "string" ? job.name : id;
+      if (name.includes("${{") || names.includes(name)) continue;
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+const json = (r: Exec): any => {
+  try {
+    return r.code === 0 ? JSON.parse(r.out) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/** Checks the default branch already requires, via a ruleset or classic branch protection (read with the user's own gh login). */
+export async function requiredChecks(slug: string, branch: string, env: Env): Promise<string[]> {
+  const u = userEnv(env);
+  const out = new Set<string>();
+  const rules = json(await exec(["gh", "api", `repos/${slug}/rules/branches/${branch}`], { env: u }));
+  for (const r of Array.isArray(rules) ? rules : []) {
+    if (r?.type === "required_status_checks") for (const c of r.parameters?.required_status_checks ?? []) if (c?.context) out.add(c.context);
+  }
+  const prot = json(await exec(["gh", "api", `repos/${slug}/branches/${branch}/protection/required_status_checks`], { env: u }));
+  for (const c of prot?.contexts ?? []) out.add(c);
+  for (const c of prot?.checks ?? []) if (c?.context) out.add(c.context);
+  return [...out];
+}
+
+/** Check and status names that reported on the tip of the branch. */
+export async function reportedChecks(slug: string, branch: string, env: Env): Promise<Set<string>> {
+  const u = userEnv(env);
+  const out = new Set<string>();
+  const runs = json(await exec(["gh", "api", `repos/${slug}/commits/${branch}/check-runs?per_page=100`], { env: u }));
+  for (const c of runs?.check_runs ?? []) if (c?.name) out.add(c.name);
+  const status = json(await exec(["gh", "api", `repos/${slug}/commits/${branch}/status?per_page=100`], { env: u }));
+  for (const c of status?.statuses ?? []) if (c?.context) out.add(c.context);
+  return out;
+}
+
+/** A branch ruleset on the default branch that requires the given checks (default: the `test` job bunker init writes). */
+export const rulesetBody = (checks: string[] = [CI_JOB]) => ({
+  name: `bunker: require ${checks.join(", ")}`,
   target: "branch",
   enforcement: "active",
   conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
-  rules: [{ type: "required_status_checks", parameters: { strict_required_status_checks_policy: false, required_status_checks: [{ context: check }] } }],
+  rules: [{ type: "required_status_checks", parameters: { strict_required_status_checks_policy: false, required_status_checks: checks.map((context) => ({ context })) } }],
 });
 
 /** Creates the ruleset through the user's own gh login (the scoped token can't administer the repo). */
-export async function createRuleset(slug: string, env: Env): Promise<Exec> {
+export async function createRuleset(slug: string, env: Env, checks: string[] = [CI_JOB]): Promise<Exec> {
   const dir = await mkdtemp(join(tmpdir(), "bunker-ruleset-"));
   try {
     const file = join(dir, "ruleset.json");
-    await writeFile(file, JSON.stringify(rulesetBody()));
+    await writeFile(file, JSON.stringify(rulesetBody(checks)));
     return await exec(["gh", "api", `repos/${slug}/rulesets`, "--method", "POST", "--input", file], { env: userEnv(env) });
   } finally {
     await rm(dir, { recursive: true, force: true });
