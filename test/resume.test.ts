@@ -49,7 +49,7 @@ function fakeClaude(opts: { reviewer?: (n: number) => string; failResume?: boole
     ...base,
     command(prompt, mode = "write", o) {
       const id = `sess-${++calls}`;
-      const resume = o?.resume;
+      const resume = o?.resume ?? o?.fork;
       const review = mode === "review";
       const text = review ? (opts.reviewer?.(calls) ?? APPROVE) : "done";
       const script = [
@@ -90,6 +90,14 @@ describe("claudeCode() resume", () => {
     expect(a.command("x", "write")).not.toContain("--resume");
     const cmd = a.command("x", "write", { resume: "abc" });
     expect(cmd.slice(cmd.indexOf("--resume"), cmd.indexOf("--resume") + 2)).toEqual(["--resume", "abc"]);
+  });
+
+  test("fork adds --resume <id> --fork-session only when asked", () => {
+    const a = claudeCode({ json: true });
+    expect(a.command("x", "write")).not.toContain("--fork-session");
+    const cmd = a.command("x", "write", { fork: "abc" });
+    const i = cmd.indexOf("--resume");
+    expect(cmd.slice(i, i + 3)).toEqual(["--resume", "abc", "--fork-session"]);
   });
 
   test("sessionId reads session_id from the stream", () => {
@@ -150,5 +158,32 @@ describe("run() iterations resume", () => {
     const repo2 = await makeRepo();
     await run({ cwd: repo2, prompt: "p", agent: fakeClaude(), sandbox: noSandbox(), maxIterations: 2, resume: false, sessionsDir: join(home, "s2") });
     expect((await calls()).every((l) => l.includes("resume=none"))).toBe(true);
+  });
+});
+
+describe("run() fork", () => {
+  test("a child continues from the parent's session under a new id; the parent can still be resumed", async () => {
+    const repo = await makeRepo();
+    const agent = fakeClaude();
+    const sandbox = noSandbox();
+    const parent = await run({ cwd: repo, prompt: "plan", agent, sandbox });
+    expect(parent.iterations[0]!.sessionId).toBe("sess-1");
+
+    const child = await parent.fork("do part A");
+    expect(child.iterations[0]!.sessionId).toBe("sess-2");
+    expect(child.iterations[0]!.sessionId).not.toBe(parent.iterations[0]!.sessionId);
+    expect(child.branch).not.toBe(parent.branch);
+    expect(await calls()).toEqual(["write resume=none present=no", "write resume=sess-1 present=yes"]);
+
+    // The parent session is untouched: forking (or resuming) it again still works.
+    const again = await parent.fork("do part B");
+    expect(again.iterations[0]!.sessionId).toBe("sess-3");
+    expect((await calls())[2]).toBe("write resume=sess-1 present=yes");
+  });
+
+  test("fork throws when the parent run has no session", async () => {
+    const repo = await makeRepo();
+    const parent = await run({ cwd: repo, prompt: "plan", agent: { command: () => ["sh", "-c", "git commit -q --allow-empty -m x"] }, sandbox: noSandbox() });
+    await expect(parent.fork("x")).rejects.toThrow(/no session/);
   });
 });

@@ -12,7 +12,7 @@ export function claudeCode(opts: { model?: string; attribution?: boolean; json?:
       "-p",
       mode === "write" ? prompt + COMMIT_INSTRUCTION : prompt,
       "--dangerously-skip-permissions",
-      ...(o?.resume ? ["--resume", o.resume] : []),
+      ...(o?.resume ? ["--resume", o.resume] : o?.fork ? ["--resume", o.fork, "--fork-session"] : []),
       ...(opts.json ? ["--output-format", "stream-json", "--verbose"] : []),
       ...(opts.model ? ["--model", opts.model] : []),
       ...(opts.attribution ? [] : ["--settings", NO_ATTRIBUTION]),

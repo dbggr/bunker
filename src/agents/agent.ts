@@ -5,7 +5,7 @@ export type AgentMode = "write" | "review";
 /** Turns a prompt into the command line that runs the agent. */
 export interface Agent {
   /** "review" is a read-only pass over someone else's work; "write" (default) is expected to commit. */
-  command(prompt: string, mode?: AgentMode, opts?: { resume?: string }): string[];
+  command(prompt: string, mode?: AgentMode, opts?: { resume?: string; fork?: string }): string[];
   /** The id of the conversation the command just ran, from its raw stdout. Omit if the agent has no resumable sessions. */
   sessionId?(stdout: string): string | undefined;
   /** Whether the command stopped on the plan's usage limit, and when it resets (epoch ms) if known. Omit if the agent has no such limit. */
