@@ -6,6 +6,7 @@ What v1.0.0 promises, how close bunker is, and what would prove it, from raw evi
   - every run log in `.bunker/runs` (142 logs, 2026-10-16 18:02Z to 2026-10-18 01:22Z)
   - GitHub's history of this repo: 151 PRs, 132 CI runs on `main`, issue label events
   - the cost recorded in each run's `result` events
+- **Snapshot:** the numbers below were taken at 2026-10-18 01:22Z; re-running gives newer ones (GitHub answers are cached, so pass `--refresh`).
 - **Reproduce:**
   - `bun scripts/v1-readiness.ts` (add `--since 2026-10-17T12:00:00Z` for the recent window, `--json` for raw numbers)
   - `bun scripts/mutate-gates.ts` for the gate mutation table
