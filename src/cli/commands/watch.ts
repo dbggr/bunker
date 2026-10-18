@@ -325,6 +325,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
             merged++;
             summary.merged++;
             status.merged({ issue: e.issue, ...(e.prUrl ? { prUrl: e.prUrl } : {}) });
+            await clearLanded(e.issue, cwd, env);
           } else if (e.status === "no-change") {
             // A success: the issue is closed with an explained comment.
             summary.noChange = (summary.noChange ?? 0) + 1;
