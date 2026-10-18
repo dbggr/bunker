@@ -69,16 +69,6 @@ describe("spend caps config", () => {
   });
 });
 
-describe("kebab-case spend caps (deprecated)", () => {
-  test("still read", async () => {
-    const home = mkdtempSync(join(tmpdir(), "bunker-sp-"));
-    mkdirSync(join(home, "bunker"));
-    writeFileSync(join(home, "bunker", "config.toml"), "max-cost-day = 5\n");
-    expect(await loadSpendCaps({ XDG_CONFIG_HOME: home })).toEqual({ day: 5 });
-    rmSync(home, { recursive: true, force: true });
-  });
-});
-
 test("kebab-case spend caps (deprecated) are still read", async () => {
   const home = tmp();
   mkdirSync(join(home, "bunker"));
