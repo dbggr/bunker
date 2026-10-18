@@ -61,3 +61,7 @@ if (process.env.BUNKER_TEST_REAL_DOCKER !== "1") {
   process.env.PATH = `${fakeBin}:${process.env.PATH ?? ""}`;
   process.on("exit", () => rmSync(fakeBin, { recursive: true, force: true }));
 }
+
+// Verify itself runs inside a bunker sandbox, where BUNKER_IN_SANDBOX=1 makes every CLI the tests spawn refuse to start.
+// The guard's own test (test/sandbox-guard.test.ts) sets it explicitly.
+delete process.env.BUNKER_IN_SANDBOX;
