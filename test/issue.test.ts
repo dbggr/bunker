@@ -824,6 +824,15 @@ describe("runIssue() --merge", () => {
     expect(await Bun.file(editLog).text()).toContain("pr edit https://github.com/o/r/pull/99 --add-label needs-human-review");
   });
 
+  test.each([".claude/skills/x/SKILL.md", "CLAUDE.md", "sub/AGENTS.md", "pkg/.claude/settings.json"])("a PR touching %s (steers agents) → needs-review", async (path) => {
+    const { repo, mergeLog } = await setup(issue(), "ff");
+    const agent: Agent = { command: (p, m = "write") => (m === "write" ? ["sh", "-c", `mkdir -p $(dirname ${path}) && echo x > ${path} && echo hi > feature.txt && git add -A && git commit -qm "feat: impl"`] : ["sh", "-c", `echo '${APPROVE}'`]) };
+    const r = await run(repo, { agent });
+    expect(r.status).toBe("needs-review");
+    expect(r.error).toContain(path);
+    expect(await Bun.file(mergeLog).exists()).toBe(false);
+  });
+
   // git quotes such paths in plain --name-only output ("\".bunker/\\303\\251\""), which a ^.bunker/ match would miss.
   test.each([".bunker/é", '.bunker/a"b'])("a PR touching %s (a path git would quote) → needs-review", async (path) => {
     const { repo, mergeLog } = await setup(issue(), "ff");
