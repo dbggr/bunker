@@ -16,7 +16,7 @@ interface Price {
 
 /** Rough list prices by model family, first match wins. Only for the running estimate: the exact cost is the `result`'s `total_cost_usd`. */
 const PRICES: [RegExp, Price][] = [
-  [/opus-4(-[01])?(?!\d)(?!-\d)/, { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 }],
+  [/opus-4(-1)?(-\d{8})?(?![\w-])/, { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 }],
   [/opus/, { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
   [/sonnet/, { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }],
   [/haiku-3/, { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite: 1 }],

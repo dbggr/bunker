@@ -244,6 +244,12 @@ describe("running usage estimate", () => {
     expect(estimateCostUsd(undefined, t)).toBeUndefined();
   });
 
+  test("Opus 4 and 4.1 keep their higher price, dated or not; newer Opus does not", () => {
+    const t = { input: 1e6, output: 0, cacheRead: 0, cacheWrite: 0 };
+    for (const id of ["claude-opus-4", "claude-opus-4-1", "claude-opus-4-20250514", "claude-opus-4-1-20250805"]) expect(estimateCostUsd(id, t)).toBe(15);
+    for (const id of ["claude-opus-4-5", "claude-opus-4-5-20251101", "claude-opus-5-5"]) expect(estimateCostUsd(id, t)).toBe(5);
+  });
+
   const run = (lines: string[]) => {
     const events: BunkerEvent[] = [];
     const hook = lineHook({ parseLine: parseClaudeStreamLine, command: () => [] } as Agent, { onEvent: (e) => events.push(e) })!;
