@@ -12,7 +12,7 @@ import { loadSpendCaps } from "../../core/spend.ts";
 import { userConfigPath } from "../../core/user-config.ts";
 import { docker } from "../../sandboxes/container.ts";
 import type { Sandbox } from "../../sandboxes/exec.ts";
-import { atomicWrite, readText, setTomlKey } from "../init/files.ts";
+import { atomicWrite, readText, removeTomlKey, setTomlKey } from "../init/files.ts";
 import { findStep, STEPS } from "../init/guide.ts";
 import { makeUi } from "../init/ui.ts";
 import { combineToolchains, detectToolchains, toolchainPresets, forPackage, workspacePackages, type Toolchain } from "../init/toolchain.ts";
@@ -396,7 +396,7 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
           cmds.verify = tc.verify;
           const configPath = join(root, ".bunker", "config.toml");
           let text = await readText(configPath);
-          text = cmds.setup ? setTomlKey(text, "setup", cmds.setup) : text;
+          text = cmds.setup ? setTomlKey(text, "setup", cmds.setup) : removeTomlKey(text, "setup");
           await atomicWrite(configPath, setTomlKey(text, "verify", cmds.verify));
           say("  updated .bunker/config.toml");
           if (!wrote.includes(".bunker/config.toml")) wrote.push(".bunker/config.toml");

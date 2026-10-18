@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { InitInterrupted, runInit, type Io } from "../src/cli/commands/init.ts";
 import { detectToolchains, forPackage, workspacePackages } from "../src/cli/init/toolchain.ts";
 import { makeUi } from "../src/cli/init/ui.ts";
-import { setTomlKey } from "../src/cli/init/files.ts";
+import { removeTomlKey, setTomlKey } from "../src/cli/init/files.ts";
 import { findStep } from "../src/cli/init/guide.ts";
 import type { Sandbox } from "../src/sandboxes/exec.ts";
 import { cleanup, fakeWorld } from "./fakes.ts";
@@ -487,5 +487,14 @@ describe("setTomlKey", () => {
     expect(setTomlKey('a = 1\nb = "x"\n', "a", 2)).toBe('a = 2\nb = "x"\n');
     expect(setTomlKey("[watch]\nx = 1\n", "a", "v")).toBe('a = "v"\n\n[watch]\nx = 1\n');
     expect(setTomlKey("# c\nb = 1", "a", 3)).toBe("# c\nb = 1\na = 3\n");
+  });
+});
+
+describe("removeTomlKey", () => {
+  test("drops a stale top-level setup and keeps the rest", () => {
+    expect(removeTomlKey('setup = "make deps"\nverify = "make test"\n\n[services.db]\nsetup = "x"\n', "setup")).toBe('verify = "make test"\n\n[services.db]\nsetup = "x"\n');
+  });
+  test("is a no-op when the key is absent", () => {
+    expect(removeTomlKey('verify = "t"\n', "setup")).toBe('verify = "t"\n');
   });
 });
