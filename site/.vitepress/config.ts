@@ -50,7 +50,7 @@ export default defineConfig({
     },
     outline: { level: [2, 3] },
     footer: {
-      message: "Released under the MIT License.",
+      message: 'Released under the MIT License. Brought to you by a [<a href="https://true.engineer">true.engineer</a>].',
       copyright: "Pre-1.0: flags, config and labels may change before 1.0.",
     },
   },
