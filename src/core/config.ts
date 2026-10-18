@@ -2,6 +2,13 @@ import { join } from "node:path";
 
 type Env = Record<string, string | undefined>;
 
+/** The `skills` setting: paths for both roles (`default`) and for one role. */
+export interface SkillsConfig {
+  default?: string[];
+  implementer?: string[];
+  reviewer?: string[];
+}
+
 export interface RepoConfig {
   setup?: string;
   verify?: string;
@@ -11,6 +18,7 @@ export interface RepoConfig {
   copy?: string[];
   context?: string[];
   models: { implementer?: string; reviewer?: string; auditor?: string; default?: string };
+  skills: SkillsConfig;
   watch: { interval?: number; parallel?: number; max_cost_day?: number; max_cost_month?: number; audit_every?: number; triage_every?: number };
   merge: { ci_timeout?: number; mode?: "auto" | "manual" };
   notify: { enabled?: boolean; github_user?: string };
@@ -43,6 +51,9 @@ export const CONFIG_KEYS: KeySpec[] = [
   { key: "models.reviewer", kind: "string", doc: "model for the reviewer role" },
   { key: "models.auditor", kind: "string", doc: "model for the auditor role" },
   { key: "models.default", kind: "string", doc: "model for every role without its own" },
+  { key: "skills.default", kind: "strings", doc: "skill directories (e.g. ~/.claude/skills/tdd) mounted read-only into ~/.claude/skills of every role; `skills = [...]` is the same" },
+  { key: "skills.implementer", kind: "strings", doc: "skill directories for the implementer role only" },
+  { key: "skills.reviewer", kind: "strings", doc: "skill directories for the reviewer role only" },
   { key: "watch.interval", kind: "number", doc: "minutes to sleep between bunker watch passes", default: 10 },
   { key: "watch.parallel", kind: "integer", doc: "issues bunker watch works at once", default: 1 },
   { key: "watch.max_cost_day", kind: "number", doc: "USD cap per rolling 24h for bunker watch" },
@@ -65,7 +76,7 @@ const EXPECTED: Record<Kind, string> = {
   boolean: "true or false",
 };
 
-const TABLES = ["models", "watch", "merge", "notify", "clean"];
+const TABLES = ["models", "skills", "watch", "merge", "notify", "clean"];
 
 function check(kind: Kind, v: unknown): boolean {
   switch (kind) {
@@ -86,6 +97,24 @@ function check(kind: Kind, v: unknown): boolean {
 
 const isTable = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
+/** Validates a `skills` value: an array (for both roles) or a table of `default`, `implementer`, `reviewer` arrays. Absent is `{}`. */
+export function parseSkills(v: unknown, name: string): SkillsConfig {
+  if (v === undefined) return {};
+  const strings = (x: unknown): x is string[] => Array.isArray(x) && x.every((s) => typeof s === "string");
+  if (Array.isArray(v)) {
+    if (!strings(v)) throw new ConfigError(`${name}: skills must be an array of strings`);
+    return { default: v };
+  }
+  if (!isTable(v)) throw new ConfigError(`${name}: skills must be an array of strings or a table`);
+  const out: SkillsConfig = {};
+  for (const [k, x] of Object.entries(v)) {
+    if (k !== "default" && k !== "implementer" && k !== "reviewer") continue;
+    if (!strings(x)) throw new ConfigError(`${name}: skills.${k} must be an array of strings`);
+    out[k] = x;
+  }
+  return out;
+}
+
 /** Validates the text of a config.toml. Unknown keys come back as warnings; a wrongly typed key throws a ConfigError. */
 export function parseConfig(text: string, name = ".bunker/config.toml"): { config: RepoConfig; warnings: string[] } {
   let raw: unknown;
@@ -94,7 +123,7 @@ export function parseConfig(text: string, name = ".bunker/config.toml"): { confi
   } catch (e) {
     throw new ConfigError(`${name}: invalid TOML: ${e instanceof Error ? e.message : e}`);
   }
-  const config: RepoConfig = { models: {}, watch: {}, merge: {}, notify: {}, clean: {} };
+  const config: RepoConfig = { models: {}, skills: {}, watch: {}, merge: {}, notify: {}, clean: {} };
   const warnings: string[] = [];
   const known = new Set(CONFIG_KEYS.map((k) => k.key));
   const root = raw as Record<string, unknown>;
@@ -112,6 +141,10 @@ export function parseConfig(text: string, name = ".bunker/config.toml"): { confi
     if (k === "merge" && typeof v === "string") {
       if (v !== "auto" && v !== "manual") throw new ConfigError(`${name}: merge must be "auto" or "manual"`);
       config.merge.mode = v;
+      continue;
+    }
+    if (k === "skills" && Array.isArray(v)) {
+      config.skills = parseSkills(v, name);
       continue;
     }
     if (TABLES.includes(k)) {

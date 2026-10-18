@@ -28,7 +28,7 @@ export async function agentStep(o: {
 }): Promise<{ code: number; stdout: string; session?: Session }> {
   const timeouts = o.timeouts ?? {};
   const label = { ...(o.target.task !== undefined ? { task: o.target.task } : {}), ...(o.target.round !== undefined ? { round: o.target.round } : {}), ...(o.target.role ? { role: o.target.role } : {}) };
-  const ctx: ExecContext = { ...o.ctx, limits: agentLimits(timeouts, o.signals) };
+  const ctx: ExecContext = { ...o.ctx, ...(o.target.role === "implementer" || o.target.role === "reviewer" ? { role: o.target.role } : {}), limits: agentLimits(timeouts, o.signals) };
   /** Runs the command; a killed one throws IdleTimeout, a hung-but-finished one is noted and counts as done. */
   const exec = async (cmd: string[], prompt: string) => {
     const r = await o.sandbox.exec(cmd, { ...ctx, ...stdinOf(o.agent, prompt, o.mode) });

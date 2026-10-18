@@ -1,6 +1,7 @@
 import { $ } from "bun";
 import { resolveTimeouts } from "../core/settings.ts";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "../core/env.ts";
+import { SkillError, loadSkills } from "../core/skills.ts";
 import { docker } from "../sandboxes/container.ts";
 import { noSandbox } from "../sandboxes/no-sandbox.ts";
 import { formatUsage } from "../agents/agent.ts";
@@ -155,10 +156,15 @@ export async function shepherdCommand(values: CliValues) {
   const timeouts = guardFlags(() => resolveTimeouts(values));
   if (values.verbose) output.verbose = true;
   const models = resolveModels(values, process.env, cfg.models);
+  const skills = await loadSkills(process.cwd()).catch((e) => {
+    if (!(e instanceof SkillError)) throw e;
+    console.error(`bunker: ${e.message}`);
+    process.exit(2);
+  });
   const agent = claudeCode({ model: models.implementer, json: true });
   const shepherd = createShepherd({
     agent, reviewer: models.reviewer === models.implementer ? agent : claudeCode({ model: models.reviewer, json: true }),
-    sandbox: values["no-sandbox"] ? noSandbox() : docker({ image: values.image }),
+    sandbox: values["no-sandbox"] ? noSandbox({ skills }) : docker({ image: values.image, skills }),
     ...(values.setup ? { setup: values.setup } : {}), ...(values.verify ? { verify: values.verify } : {}), verifyOnHost: values["verify-on-host"], verifyNetwork: cfg.verify_network === true,
     onEvent: createProgress({ write: (s) => output.write(redact(s)), tty: !!process.stdout.isTTY, columns: process.stdout.columns ?? 100 }).onEvent, ...timeouts,
   });

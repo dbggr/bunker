@@ -7,6 +7,7 @@ import { DEFAULT_MODEL_LABEL, resolveModels } from "../../agents/models.ts";
 import { ConfigError, effectiveSettings, formatValue, loadRepoConfig } from "../../core/config.ts";
 import { redact } from "../../core/redact.ts";
 import { FAILED_LABEL, IN_PROGRESS_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
+import { SKILL_ROLES, SkillError, resolveSkills, skillPaths } from "../../core/skills.ts";
 import { PRIORITY_LABELS } from "../../core/priority.ts";
 
 type Env = Record<string, string | undefined>;
@@ -277,6 +278,23 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
     required: false,
     detail: (["implementer", "reviewer", "auditor"] as const).map((r) => `${r}: ${models[r] ?? DEFAULT_MODEL_LABEL}`).join(", "),
   });
+
+  // skills each role gets (user config + the repo's default branch); a missing or unsafe one fails the check
+  try {
+    const paths = await skillPaths(root, env);
+    for (const role of SKILL_ROLES) {
+      try {
+        const names = resolveSkills(paths[role], env.HOME).map((k) => k.name);
+        add({ id: `skills-${role}`, group: "config", label: `skills (${role})`, ok: true, required: false, detail: names.length ? names.join(", ") : "none" });
+      } catch (e) {
+        if (!(e instanceof SkillError)) throw e;
+        add({ id: `skills-${role}`, group: "config", label: `skills (${role})`, ok: false, detail: e.message, fix: "fix the path in skills (config.toml), or remove it" });
+      }
+    }
+  } catch (e) {
+    if (!(e instanceof ConfigError)) throw e;
+    add({ id: "skills", group: "config", label: "skills", ok: false, detail: e.message, fix: "fix the skills key named above" });
+  }
 
   // deprecated user config keys (kebab-case, renamed to snake_case)
   const userKeys = await readUserConfigRaw(env).catch(() => ({}));

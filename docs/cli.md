@@ -173,6 +173,9 @@ Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a sep
   models.reviewer        model for the reviewer role
   models.auditor         model for the auditor role
   models.default         model for every role without its own
+  skills.default         skill directories (e.g. ~/.claude/skills/tdd) mounted read-only into ~/.claude/skills of every role; `skills = [...]` is the same
+  skills.implementer     skill directories for the implementer role only
+  skills.reviewer        skill directories for the reviewer role only
   watch.interval         minutes to sleep between bunker watch passes (default 10)
   watch.parallel         issues bunker watch works at once (default 1)
   watch.max_cost_day     USD cap per rolling 24h for bunker watch
