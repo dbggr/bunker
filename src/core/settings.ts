@@ -39,14 +39,14 @@ export function resolveWatchSettings(values: Flags, watch: RepoConfig["watch"], 
   return { intervalMin, caps, auditEveryDays, triageEveryHours };
 }
 
-/** --parallel over watch.parallel (config applies to --watch only). */
-export function resolveParallel(values: Flags, watch: RepoConfig["watch"]): number {
+/** --parallel over watch.parallel (config applies to --watch only). Above 1 needs --merge, --watch or manual-merge mode (the shepherd rebases PRs that stack up). */
+export function resolveParallel(values: Flags, watch: RepoConfig["watch"], manual = false): number {
   let parallel = values.watch ? watch.parallel ?? 1 : 1;
   if (values.parallel !== undefined) {
     parallel = Number(values.parallel);
     if (!Number.isInteger(parallel) || parallel < 1) throw new FlagError("--parallel must be a positive integer");
     if (!values.queue) throw new FlagError("--parallel only applies to --queue and --watch");
-    if (parallel > 1 && !values.merge) throw new FlagError("--parallel above 1 needs --merge (--watch always merges)");
+    if (parallel > 1 && !values.merge && !values.watch && !manual) throw new FlagError("--parallel above 1 needs --merge (--watch always merges) or merge = \"manual\"");
   }
   return parallel;
 }

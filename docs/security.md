@@ -15,11 +15,16 @@ An agent runs in a container with the issue worktree and the Claude token. It do
 
 `BUNKER_GH_TOKEN` is a fine-grained token for one repository: Contents RW, Pull requests RW, Issues RW, Metadata R.
 
-- Checks, Actions and Commit statuses are absent because `--merge` leaves reading CI to GitHub auto-merge.
+- Checks and Commit statuses are absent because `--merge` leaves reading CI to GitHub auto-merge (the shepherd reads the required checks of a PR through `gh pr checks`, which needs no extra permission on a repo where your token already reads the PR).
+- Actions: Read is optional. The shepherd uses it only to read the log of a failed CI job (`gh run view`, failed jobs only). Without it, a red check is handed to a human (`bunker:failed` plus a notification) instead of a fix agent. Never grant Actions: Write.
 - Workflows is absent so bunker can't change CI definitions.
 - Administration is absent so it can't alter branch protection or repo settings.
 
 Use a short expiry. Even a fully compromised run can then only touch that repo's code, PRs and issues.
+
+## The PR shepherd
+
+The shepherd (`--watch`, or `bunker shepherd` once) owns open PRs, so it only touches PRs it can tell are bunker's: a branch of this repo (never a fork) named `feature/<n>-…` or `fix/<n>-…` whose body has `Closes #<n>`. It never merges: it does not call `gh pr merge`; GitHub auto-merge with a required status check stays the only gate. A CI log it hands to the fix agent is untrusted text (anyone who can influence the build output can write into it): it is redacted, fenced and labelled as output, not instructions, and the agent runs in the same sandbox as the implementer without GitHub tokens. A fix is pushed only after verify passes (verify is read from the default branch), and never when it would add changes under `.bunker/`, `.github/` or to agent-steering files that the PR did not already have: those need a human. Review comments are sent to the agent only from the repo owner and users with admin/maintain permission. It keeps no state of its own; its fix attempts are hidden markers in PR comments, bounded to 3 per PR before `bunker:failed`.
 
 ## Redaction
 

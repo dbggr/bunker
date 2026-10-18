@@ -3,6 +3,7 @@ import { enforceLabeler } from "../github/labeler.ts";
 import { blockerRefs, isDone, isLiveShape, resumeBlocked, type IssueInfo } from "../github/issues.ts";
 import { markTrust } from "../github/trust.ts";
 import { listQueued } from "../github/queue.ts";
+import { listBunkerPrs } from "../github/prs.ts";
 import { describeQueue, orderQueue, PRIORITY_LABELS, type Queued } from "../core/priority.ts";
 import { $ } from "bun";
 import { emit } from "../core/events.ts";
@@ -159,6 +160,12 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
     const q = await next();
     if (!q) break;
     if (active.has(q.number) || (await skip?.(q.number))) continue;
+    // An issue with an open bunker PR is the shepherd's, not a new run's (a lookup that fails counts as none; the run itself re-checks).
+    const open = (await listBunkerPrs(cwd, env))?.find((p) => p.issue === q.number);
+    if (open) {
+      emit(opts.onEvent, { type: "note", text: `#${q.number} already has an open PR: ${open.url}` });
+      continue;
+    }
     // The list lags label changes by seconds, so confirm the live state before working it.
     const view = await $`gh issue view ${q.number} --json state,labels,body,author,comments`.cwd(cwd).env(env).nothrow().quiet();
     if (view.exitCode !== 0) {

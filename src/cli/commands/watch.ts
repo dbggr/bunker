@@ -12,13 +12,16 @@ import pkg from "../../../package.json" with { type: "json" };
 import { runAudit } from "../../pipeline/audit.ts";
 import { runTriage } from "../../pipeline/triage.ts";
 import type { Agent } from "../../agents/agent.ts";
+import { cleanMerged, createShepherd } from "../../pipeline/shepherd.ts";
 import { runQueue, type QueueEntry, type QueueOptions } from "../../pipeline/queue.ts";
 import { countWaiting } from "../../github/queue.ts";
 import { latestBunkerLabeledAt } from "../../github/labeler.ts";
 import { ensureLabel, FAILED_LABEL, unqueue } from "../../github/labels.ts";
 import { noNotify, type Notify } from "../../core/notify.ts";
 
-export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult" | "onRefused"> {
+export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult" | "onRefused" | "handoff"> {
+  /** Run the shepherd stage: a run ends when its PR is open and auto-merge armed, and every open bunker PR is kept green until it merges. Defaults to true. */
+  shepherd?: boolean;
   /** Remove leftover worktrees and branches (as `bunker clean --yes`) once the lock is held. */
   cleanOnStart?: boolean;
   /** With cleanOnStart: also prune run logs older than this many days. */
@@ -105,7 +108,7 @@ function acquireLock(file: string): () => void {
  * Works the `bunker:queued` queue with auto-merge, pass after pass, until aborted or `forMs` is up.
  * Any outcome other than `merged` relabels the issue `bunker:failed` so it is never retried by itself.
  */
-export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, triageEveryHours, auditor, maxIssues, cleanOnStart, logsDays, log = console.log, notify = noNotify, mention, ...opts }: WatchOptions): Promise<WatchSummary> {
+export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, triageEveryHours, auditor, maxIssues, cleanOnStart, logsDays, log = console.log, notify = noNotify, mention, shepherd: shepherdOn = true, manual, ...opts }: WatchOptions): Promise<WatchSummary> {
   const cwd = opts.cwd ?? process.cwd();
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
@@ -233,6 +236,32 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     await $`gh issue comment ${e.issue} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
   };
 
+  const shepherd = shepherdOn ? createShepherd({ cwd, agent: opts.agent, ...(opts.reviewer ? { reviewer: opts.reviewer } : {}), sandbox: opts.sandbox, ...(opts.setup ? { setup: opts.setup } : {}), ...(opts.verify ? { verify: opts.verify } : {}), ...(opts.verifyOnHost ? { verifyOnHost: true } : {}), ...(opts.verifyNetwork ? { verifyNetwork: true } : {}), ...(opts.idleTimeoutMs ? { idleTimeoutMs: opts.idleTimeoutMs } : {}), ...(opts.completionTimeoutMs ? { completionTimeoutMs: opts.completionTimeoutMs } : {}), ...(opts.stepTimeoutMs ? { stepTimeoutMs: opts.stepTimeoutMs } : {}), ...(opts.onEvent ? { onEvent: opts.onEvent } : {}), notify, ...(mention ? { mention } : {}) }) : undefined;
+  /** One shepherd pass: resumes whatever the open PRs need, whether this watcher or an earlier one opened them. Returns how many merged. */
+  const shepherdPass = async (): Promise<number> => {
+    if (!shepherd || stopped()) return 0;
+    const p = await shepherd.pass();
+    if (p.error) log(`bunker: shepherd: ${p.error}`);
+    if (p.usage?.costUsd) {
+      record(p.usage.costUsd);
+      summary.spentUsd += p.usage.costUsd;
+    }
+    for (const e of p.entries) {
+      if (e.action === "gave-up") {
+        summary.failed++;
+        status.failed({ issue: e.issue, status: "gave-up", reason: e.detail ?? "gave up", prUrl: e.url });
+      }
+      if (["fixed-ci", "updated-branch", "resolved-conflict", "addressed-review", "gave-up", "failed"].includes(e.action)) log(`bunker: shepherd: PR #${e.pr} ${e.action}${e.detail ? ` (${e.detail.split("\n")[0]})` : ""}`);
+    }
+    for (const m of p.merged) {
+      summary.merged++;
+      status.merged({ issue: m.issue, prUrl: m.url });
+      await cleanMerged(cwd, env, m.branch);
+    }
+    if (p.paused) log(`bunker: shepherd: paused on the Claude usage limit${p.paused.resetAt ? ` until ${new Date(p.paused.resetAt).toISOString()}` : ""}`);
+    return p.merged.length;
+  };
+
   const summary: WatchSummary = { passes: 0, merged: 0, failed: 0, spentUsd: 0 };
   let idlePasses = 0;
   try {
@@ -254,11 +283,12 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       if (auditDue() && !stopped()) await audit();
       if (triageDue() && !stopped()) await triage();
       let merged = 0;
+      merged += await shepherdPass();
       let pausedUntil: number | undefined;
       let paused = 0;
       const failedBefore = summary.failed;
       await runQueue({
-        ...opts, cwd, mention, merge: true, limit: Infinity, keepGoing: true, relist: true,
+        ...opts, cwd, mention, merge: !manual, manual, handoff: shepherdOn && !manual, limit: Infinity, keepGoing: true, relist: true,
         skip: skipHandled,
         onRefused: giveUp,
         shouldStop: () => stopped() || capped().length > 0,
@@ -276,6 +306,12 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
             status.merged({ issue: e.issue, ...(e.prUrl ? { prUrl: e.prUrl } : {}) });
           } else if (e.status === "already-in-progress") {
             giveUp(e.issue);
+          } else if (e.status === "awaiting-merge") {
+            // Auto-merge is armed; the shepherd owns the PR from here.
+            giveUp(e.issue);
+          } else if (e.status === "awaiting-review") {
+            giveUp(e.issue);
+            notify(`bunker: #${e.issue} awaiting your review`, e.prUrl ?? e.error ?? "");
           } else if (e.status === "needs-review") {
             // Not a failure: the PR waits for a human, and the issue must not be picked up again.
             giveUp(e.issue);

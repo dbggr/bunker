@@ -31,6 +31,7 @@ Set `BUNKER_GH_TOKEN` in the same `.env`. bunker's own `gh` and `git` calls use 
 - Pull requests: Read and write
 - Issues: Read and write
 - Metadata: Read (added automatically)
+- Actions: Read (optional): lets the PR shepherd read the log of a failed CI job and hand it to a fix agent. Without it the shepherd cannot see why a check is red, so it labels the PR `bunker:failed` and notifies you instead
 
 Nothing else. See [security.md](security.md) for why.
 

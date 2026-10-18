@@ -53,6 +53,12 @@ describe("--parallel over watch.parallel", () => {
     expect(resolveParallel({ watch: true, parallel: "2", queue: true, merge: true }, cfg)).toBe(2);
   });
 
+  test("above 1 needs --merge, --watch or manual-merge mode", () => {
+    expect(() => resolveParallel({ queue: true, parallel: "2" }, cfg)).toThrow("--parallel");
+    expect(resolveParallel({ queue: true, parallel: "2" }, cfg, true)).toBe(2);
+    expect(resolveParallel({ watch: true, queue: true, parallel: "2" }, cfg, true)).toBe(2);
+  });
+
   test("an invalid flag is rejected", () => {
     expect(() => resolveParallel({ watch: true, parallel: "0", queue: true, merge: true }, cfg)).toThrow("--parallel");
   });
