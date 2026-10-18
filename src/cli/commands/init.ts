@@ -158,7 +158,7 @@ export async function runInit(opts: { cwd: string; env?: Env; yes: boolean; io: 
       io.say(`wrote .bunker/${rel} (commit it)`);
     };
     io.say("\n== Repo files ==");
-    if (!tc) io.say("Could not detect the toolchain: write .bunker/setup and .bunker/verify yourself.");
+    if (!tc) io.say("Could not detect the toolchain: set setup and verify in .bunker/config.toml yourself.");
     else {
       const toml = [failing("setup") && `# runs in each worktree before the agent\nsetup = ${JSON.stringify(tc.setup)}`, failing("verify") && `# must pass before anything is pushed\nverify = ${JSON.stringify(tc.verify)}`].filter(Boolean).join("\n\n");
       if (toml && existsSync(join(root, ".bunker", "config.toml"))) io.say(`.bunker/config.toml exists and lacks ${[failing("setup") && "setup", failing("verify") && "verify"].filter(Boolean).join(" and ")}; add it yourself (e.g. ${toml.replace(/^#.*\n/gm, "").replaceAll("\n\n", "; ")})`);

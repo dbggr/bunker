@@ -66,7 +66,7 @@ esac`,
   await $`git init -q -b main ${repo}`;
   await $`git -C ${repo} remote add origin https://github.com/o/r.git`;
   await Bun.write(join(repo, ".github/workflows/ci.yml"), "on: push\n");
-  await Bun.write(join(repo, ".bunker/verify"), "bun test\n");
+  await Bun.write(join(repo, ".bunker/config.toml"), 'verify = "bun test"\n');
 
   const env = {
     PATH: `${bin}:${process.env.PATH}`,

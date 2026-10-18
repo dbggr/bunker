@@ -24,7 +24,7 @@ function scripted(o: { no?: RegExp[]; asks?: string[]; secrets?: string[] } = {}
 
 async function bunRepo(opts: Parameters<typeof fakeWorld>[0] = {}) {
   const w = await fakeWorld({ files: { "labels.json": JSON.stringify([{ name: "bunker:queued" }]) }, ...opts });
-  await rm(join(w.repo, ".bunker/verify"));
+  await rm(join(w.repo, ".bunker/config.toml"));
   await Bun.write(join(w.repo, "bun.lock"), "");
   return w;
 }
@@ -75,14 +75,6 @@ describe("init --yes", () => {
     expect(log).not.toMatch(/gh repo edit/);
     expect(s.text()).toMatch(/auto-merge/i);
     expect(s.text()).toMatch(/IaC/);
-  });
-
-  test("never overwrites an existing .bunker/verify", async () => {
-    const w = await bunRepo();
-    await Bun.write(join(w.repo, ".bunker/verify"), "make check\n");
-    await runInit({ cwd: w.repo, env: w.env, yes: true, io: scripted().io });
-    expect(await Bun.file(join(w.repo, ".bunker/verify")).text()).toBe("make check\n");
-    expect(Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text())).toEqual({ setup: "bun install --frozen-lockfile" });
   });
 
   test("ignores .bunker/.env and .bunker/runs/ without touching tracked files", async () => {

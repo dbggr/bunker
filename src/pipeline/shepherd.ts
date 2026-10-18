@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { emit, type OnEvent } from "../core/events.ts";
 import { codeSpan, neutralise, redact } from "../core/redact.ts";
 import { tailLines } from "../core/output.ts";
-import { parseConfig } from "../core/config.ts";
+import { parseConfig, REMOVED_FILES, removedFileMessage } from "../core/config.ts";
 import { noNotify, type Notify } from "../core/notify.ts";
 import { extractOutput, verdictOutput } from "../core/structured.ts";
 import { interpret, stdinOf, sumUsage, type Agent, type Usage } from "../agents/agent.ts";
@@ -56,7 +56,7 @@ export interface ShepherdOptions extends Timeouts {
   /** Re-reviews a conflict resolution that changed the diff. Defaults to `agent`. */
   reviewer?: Agent;
   sandbox: Sandbox;
-  /** Shell command run in the PR's worktree before the agent. Defaults to the repo's `.bunker/setup`. */
+  /** Shell command run in the PR's worktree before the agent. Defaults to `setup` in .bunker/config.toml. */
   setup?: string;
   /** Must pass before a fix is pushed. Defaults to the verify command of origin's default branch. */
   verify?: string;
@@ -228,9 +228,10 @@ export function createShepherd(o: ShepherdOptions) {
       const f = await $`git -C ${repo} show ${`${baseSha}:${path}`}`.nothrow().quiet();
       return f.exitCode === 0 ? f.stdout.toString() : undefined;
     };
+    for (const name of REMOVED_FILES) if ((await show(`.bunker/${name}`)) !== undefined) throw new Error(removedFileMessage(name));
     const toml = await show(".bunker/config.toml");
     const fromToml = toml === undefined ? undefined : parseConfig(toml).config.verify?.trim();
-    return fromToml || (await show(".bunker/verify"))?.trim() || undefined;
+    return fromToml || undefined;
   };
 
   /**

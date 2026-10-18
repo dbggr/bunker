@@ -40,8 +40,8 @@ interface KeySpec {
 
 /** Every key of `.bunker/config.toml`, in the order `--help` and `bunker doctor` list them. */
 export const CONFIG_KEYS: KeySpec[] = [
-  { key: "setup", kind: "string", doc: "shell command run in each worktree before the agent (legacy: .bunker/setup)" },
-  { key: "verify", kind: "string", doc: "command that must pass before anything is pushed (legacy: .bunker/verify)" },
+  { key: "setup", kind: "string", doc: "shell command run in each worktree before the agent" },
+  { key: "verify", kind: "string", doc: "command that must pass before anything is pushed" },
   { key: "verify_network", kind: "boolean", doc: "let sandboxed verify use the network and Claude credentials (off: verify runs agent-written code)", default: false },
   { key: "verify_retries", kind: "count", doc: "fix rounds the implementer gets when verify fails, before the run fails as verify-failed (0: none)", default: 1 },
   { key: "check", kind: "string", doc: "command (e.g. a typecheck) run in the isolated sandbox before each review; its output goes into the reviewer prompt" },
@@ -168,8 +168,6 @@ export function parseConfig(text: string, name = ".bunker/config.toml"): { confi
 }
 
 export interface Legacy {
-  setup?: string;
-  verify?: string;
   copy?: string[];
 }
 
@@ -177,40 +175,40 @@ export interface LoadedConfig {
   config: RepoConfig;
   legacy: Legacy;
   warnings: string[];
-  /** One-line deprecation note when config.toml and legacy `.bunker/*` files both exist. */
-  notes: string[];
   /** Whether `.bunker/config.toml` exists. */
   present: boolean;
+  /** Removed `.bunker/setup` / `.bunker/verify` files found (loadRepoConfig throws on them unless `lenient`). */
+  removedFiles: ("setup" | "verify")[];
 }
 
-const LEGACY_FILES = ["setup", "verify", "copy"] as const;
+/** Files that were once read and are now an error. */
+export const REMOVED_FILES = ["setup", "verify"] as const;
 
-/** Reads `<dir>/.bunker/config.toml` and the legacy `setup`, `verify`, `copy` files. Throws ConfigError if the toml is invalid. */
-export async function loadRepoConfig(dir: string): Promise<LoadedConfig> {
+/** The error for a leftover `.bunker/<name>` file. */
+export const removedFileMessage = (name: string): string => `.bunker/${name} is no longer read: move it to \`${name} = "…"\` in .bunker/config.toml and delete the file`;
+
+/**
+ * Reads `<dir>/.bunker/config.toml` and the legacy `copy` file. Throws ConfigError if the toml is invalid or a removed
+ * `.bunker/setup` / `.bunker/verify` file exists (unless `lenient`, which lists them in `removedFiles`).
+ */
+export async function loadRepoConfig(dir: string, o: { lenient?: boolean } = {}): Promise<LoadedConfig> {
   const file = Bun.file(join(dir, ".bunker", "config.toml"));
   const present = await file.exists();
   const { config, warnings } = present ? parseConfig(await file.text()) : { config: parseConfig("").config, warnings: [] };
+  const removedFiles: LoadedConfig["removedFiles"] = [];
+  for (const name of REMOVED_FILES) if (await Bun.file(join(dir, ".bunker", name)).exists()) removedFiles.push(name);
+  if (removedFiles.length && !o.lenient) throw new ConfigError(removedFiles.map(removedFileMessage).join("; "));
   const legacy: Legacy = {};
-  const found: string[] = [];
-  for (const name of LEGACY_FILES) {
-    const f = Bun.file(join(dir, ".bunker", name));
-    if (!(await f.exists())) continue;
-    const text = await f.text();
-    if (name === "copy") legacy.copy = text.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
-    else if (name === "verify") {
-      if (text.trim()) legacy.verify = text.trim();
-    } else legacy.setup = "sh .bunker/setup";
-    found.push(`.bunker/${name}`);
-  }
-  const notes = present && found.length ? [`bunker: ${found.join(", ")} ${found.length > 1 ? "are" : "is"} deprecated; .bunker/config.toml takes precedence where it sets the same key`] : [];
-  return { config, legacy, warnings, notes, present };
+  const copy = Bun.file(join(dir, ".bunker", "copy"));
+  if (await copy.exists()) legacy.copy = (await copy.text()).split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  return { config, legacy, warnings, present, removedFiles };
 }
 
-/** Like loadRepoConfig, but prints warnings/notes; an invalid file prints its error and exits 2. */
+/** Like loadRepoConfig, but prints warnings; an invalid file prints its error and exits 2. */
 export async function loadRepoConfigOrExit(dir: string): Promise<LoadedConfig> {
   try {
     const r = await loadRepoConfig(dir);
-    for (const m of [...r.warnings.map((w) => `bunker: ${w}`), ...r.notes]) console.warn(m);
+    for (const w of r.warnings) console.warn(`bunker: ${w}`);
     return r;
   } catch (e) {
     if (!(e instanceof ConfigError)) throw e;
@@ -231,7 +229,7 @@ const get = (c: RepoConfig, key: string): unknown => {
   return b === undefined ? v : (v as Record<string, unknown>)[b];
 };
 
-/** The value and source of every key, ignoring CLI flags: env > config.toml > legacy files > default. */
+/** The value and source of every key, ignoring CLI flags: env > config.toml > .bunker/copy > default. */
 export function effectiveSettings(o: { config: RepoConfig; legacy: Legacy; env: Env }): Setting[] {
   return CONFIG_KEYS.map((spec) => {
     const { key } = spec;
@@ -250,10 +248,7 @@ export function effectiveSettings(o: { config: RepoConfig; legacy: Legacy; env: 
     }
     const c = get(o.config, key) as Setting["value"];
     if (c !== undefined) return { key, value: c, source: "config.toml" };
-    if (key === "setup" || key === "verify" || key === "copy") {
-      const l = o.legacy[key];
-      if (l !== undefined) return { key, value: l, source: `.bunker/${key}` };
-    }
+    if (key === "copy" && o.legacy.copy !== undefined) return { key, value: o.legacy.copy, source: ".bunker/copy" };
     return { key, value: spec.default, source: "default" };
   });
 }

@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { deprecatedUserKeys, readUserConfigRaw, userConfigPath } from "../../core/user-config.ts";
+import { removedUserKeys, readUserConfigRaw, userConfigPath } from "../../core/user-config.ts";
 import { formatSpend, loadSpendCaps } from "../../core/spend.ts";
 import { AUTH_VARS, loadBunkerEnv } from "../../core/env.ts";
 import { DEFAULT_MODEL_LABEL, resolveModels } from "../../agents/models.ts";
@@ -164,7 +164,7 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
   const file = (name: string) => existsSync(join(root, ".bunker", name));
   let loaded: Awaited<ReturnType<typeof loadRepoConfig>> | undefined;
   try {
-    loaded = await loadRepoConfig(root);
+    loaded = await loadRepoConfig(root, { lenient: true });
   } catch (e) {
     if (!(e instanceof ConfigError)) throw e;
     add({ id: "config", group: "config", label: ".bunker/config.toml", ok: false, detail: e.message, fix: "fix the key named above (see `bunker --help`, Repo config)" });
@@ -172,10 +172,10 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
   const cfg = loaded?.config;
   const legacy = loaded?.legacy ?? {};
   if (loaded?.present) add({ id: "config", group: "config", label: ".bunker/config.toml", ok: true, detail: loaded.warnings.length ? loaded.warnings.join("; ") : "valid" });
-  for (const n of loaded?.notes ?? []) add({ id: "config-legacy", group: "config", label: "legacy files", ok: false, required: false, detail: n.replace(/^bunker: /, ""), fix: "move those settings into .bunker/config.toml and delete the files" });
+  for (const f of loaded?.removedFiles ?? []) add({ id: "config-removed-file", group: "config", label: `.bunker/${f}`, ok: false, detail: "no longer read", fix: `move it to \`${f} = "…"\` in .bunker/config.toml and delete the file` });
   if (loaded) for (const s of effectiveSettings({ config: loaded.config, legacy: loaded.legacy, env })) add({ id: `setting-${s.key}`, group: "config", label: s.key, ok: true, required: false, detail: `${formatValue(s.value)} (${s.source})` });
-  add({ id: "verify", group: "repo", label: "verify command", ok: !!cfg?.verify || !!legacy.verify, fix: "set verify in .bunker/config.toml with the command that must pass before pushing, e.g. `bun test && bun run typecheck` (`bunker init` proposes one)" });
-  add({ id: "setup", group: "repo", label: "setup command (optional)", ok: !!cfg?.setup || !!legacy.setup, required: false, fix: "runs in each worktree before the agent, e.g. `bun install --frozen-lockfile`" });
+  add({ id: "verify", group: "repo", label: "verify command", ok: !!cfg?.verify, fix: "set verify in .bunker/config.toml with the command that must pass before pushing, e.g. `bun test && bun run typecheck` (`bunker init` proposes one)" });
+  add({ id: "setup", group: "repo", label: "setup command (optional)", ok: !!cfg?.setup, required: false, fix: "runs in each worktree before the agent, e.g. `bun install --frozen-lockfile`" });
   add({ id: "dockerfile", group: "repo", label: ".bunker/Dockerfile (optional)", ok: file("Dockerfile"), required: false, fix: "starts with `FROM bunker-claude`; adds the toolchain the base image lacks" });
   add({ id: "copy", group: "repo", label: "copy list (optional)", ok: !!cfg?.copy || !!legacy.copy, required: false, fix: "list gitignored files tests need (e.g. .env) as copy = [\".env\"] in .bunker/config.toml" });
 
@@ -298,9 +298,9 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
     add({ id: "skills", group: "config", label: "skills", ok: false, detail: e.message, fix: "fix the skills key named above" });
   }
 
-  // deprecated user config keys (kebab-case, renamed to snake_case)
+  // removed user config keys (kebab-case, now snake_case)
   const userKeys = await readUserConfigRaw(env).catch(() => ({}));
-  for (const k of deprecatedUserKeys(userKeys)) add({ id: "config-deprecated", group: "config", label: "deprecated config key", ok: false, required: false, detail: `${k.old} in ${userConfigPath(env)}`, fix: `rename ${k.old} to ${k.new}` });
+  for (const k of removedUserKeys(userKeys)) add({ id: "config-removed-key", group: "config", label: "removed config key", ok: false, required: false, detail: `${k.old} in ${userConfigPath(env)}`, fix: `rename ${k.old} to ${k.new}` });
 
   // spend (notional USD logged by bunker watch)
   const caps = await loadSpendCaps(env).catch(() => ({}));

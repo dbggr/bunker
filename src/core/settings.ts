@@ -19,8 +19,7 @@ export function resolveWatchSettings(values: Flags, watch: RepoConfig["watch"], 
     intervalMin = n;
   }
   const caps: { day?: number; month?: number } = { ...(watch.max_cost_day === undefined ? {} : { day: watch.max_cost_day }), ...(watch.max_cost_month === undefined ? {} : { month: watch.max_cost_month }), ...fileCaps };
-  const day = values["max-cost-day"] ?? values["max-cost"];
-  for (const [k, raw, flag] of [["day", day, values["max-cost-day"] === undefined ? "--max-cost" : "--max-cost-day"], ["month", values["max-cost-month"], "--max-cost-month"]] as const) {
+  for (const [k, raw, flag] of [["day", values["max-cost-day"], "--max-cost-day"], ["month", values["max-cost-month"], "--max-cost-month"]] as const) {
     if (raw === undefined) continue;
     const n = positive(raw);
     if (n === undefined) throw new FlagError(`${flag} must be a positive number of US dollars`);

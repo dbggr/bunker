@@ -62,8 +62,8 @@ issue and queue:
                              Merges stay serial, in queue order: each PR's branch is first updated to the latest default
                              branch and re-verified; a conflict or failure then gets one fresh attempt from the new main.
                              Trade-off: more concurrent spend, and rework when issues touch the same files; 2 is a good choice
-  --setup "<cmd>"            run in the worktree before the agent (default: setup in config.toml, else .bunker/setup)
-  --verify "<cmd>"           run after approval; a failure stops before pushing (default: verify in config.toml, else .bunker/verify)
+  --setup "<cmd>"            run in the worktree before the agent (default: setup in config.toml)
+  --verify "<cmd>"           run after approval; a failure stops before pushing (default: verify in config.toml)
   --verify-on-host           run --verify on the host instead of in the sandbox
   --merge                    auto-merge the PR once checks pass (requires --verify or verify in config.toml)
   --ci-timeout <min>         (--merge) minutes to wait for the merge (default 30); under watch the shepherd waits, not the run
@@ -89,7 +89,7 @@ watch:
                              blocked comments @-mention notify.github_user (default: the repo owner, if a user account)
   --max-cost-day <usd>       stop starting issues once this much (notional USD, as `claude -p` reports it) was spent in a rolling 24 h,
                              then sleep until the window frees up; kept in .bunker/watch-spend.json (default: no cap).
-                             Also max_cost_day in ~/.config/bunker/config.toml. `--max-cost` is an alias
+                             Also max_cost_day in ~/.config/bunker/config.toml
   --max-cost-month <usd>     same for a rolling 30 days (default: no cap; config.toml: max_cost_month)
   --audit-every <days>       also run audit at most once per this many days, kept in .bunker/watch-state.json (default off; 30 is a good value)
   --triage-every <hours>     also run triage at most once per this many hours, comment and close only (default off)
@@ -158,12 +158,12 @@ clean:
   current run's /tmp/bunker-* worktree and bunker/<id> branch if it has no commits.
 
 Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a separate file):
-  Precedence: CLI flag > env var > config.toml > legacy files (.bunker/setup, verify, copy) > built-in default.
-  Legacy files keep working but are deprecated (a note is printed when both exist). Unknown keys warn; a key of
-  the wrong type exits 2.
+  Precedence: CLI flag > env var > config.toml > .bunker/copy > built-in default.
+  A leftover .bunker/setup or .bunker/verify file is an error: move it into config.toml. Unknown keys warn; a key
+  of the wrong type exits 2.
   Keys (tables: [models], [skills], [watch], [merge], [clean], [notify]):
-  setup                  shell command run in each worktree before the agent (legacy: .bunker/setup)
-  verify                 command that must pass before anything is pushed (legacy: .bunker/verify)
+  setup                  shell command run in each worktree before the agent
+  verify                 command that must pass before anything is pushed
   verify_network         let sandboxed verify use the network and Claude credentials (off: verify runs agent-written code) (default false)
   verify_retries         fix rounds the implementer gets when verify fails, before the run fails as verify-failed (0: none) (default 1)
   check                  command (e.g. a typecheck) run in the isolated sandbox before each review; its output goes into the reviewer prompt

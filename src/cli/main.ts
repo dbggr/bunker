@@ -115,7 +115,7 @@ if (!process.argv.slice(2).includes("--") && positionals.length === 1 && positio
 
 const resolved = guardFlags(() => resolveMode(values, positionals, literal));
 positionals = resolved.positionals;
-const { config: repoCfg, legacy: legacyCfg } = await loadRepoConfigOrExit(process.cwd());
+const { config: repoCfg } = await loadRepoConfigOrExit(process.cwd());
 const prompt = positionals.join(" ");
 const tasks = values.task ?? [];
 // Manual-merge mode: the run ends at an open PR a human merges (`merge = "manual"` in config.toml, or `bunker watch --no-merge`).
@@ -126,10 +126,6 @@ if (manual && values.merge) {
 }
 let watchOpts: { intervalMs: number; maxCostDayUsd?: number; maxCostMonthUsd?: number; forMs?: number; auditEveryDays?: number; triageEveryHours?: number } | undefined;
 if (values.watch) {
-  if (values["max-cost"] !== undefined && values["max-cost-day"] !== undefined) {
-    console.error("bunker: --max-cost is an alias of --max-cost-day; pass only one");
-    process.exit(2);
-  }
   const fileCaps = await loadSpendCaps().catch((e) => (console.error(`bunker: ${e instanceof Error ? e.message : e}`), process.exit(2)));
   const { intervalMin, caps, auditEveryDays, triageEveryHours } = guardFlags(() => resolveWatchSettings(values, repoCfg.watch, fileCaps));
   let forMs: number | undefined;
@@ -140,7 +136,7 @@ if (values.watch) {
       process.exit(2);
     }
   }
-  if (!values.verify && !repoCfg.verify && !legacyCfg.verify && !existsSync(join(process.cwd(), ".bunker", "verify"))) {
+  if (!values.verify && !repoCfg.verify) {
     console.error('bunker: watch needs a verify command: pass --verify "<cmd>" or set verify in .bunker/config.toml');
     process.exit(2);
   }
@@ -241,7 +237,7 @@ if (values.ui || values.audit || values.queue || values.issue !== undefined) {
 }
 const onEvent = publisher ? (e: BunkerEvent) => (progress.onEvent(e), publisher.onEvent(e)) : progress.onEvent;
 clearProgress = progress.clear;
-// Keep the caller's checkout current (lags otherwise: .bunker/verify lookup, docs); bunker watch pulls on every pass itself.
+// Keep the caller's checkout current (lags otherwise: .bunker/verify config lookup, docs); bunker watch pulls on every pass itself.
 const pull = !values["no-pull"] && !watchOpts && (values.audit || values.queue || values.issue !== undefined);
 if (pull) {
   const r = await safePull(process.cwd());

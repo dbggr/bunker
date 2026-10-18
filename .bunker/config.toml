@@ -1,0 +1,2 @@
+setup = "bun install --frozen-lockfile"
+verify = "bun test && bun run typecheck"

@@ -158,11 +158,11 @@ describe("cli", () => {
     expect(err).not.toContain("TypeError");
   }, 30_000);
 
-  test("a local-only .bunker/verify file does not change the CLI's decision", async () => {
+  test("a local-only verify in config.toml does not change the CLI's decision", async () => {
     const repo = await tempDir();
     await $`git init -q ${repo}`;
     await $`mkdir -p ${repo}/.bunker`;
-    await Bun.write(`${repo}/.bunker/verify`, "true\n");
+    await Bun.write(`${repo}/.bunker/config.toml`, 'verify = "true"\n');
 
     const proc = Bun.spawn(["bun", cli, "queue", "--merge"], { cwd: repo, env: bareEnv, stderr: "pipe" });
 

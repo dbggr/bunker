@@ -6,7 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
 import { redact } from "../core/redact.ts";
-import { parseConfig } from "../core/config.ts";
+import { parseConfig, REMOVED_FILES, removedFileMessage } from "../core/config.ts";
 import { copyIntoWorktree, copyPatterns } from "../worktree/copy.ts";
 import { emit, emitStage, hyperlink, type OnEvent } from "../core/events.ts";
 import { tailLines } from "../core/output.ts";
@@ -107,13 +107,14 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
 
   let baseSha = fetched.sha;
   let remoteSha: string | undefined;
-  // Default verify: the base branch's .bunker/verify, read now so the agent can't weaken it in its worktree.
+  // Default verify: `verify` in the base branch's .bunker/config.toml, read now so the agent can't weaken it in its worktree.
   let verifySource = "--verify";
   // Read from the base branch, so the agent can't weaken them in its worktree.
   const show = async (path: string) => {
     const f = await $`git -C ${repo} show ${`${baseSha}:${path}`}`.nothrow().quiet();
     return f.exitCode === 0 ? f.stdout.toString() : undefined;
   };
+  for (const name of REMOVED_FILES) if ((await show(`.bunker/${name}`)) !== undefined) return fail("failed", { error: removedFileMessage(name) });
   let fromToml: string | undefined;
   try {
     const toml = await show(".bunker/config.toml");
@@ -125,18 +126,14 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
     return fail("failed", { error: e instanceof Error ? e.message : String(e) });
   }
   if (!verify) {
-    const legacy = (await show(".bunker/verify"))?.trim();
     if (fromToml?.trim()) {
       verify = fromToml.trim();
       verifySource = ".bunker/config.toml";
-    } else if (legacy) {
-      verify = legacy;
-      verifySource = ".bunker/verify";
     }
   }
   if (merge && manual) return fail("failed", { error: "merge and manual-merge mode exclude each other" });
-  if (merge && !verify) return fail("failed", { error: "merge requires --verify, verify in .bunker/config.toml or a .bunker/verify file" });
-  if (verifyOnHost && !verify) return fail("failed", { error: "--verify-on-host requires --verify, verify in .bunker/config.toml or a .bunker/verify file" });
+  if (merge && !verify) return fail("failed", { error: "merge requires --verify, verify in .bunker/config.toml" });
+  if (verifyOnHost && !verify) return fail("failed", { error: "--verify-on-host requires --verify, verify in .bunker/config.toml" });
   let patterns: string[];
   try {
     patterns = await copyPatterns(repo, copyToWorktree);
