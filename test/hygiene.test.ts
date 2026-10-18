@@ -1,6 +1,9 @@
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { Glob } from "bun";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { loadBunkerEnv } from "../src/core/env.ts";
 import { ISSUE_PROMPT } from "../src/pipeline/issue-prompt.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
@@ -44,4 +47,25 @@ test("no gh pr edit in src: it queries Projects (classic) and fails; labels and 
     if (/gh pr edit|"pr", "edit"/.test(await Bun.file(join(import.meta.dir, "..", "src", file)).text())) offenders.push(file);
   }
   expect(offenders).toEqual([]);
+});
+
+test("tests cannot read the real user config: XDG_CONFIG_HOME is an empty temp dir", async () => {
+  const dir = process.env.XDG_CONFIG_HOME!;
+  expect(dir).toBeTruthy();
+  expect(dir.startsWith(tmpdir())).toBe(true);
+  expect(readdirSync(dir)).toEqual([]);
+});
+
+test("with BUNKER_APP_ID in the real ~/.config/bunker/.env, loading the env in a test does not see it", async () => {
+  const home = mkdtempSync(join(tmpdir(), "bunker-test-realhome-"));
+  try {
+    mkdirSync(join(home, ".config", "bunker"), { recursive: true });
+    writeFileSync(join(home, ".config", "bunker", ".env"), "BUNKER_APP_ID=123\n");
+    // A developer's HOME with the opt-in, seen through the test process's own XDG_CONFIG_HOME.
+    const env: Record<string, string | undefined> = { HOME: home, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+    await loadBunkerEnv(home, env);
+    expect(env.BUNKER_APP_ID).toBeUndefined();
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });

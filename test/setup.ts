@@ -1,5 +1,5 @@
 import { beforeEach, setDefaultTimeout } from "bun:test";
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { output } from "../src/core/output.ts";
@@ -65,3 +65,10 @@ if (process.env.BUNKER_TEST_REAL_DOCKER !== "1") {
 // Verify itself runs inside a bunker sandbox, where BUNKER_IN_SANDBOX=1 makes every CLI the tests spawn refuse to start.
 // The guard's own test (test/sandbox-guard.test.ts) sets it explicitly.
 delete process.env.BUNKER_IN_SANDBOX;
+
+// The CLI reads ~/.config/bunker/{.env,config.toml}; a developer's real one (BUNKER_APP_ID, caps, labelers) would leak
+// into tests and fail them locally while CI stays green. Point the config dir at an empty temp dir for every test.
+// test/hygiene.test.ts checks this.
+const configHome = mkdtempSync(join(tmpdir(), "bunker-test-config-"));
+process.env.XDG_CONFIG_HOME = configHome;
+process.on("exit", () => rmSync(configHome, { recursive: true, force: true }));
