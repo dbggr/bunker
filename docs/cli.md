@@ -204,7 +204,8 @@ Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a sep
                          strings), healthcheck (shell command run in the service; verify waits until it exits 0).
                          Each attempt gets fresh containers on its own internal network, so parallel runs share nothing.
                          Needs the docker or podman sandbox. verify runs agent-written code that can talk to the services
-                         (and, with verify_network, the network): keep their credentials throwaway, never real ones.
+                         : keep their credentials throwaway, never real ones.
+                         With services, verify joins their internal network, so verify_network adds the Claude credentials but no internet.
                          Example: [services.database] image = "postgres:18-alpine" healthcheck = "pg_isready -U app"
 
 Legacy .bunker/copy (same as copy in config.toml):
