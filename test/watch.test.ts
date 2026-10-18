@@ -650,7 +650,7 @@ describe("runWatch() shepherd stage", () => {
     const s = await runWatch({ ...base, manual: true, cwd: repo, agent: fakeAgent(), notify: (t: string) => void notes.push(t), signal: ctl.signal, log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); } });
     const log = await Bun.file(join(root, "gh.log")).text();
     expect(log).not.toMatch(/pr merge/);
-    expect(log.match(/api -X POST repos\/\{owner\}\/\{repo\}\/issues\/\d+\/labels -f labels\[\]=bunker:awaiting-review/g)).toHaveLength(2);
+    expect(log.match(/api -X POST repos\/\{owner\}\/\{repo\}\/issues\/\S+\/labels -f labels\[\]=bunker:awaiting-review/g)).toHaveLength(2);
     expect(notes.filter((n) => /awaiting your review/.test(n))).toHaveLength(2);
     expect(s.failed).toBe(0);
     expect(log).not.toMatch(/issue edit .*bunker:failed/);
