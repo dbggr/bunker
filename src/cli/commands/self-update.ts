@@ -2,8 +2,8 @@ import { $ } from "bun";
 import { accessSync, constants, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { buildLabel, bunkerHome } from "./build-info.ts";
-import { pullBlocker, safePull } from "./github/pull.ts";
+import { buildLabel, bunkerHome } from "../../build-info.ts";
+import { pullBlocker, safePull } from "../../github/pull.ts";
 import { alive } from "./watch.ts";
 
 const version = (home: string) => {

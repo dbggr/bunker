@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeCode, noSandbox, type Agent } from "../src/index.ts";
 import { runIssue } from "../src/pipeline/issue.ts";
-import { runWatch } from "../src/watch.ts";
+import { runWatch } from "../src/cli/commands/watch.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

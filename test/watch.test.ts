@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, type Agent, type Sandbox } from "../src/index.ts";
-import { parseDuration, runWatch } from "../src/watch.ts";
+import { parseDuration, runWatch } from "../src/cli/commands/watch.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

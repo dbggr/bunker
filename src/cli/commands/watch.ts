@@ -2,20 +2,20 @@ import { $ } from "bun";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
-import { addSpend, DAY_MS, exceededCaps, formatSpend, type SpendCaps } from "./core/spend.ts";
-import { safePull } from "./github/pull.ts";
+import { addSpend, DAY_MS, exceededCaps, formatSpend, type SpendCaps } from "../../core/spend.ts";
+import { safePull } from "../../github/pull.ts";
 import { runClean } from "./clean.ts";
-import { codeSpan, redact } from "./core/redact.ts";
-import { failureReason } from "./core/reason.ts";
+import { codeSpan, redact } from "../../core/redact.ts";
+import { failureReason } from "../../core/reason.ts";
 import { createStatusRecorder } from "./status.ts";
-import pkg from "../package.json" with { type: "json" };
-import { runAudit } from "./pipeline/audit.ts";
-import { runTriage } from "./pipeline/triage.ts";
-import type { Agent } from "./agents/agent.ts";
-import { runQueue, type QueueEntry, type QueueOptions } from "./pipeline/queue.ts";
-import { countWaiting } from "./github/queue.ts";
-import { latestBunkerLabeledAt } from "./github/labeler.ts";
-import { noNotify, type Notify } from "./core/notify.ts";
+import pkg from "../../../package.json" with { type: "json" };
+import { runAudit } from "../../pipeline/audit.ts";
+import { runTriage } from "../../pipeline/triage.ts";
+import type { Agent } from "../../agents/agent.ts";
+import { runQueue, type QueueEntry, type QueueOptions } from "../../pipeline/queue.ts";
+import { countWaiting } from "../../github/queue.ts";
+import { latestBunkerLabeledAt } from "../../github/labeler.ts";
+import { noNotify, type Notify } from "../../core/notify.ts";
 
 export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult" | "onRefused"> {
   /** Remove leftover worktrees and branches (as `bunker clean --yes`) once the lock is held. */

@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, rm, utimes } from "node:fs/promises";
 import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runClean } from "../src/clean.ts";
+import { runClean } from "../src/cli/commands/clean.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
