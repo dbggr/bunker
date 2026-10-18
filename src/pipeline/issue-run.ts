@@ -1,3 +1,4 @@
+import type { Services } from "../sandboxes/services.ts";
 import { liveGhEnv } from "../github/identity.ts";
 import { issueBranch, type IssueInfo } from "../github/issues.ts";
 import { markTrust } from "../github/trust.ts";
@@ -118,12 +119,16 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   };
   for (const name of REMOVED_FILES) if ((await show(`.bunker/${name}`)) !== undefined) return fail("failed", { error: removedFileMessage(name) });
   let fromToml: string | undefined;
+  let services: Services | undefined;
+  let prepare: string | undefined;
   try {
     const toml = await show(".bunker/config.toml");
     const cfg = toml === undefined ? undefined : parseConfig(toml).config;
     fromToml = cfg?.verify;
     verifyRetries ??= cfg?.verify_retries;
     check ??= cfg?.check?.trim() || undefined;
+    services = cfg?.services;
+    prepare = cfg?.prepare?.trim() || undefined;
   } catch (e) {
     return fail("failed", { error: e instanceof Error ? e.message : String(e) });
   }
@@ -207,7 +212,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
     const error = fix.status === "paused-usage-limit" ? `paused on the Claude usage limit during the verify fix round: ${fix.error ?? ""}` : fix.error;
     return fail(fix.status === "paused-usage-limit" ? "failed" : fix.status, { review: result, ...(error ? { error } : {}) });
   };
-  const verifyStep = (extra?: Partial<IssueResult>) => runVerify(ctx, { verify, verifyOnHost, verifyNetwork, sandbox, setup, result, retries: extra ? 0 : verifyRetries ?? 1, fixRound }, extra);
+  const verifyStep = (extra?: Partial<IssueResult>) => runVerify(ctx, { verify, verifyOnHost, verifyNetwork, services, prepare, sandbox, setup, result, retries: extra ? 0 : verifyRetries ?? 1, fixRound }, extra);
   const failedVerify = await verifyStep();
   if (failedVerify) return failedVerify;
 

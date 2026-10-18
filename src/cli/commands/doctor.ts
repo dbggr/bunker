@@ -6,6 +6,7 @@ import { AUTH_VARS, loadBunkerEnv } from "../../core/env.ts";
 import { DEFAULT_MODEL_LABEL, resolveModels } from "../../agents/models.ts";
 import { ConfigError, effectiveSettings, formatValue, loadRepoConfig } from "../../core/config.ts";
 import { redact } from "../../core/redact.ts";
+import { unpullable } from "../../sandboxes/services.ts";
 import { applyIdentity, identityKind } from "../../github/identity.ts";
 import { AWAITING_REVIEW_LABEL, FAILED_LABEL, IN_PROGRESS_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
 import { SKILL_ROLES, SkillError, resolveSkills, skillPaths } from "../../core/skills.ts";
@@ -177,6 +178,22 @@ export async function runDoctor(opts: { cwd: string; env?: Env; fetch?: typeof g
   if (loaded) for (const s of effectiveSettings({ config: loaded.config, legacy: loaded.legacy, env })) add({ id: `setting-${s.key}`, group: "config", label: s.key, ok: true, required: false, detail: `${formatValue(s.value)} (${s.source})` });
   add({ id: "verify", group: "repo", label: "verify command", ok: !!cfg?.verify, fix: "set verify in .bunker/config.toml with the command that must pass before pushing, e.g. `bun test && bun run typecheck` (`bunker init` proposes one)" });
   add({ id: "setup", group: "repo", label: "setup command (optional)", ok: !!cfg?.setup, required: false, fix: "runs in each worktree before the agent, e.g. `bun install --frozen-lockfile`" });
+  // services started for verify: shown, and their images must be pullable
+  if (cfg && Object.keys(cfg.services).length) {
+    const bad = docker.code === 0 ? await unpullable("docker", cfg.services, env) : [];
+    for (const [name, s] of Object.entries(cfg.services)) {
+      const err = bad.find((b) => b.name === name);
+      add({
+        id: `service-${name}`,
+        group: "config",
+        label: `service ${name}`,
+        ok: docker.code === 0 && !err,
+        detail: `${s.image}${s.healthcheck ? ", healthcheck" : ""}${err ? `: cannot pull (${err.error})` : ""}`,
+        fix: docker.code === 0 ? `check the image name and registry access: docker pull ${s.image}` : "docker must be reachable to pull service images",
+      });
+    }
+    if (!cfg.verify) add({ id: "services-verify", group: "config", label: "services need a verify command", ok: false, required: false, fix: "services only start for verify; set verify in .bunker/config.toml" });
+  }
   add({ id: "dockerfile", group: "repo", label: ".bunker/Dockerfile (optional)", ok: file("Dockerfile"), required: false, fix: "starts with `FROM bunker-claude`; adds the toolchain the base image lacks" });
   add({ id: "copy", group: "repo", label: "copy list (optional)", ok: !!cfg?.copy || !!legacy.copy, required: false, fix: "list gitignored files tests need (e.g. .env) as copy = [\".env\"] in .bunker/config.toml" });
 

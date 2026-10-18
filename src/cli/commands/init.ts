@@ -1,3 +1,4 @@
+import type { Services } from "../../sandboxes/services.ts";
 import { chmod } from "node:fs/promises";
 import { identityKind } from "../../github/identity.ts";
 import { existsSync } from "node:fs";
@@ -256,11 +257,14 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
 
   // 4. toolchain
   step(3);
-  let cfg: { setup?: string; verify?: string; verify_network?: boolean } = {};
+  let cfg: { setup?: string; verify?: string; verify_network?: boolean; services?: Services } = {};
   try {
     cfg = (await loadRepoConfig(root)).config;
   } catch {}
   const cmds: { setup?: string; verify?: string } = { setup: cfg.setup, verify: cfg.verify };
+  if (Object.keys(cfg.services ?? {}).length) {
+    say(`  Services started for verify: ${Object.entries(cfg.services!).map(([n, s]) => `${n} (${s.image})`).join(", ")}. \`bunker doctor\` checks that the images can be pulled.`);
+  }
   let tcMemo: { tc?: Toolchain } | undefined;
   /** The toolchain to base files on; asks when the repo points at several, or is a monorepo. */
   const chooseToolchain = async (): Promise<Toolchain | undefined> => {

@@ -171,11 +171,12 @@ Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a sep
   Precedence: CLI flag > env var > config.toml > .bunker/copy > built-in default.
   A leftover .bunker/setup or .bunker/verify file is an error: move it into config.toml. Unknown keys warn; a key
   of the wrong type exits 2.
-  Keys (tables: [models], [skills], [watch], [merge], [clean], [notify]):
+  Keys (tables: [models], [skills], [watch], [merge], [clean], [notify], [services.<name>]):
   setup                  shell command run in each worktree before the agent
   verify                 command that must pass before anything is pushed
   verify_network         let sandboxed verify use the network and Claude credentials (off: verify runs agent-written code) (default false)
   verify_retries         fix rounds the implementer gets when verify fails, before the run fails as verify-failed (0: none) (default 1)
+  prepare                command (migrations, fixtures) run in the verify sandbox, after the [services.*] are up and before verify
   check                  command (e.g. a typecheck) run in the isolated sandbox before each review; its output goes into the reviewer prompt
   copy                   gitignored paths or globs copied into each worktree (legacy: .bunker/copy)
   context                repo files (read from the default branch) inlined into the implementer and reviewer prompts
@@ -197,6 +198,14 @@ Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a sep
   clean.logs_days        days to keep .bunker/runs logs; bunker watch / bunker queue start-up and `bunker clean` prune older ones (default 30)
   notify.enabled         desktop notifications from bunker watch (notify-send / osascript) (default true)
   notify.github_user     login @-mentioned when an issue becomes bunker:failed / bunker-blocked (default: the repo owner, if a user)
+
+  [services.<name>]      a service (e.g. Postgres) started for each verify attempt and removed afterwards; verify reaches it
+                         at the host name <name> and nothing else on the network. Keys: image (required), env (table of
+                         strings), healthcheck (shell command run in the service; verify waits until it exits 0).
+                         Each attempt gets fresh containers on its own internal network, so parallel runs share nothing.
+                         Needs the docker or podman sandbox. verify runs agent-written code that can talk to the services
+                         (and, with verify_network, the network): keep their credentials throwaway, never real ones.
+                         Example: [services.database] image = "postgres:18-alpine" healthcheck = "pg_isready -U app"
 
 Legacy .bunker/copy (same as copy in config.toml):
   .bunker/copy               gitignored files to copy from your checkout into each worktree before setup (e.g. .env):
