@@ -308,7 +308,8 @@ describe("runWatch()", () => {
     const inner = noSandbox();
     // The agents run fine; the sandboxed verify step blows up.
     const sandbox: Sandbox = { exec: (cmd, ctx) => (cmd.join(" ").includes("(true)") ? Promise.reject(new Error("sandbox exploded")) : inner.exec(cmd, ctx)) };
-    const s = await runWatch({ ...base, sandbox, cwd: repo, agent: fakeAgent({ cost: 15 }), maxCostUsd: 20, forMs: 400, log: () => {} });
+    const ctl = new AbortController();
+    const s = await runWatch({ ...base, sandbox, cwd: repo, agent: fakeAgent({ cost: 15 }), maxCostUsd: 20, forMs: 30_000, signal: ctl.signal, log: (l) => { if (/spend cap/i.test(l)) ctl.abort(); } });
     expect(s.failed).toBe(1);
     expect(s.spentUsd).toBeCloseTo(30);
     const spend = JSON.parse(await Bun.file(join(repo, ".bunker", "watch-spend.json")).text());
@@ -318,8 +319,10 @@ describe("runWatch()", () => {
   test("the spend cap stops work and persists spend", async () => {
     const { repo } = await setup(three);
     const lines: string[] = [];
+    const ctl = new AbortController();
     const s = await runWatch({
-      ...base, cwd: repo, agent: fakeAgent({ cost: 15 }), maxCostUsd: 20, forMs: 400, log: (l) => lines.push(l),
+      ...base, cwd: repo, agent: fakeAgent({ cost: 15 }), maxCostUsd: 20, forMs: 30_000, signal: ctl.signal,
+      log: (l) => { lines.push(l); if (/spend cap/i.test(l)) ctl.abort(); },
     });
     expect(s.merged).toBe(1); // 2 runs × $15 per issue crosses $20 after the first issue
     expect(s.spentUsd).toBeCloseTo(30);
@@ -365,7 +368,8 @@ describe("runWatch()", () => {
     const { repo } = await setup(three);
     await Bun.write(join(repo, ".bunker", "watch-spend.json"), JSON.stringify([{ at: Date.now() - 1000, usd: 500 }]));
     const lines: string[] = [];
-    const s = await runWatch({ ...base, cwd: repo, agent: fakeAgent({ cost: 15 }), forMs: 400, log: (l) => lines.push(l) });
+    const ctl = new AbortController();
+    const s = await runWatch({ ...base, cwd: repo, agent: fakeAgent({ cost: 15 }), forMs: 30_000, signal: ctl.signal, log: (l) => { lines.push(l); if (/pass 1 /.test(l)) ctl.abort(); } });
     expect(s.merged).toBeGreaterThanOrEqual(2);
     expect(lines.some((l) => /cap reached/i.test(l))).toBe(false);
     expect(lines.some((l) => /pass 1 .*\$.* today \(no cap\)/.test(l))).toBe(true);
@@ -725,7 +729,11 @@ describe("runWatch() notifications", () => {
   test("reaching the spend cap notifies", async () => {
     const { repo } = await setup(three);
     const { notes, notify } = collect();
-    await runWatch({ ...base, cwd: repo, agent: fakeAgent({ cost: 15 }), maxCostUsd: 20, forMs: 400, notify, log: () => {} });
+    const ctl = new AbortController();
+    await runWatch({
+      ...base, cwd: repo, agent: fakeAgent({ cost: 15 }), maxCostUsd: 20, forMs: 30_000, signal: ctl.signal, notify,
+      log: (l) => { if (/spend cap/i.test(l)) ctl.abort(); },
+    });
     expect(notes.some((n) => /spend cap/i.test(n.title + n.body))).toBe(true);
   });
 
