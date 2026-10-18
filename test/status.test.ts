@@ -86,6 +86,22 @@ describe("collectStatus()", () => {
     expect(formatStatus(s)).toContain("#9 no-change (fixed): already fixed in #12");
   });
 
+  test("a run that ends without a terminal stage event (merged, no-change, failed) leaves the current runs", async () => {
+    const r = repo();
+    const dir = join(r, ".bunker");
+    writeFileSync(join(dir, "watch.lock"), "4242");
+    const rec = createStatusRecorder(dir, { pid: 4242, version: "x" });
+    for (const n of [1, 2, 3, 4]) {
+      rec.event({ type: "meta", issue: n, logPath: `/l/${n}.log`, at: 1 });
+      rec.event({ type: "stage", name: "waiting for merge", issue: n, at: 2 });
+    }
+    rec.merged({ issue: 1 });
+    rec.noChange({ issue: 2, verdict: "fixed", reason: "r" });
+    rec.failed({ issue: 3, status: "gave-up", reason: "r" });
+    const s = await collectStatus({ repo: r, alive: () => true });
+    expect(s.current.map((c) => c.issue)).toEqual([4]);
+  });
+
   test("JSON shape with a live watcher", async () => {
     const r = repo();
     const dir = join(r, ".bunker");
