@@ -219,3 +219,16 @@ describe("doctor: GitHub identity", () => {
     expect(c.fix).toContain("BUNKER_APP_ID");
   });
 });
+
+describe("doctor services", () => {
+  test("declared services are listed and their images checked", async () => {
+    const w = await fakeWorld({ files: {} });
+    await Bun.write(join(w.repo, ".bunker/config.toml"), 'verify = "bun test"\n[services.database]\nimage = "postgres:18"\nhealthcheck = "pg_isready"\n');
+    const r = await runDoctor({ cwd: w.repo, env: w.env });
+    const c = r.checks.find((c) => c.id === "service-database");
+    expect(c).toMatchObject({ ok: true, label: "service database" });
+    expect(c?.detail).toContain("postgres:18");
+    expect(await w.log()).toContain("docker image inspect postgres:18");
+    expect(formatChecks(r.checks)).toContain("service database: postgres:18");
+  });
+});

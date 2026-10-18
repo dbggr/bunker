@@ -82,3 +82,11 @@ describe("docs", () => {
     expect(readme.split("\n").length).toBeLessThan(65);
   });
 });
+
+describe("services docs (#411)", () => {
+  test("concepts.md documents services, prepare and the trade-off; cli.md lists them", async () => {
+    const [concepts, cli] = await Promise.all([read("docs/concepts.md"), read("docs/cli.md")]);
+    for (const s of ["[services.database]", "prepare", "internal network", "Security trade-off", "throwaway"]) expect(concepts).toContain(s);
+    for (const s of ["[services.<name>]", "healthcheck", "prepare "]) expect(cli).toContain(s);
+  });
+});

@@ -1,12 +1,15 @@
 import { output } from "../core/output.ts";
 import { redact } from "../core/redact.ts";
 import { formatDuration } from "../agents/agent.ts";
+import type { ServiceSet, Services } from "./services.ts";
 import type { RoleSkills, SkillRole } from "../core/skills.ts";
 
 /** Where the agent's command runs. Gets the worktree and the repo's shared .git dir. */
 export interface Sandbox {
   /** Host directory that is the agent's `~/.claude/projects`, where its session files land. Without it nothing is resumed. */
   readonly projectsDir?: string;
+  /** Starts throwaway services for verify (see services.ts); absent when the sandbox cannot run containers. */
+  startServices?(services: Services): Promise<ServiceSet>;
   exec(cmd: string[], ctx: ExecContext): Promise<ExecResult>;
 }
 
@@ -30,6 +33,8 @@ export interface ExecContext {
   limits?: ExecLimits;
   /** Runs agent-written code that needs neither: no network and no Claude credentials (verify). */
   isolate?: boolean;
+  /** Container network of started services: the command joins it instead of having no network at all. */
+  network?: string;
   /** The agent role this command is for; the sandbox gives it that role's skills. */
   role?: SkillRole;
   /** Written to the command's stdin, then closed. */

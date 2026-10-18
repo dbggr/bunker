@@ -48,6 +48,7 @@ describe("parseConfig", () => {
     const { config, warnings } = parseConfig(FULL);
     expect(warnings).toEqual([]);
     expect(config).toEqual({
+      services: {},
       setup: "bun install",
       verify: "bun test",
       copy: [".env", "config/*.json"],
@@ -61,7 +62,7 @@ describe("parseConfig", () => {
   });
 
   test("empty file is an empty config", () => {
-    expect(parseConfig("").config).toEqual({ models: {}, skills: {}, watch: {}, merge: {}, notify: {}, clean: {} });
+    expect(parseConfig("").config).toEqual({ services: {}, models: {}, skills: {}, watch: {}, merge: {}, notify: {}, clean: {} });
   });
 
   test("unknown keys warn, naming the key", () => {
@@ -237,4 +238,23 @@ test("verify_retries (0 allowed) and check are parsed and validated", () => {
   expect(() => parseConfig("check = 3")).toThrow();
   const s = effectiveSettings({ config: parseConfig("").config, legacy: {}, env: {} });
   expect(s.find((x) => x.key === "verify_retries")?.value).toBe(1);
+});
+
+describe("services and prepare", () => {
+  test("[services.<name>] tables and prepare are read", () => {
+    const { config, warnings } = parseConfig(`prepare = "bin/migrate"\n[services.database]\nimage = "postgres:18-alpine"\nhealthcheck = "pg_isready"\n[services.database.env]\nPOSTGRES_PASSWORD = "x"\n[services.cache]\nimage = "redis:7"`);
+    expect(warnings).toEqual([]);
+    expect(config.prepare).toBe("bin/migrate");
+    expect(config.services).toEqual({
+      database: { image: "postgres:18-alpine", healthcheck: "pg_isready", env: { POSTGRES_PASSWORD: "x" } },
+      cache: { image: "redis:7" },
+    });
+  });
+
+  test("bad services are refused", () => {
+    expect(() => parseConfig("[services.db]\nhealthcheck = 'x'")).toThrow("services.db.image");
+    expect(() => parseConfig("[services.db]\nimage = 'x'\nenv = { A = 1 }")).toThrow("services.db.env");
+    expect(() => parseConfig("[services.'a b']\nimage = 'x'")).toThrow("host name");
+    expect(() => parseConfig("services = 'x'")).toThrow("services must be a table");
+  });
 });

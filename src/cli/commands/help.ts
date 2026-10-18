@@ -168,8 +168,17 @@ Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a sep
   Precedence: CLI flag > env var > config.toml > .bunker/copy > built-in default.
   A leftover .bunker/setup or .bunker/verify file is an error: move it into config.toml. Unknown keys warn; a key
   of the wrong type exits 2.
-  Keys (tables: [models], [skills], [watch], [merge], [clean], [notify]):
+  Keys (tables: [models], [skills], [watch], [merge], [clean], [notify], [services.<name>]):
 ${CONFIG_HELP}
+
+  [services.<name>]      a service (e.g. Postgres) started for each verify attempt and removed afterwards; verify reaches it
+                         at the host name <name> and nothing else on the network. Keys: image (required), env (table of
+                         strings), healthcheck (shell command run in the service; verify waits until it exits 0).
+                         Each attempt gets fresh containers on its own internal network, so parallel runs share nothing.
+                         Needs the docker or podman sandbox. verify runs agent-written code that can talk to the services
+                         : keep their credentials throwaway, never real ones.
+                         With services, verify joins their internal network, so verify_network adds the Claude credentials but no internet.
+                         Example: [services.database] image = "postgres:18-alpine" healthcheck = "pg_isready -U app"
 
 Legacy .bunker/copy (same as copy in config.toml):
   .bunker/copy               gitignored files to copy from your checkout into each worktree before setup (e.g. .env):

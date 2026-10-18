@@ -1,3 +1,4 @@
+import type { Services } from "../../sandboxes/services.ts";
 import { chmod } from "node:fs/promises";
 import { identityKind } from "../../github/identity.ts";
 import { existsSync } from "node:fs";
@@ -256,11 +257,19 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
 
   // 4. toolchain
   step(3);
-  let cfg: { setup?: string; verify?: string; verify_network?: boolean } = {};
+  let cfg: { setup?: string; verify?: string; verify_network?: boolean; services?: Services } = {};
   try {
     cfg = (await loadRepoConfig(root)).config;
   } catch {}
   const cmds: { setup?: string; verify?: string } = { setup: cfg.setup, verify: cfg.verify };
+  for (const [name, svc] of Object.entries(cfg.services ?? {})) {
+    // doctor (run above) already tried to pull each image.
+    const bad = first.checks.find((c: Check) => c.id === `service-${name}`);
+    if (bad && !bad.ok) {
+      say(`  ✗ Service ${name} (${svc.image}): the image can't be pulled.`);
+      todo.push({ what: `service image ${svc.image} can't be pulled`, fix: `check the image name and registry access: docker pull ${svc.image}` });
+    } else say(`  ✓ Service ${name} (${svc.image}) started for verify; image available.`);
+  }
   let tcMemo: { tc?: Toolchain } | undefined;
   /** The toolchain to base files on; asks when the repo points at several, or is a monorepo. */
   const chooseToolchain = async (): Promise<Toolchain | undefined> => {

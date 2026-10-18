@@ -3,6 +3,7 @@ import { emit, emitStage } from "../../core/events.ts";
 import { tailLines, testCounts } from "../../core/output.ts";
 import { runSetup } from "../../worktree/admin.ts";
 import { isolatedEnv } from "../../sandboxes/env.ts";
+import type { ServiceSet, Services } from "../../sandboxes/services.ts";
 import { stepLimits, timeoutMessage, type Sandbox } from "../../sandboxes/exec.ts";
 import type { ReviewResult } from "../review.ts";
 import type { IssueResult } from "../issue.ts";
@@ -13,6 +14,10 @@ export interface VerifyInput {
   verify: string | undefined;
   verifyOnHost: boolean | undefined;
   verifyNetwork: boolean | undefined;
+  /** Throwaway services (e.g. Postgres) started for each verify attempt and removed afterwards. */
+  services?: Services;
+  /** Command run against the services before verify (migrations, fixtures). */
+  prepare?: string;
   sandbox: Sandbox;
   setup: string | undefined;
   result: ReviewResult;
@@ -59,6 +64,41 @@ async function verifyOnce(ctx: IssueRunContext, input: VerifyInput, extra: Parti
       return done(fail("failed", { review: result, ...extra, error: `setup failed (exit ${prep.code}):\n${tailLines(prep.stdout).slice(-VERIFY_TAIL)}` }));
     }
   }
+  const services = input.services && Object.keys(input.services).length ? input.services : undefined;
+  if (!services && !input.prepare) return runCommands();
+  if (verifyOnHost) return done(fail("failed", { review: result, ...extra, error: "services and prepare need the sandbox: they can't be combined with --verify-on-host" }));
+  if (services && !sandbox.startServices) return done(fail("failed", { review: result, ...extra, error: "services need the docker or podman sandbox (not --no-sandbox)" }));
+  let set: ServiceSet | undefined;
+  try {
+    if (services) {
+      emit(onEvent, { type: "note", text: `starting services: ${Object.keys(services).join(", ")}` });
+      try {
+        set = await sandbox.startServices!(services);
+      } catch (e) {
+        const error = e instanceof Error ? e.message : String(e);
+        failNote(error, "");
+        return done(fail("failed", { review: result, ...extra, error }));
+      }
+    }
+    if (input.prepare) {
+      const out = await sandbox.exec(["sh", "-c", `(${input.prepare}) 2>&1`], { worktree, gitCommonDir, limits: stepLimits(timeouts), isolate: !verifyNetwork, ...(set ? { network: set.network } : {}) });
+      log(`prepare (exit ${out.code})`, out.stdout);
+      if (out.timedOut) {
+        const error = timeoutMessage("prepare", out.timedOut, timeouts);
+        failNote(error, out.stdout);
+        return done(fail("idle-timeout", { review: result, ...extra, error }));
+      }
+      if (out.code !== 0) {
+        failNote(`prepare failed (exit ${out.code})`, out.stdout);
+        return done(fail("failed", { review: result, ...extra, error: `prepare failed (exit ${out.code}):\n${tailLines(out.stdout).slice(-VERIFY_TAIL)}` }));
+      }
+    }
+    return await runCommands(set?.network);
+  } finally {
+    await set?.stop();
+  }
+
+  async function runCommands(network?: string): Promise<Attempt> {
   let code: number;
   let text: string;
   let timedOut: "idle" | "step" | undefined;
@@ -81,7 +121,7 @@ async function verifyOnce(ctx: IssueRunContext, input: VerifyInput, extra: Parti
   } else {
     // Agent-written code: same sandbox as the agent, no GitHub tokens, and (unless opted in) no network
     // or Claude credentials. stderr folded in so we can report it.
-    const out = await sandbox.exec(["sh", "-c", `(${verify}) 2>&1`], { worktree, gitCommonDir, limits: stepLimits(timeouts), isolate: !verifyNetwork });
+    const out = await sandbox.exec(["sh", "-c", `(${verify}) 2>&1`], { worktree, gitCommonDir, limits: stepLimits(timeouts), isolate: !verifyNetwork, ...(network ? { network } : {}) });
     timedOut = out.timedOut;
     code = out.code;
     text = out.stdout;
@@ -101,4 +141,5 @@ async function verifyOnce(ctx: IssueRunContext, input: VerifyInput, extra: Parti
   const counts = testCounts(text);
   emit(onEvent, { type: "note", text: `verify passed (${[counts, `${((Date.now() - verifyStart) / 1000).toFixed(1)}s`].filter(Boolean).join(", ")})` });
   return { kind: "passed" };
+  }
 }

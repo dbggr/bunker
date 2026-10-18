@@ -34,6 +34,25 @@ Only the template is ever expanded. Issue text and comments are substituted as v
 
 After approval, `verify` from `.bunker/config.toml` (or `--verify "<cmd>"`) runs in the worktree inside the sandbox, after `setup`. A failure first gets a fix round: the implementer gets the output and tries again, up to `verify_retries` times (default 1; 0 turns it off), and verify then runs again. If it still fails the run ends as `verify-failed` before anything is pushed. `--verify-on-host` opts out; see [security.md](security.md).
 
+### Services for verify (databases)
+
+Tests that need Postgres, Redis or the like can declare them in `.bunker/config.toml`:
+
+```toml
+prepare = "bin/console doctrine:migrations:migrate -n && bin/console doctrine:fixtures:load -n"
+
+[services.database]
+image = "postgres:18-alpine"
+healthcheck = "pg_isready -U app"
+[services.database.env]
+POSTGRES_USER = "app"
+POSTGRES_PASSWORD = "app"
+```
+
+For each verify attempt bunker creates an internal network with no route out, starts every service on it under its declared name (`database` here, so `.env.test` can point at host `database`), waits for each `healthcheck` to exit 0, runs `prepare` and then `verify` in the sandbox on that network, and removes the containers and the network afterwards, also when `prepare` or `verify` fails, times out, or a service never gets healthy. Names are unique per attempt, so each run gets fresh, throwaway state and parallel runs share no database. A service that won't start or become healthy fails the run before verify. Services and `prepare` come from the default branch like `verify`, need the docker or podman sandbox, and exclude `--verify-on-host`. `bunker doctor` lists them and checks the images can be pulled; `bunker init` mentions them.
+
+Security trade-off: verify runs code the agent wrote, and now that code can reach the services. It still has no route to the internet or the host (`verify_network` does not change that while services are declared: it only passes the credentials through), but it can read and write anything in the databases and use whatever the images allow. Use throwaway credentials, no real data, and images you trust. A healthcheck such as `pg_isready` can pass against the image's temporary init server, so prefer one that runs a real query. The images themselves are pulled by the Docker daemon, outside the sandbox.
+
 ## PR, auto-merge and the landing check
 
 bunker pushes the branch and opens a PR with `Closes #N`. With `--merge` it first reads the default branch's repository rulesets and refuses (`merge-failed`) unless a required status check is set (or if the lookup fails), because without one GitHub merges at once. Then it asks GitHub for auto-merge (squash), so GitHub merges once the required checks pass. With `--merge` the run itself does not read CI; it polls the PR until it is merged or closed, or `--ci-timeout` minutes pass. After the merge it checks that the files the branch changed are identical on `origin/<default>` and the branch tip (the landing check), then cleans up.

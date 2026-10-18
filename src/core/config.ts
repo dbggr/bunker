@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import type { Services } from "../sandboxes/services.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -14,6 +15,8 @@ export interface RepoConfig {
   verify?: string;
   verify_network?: boolean;
   verify_retries?: number;
+  prepare?: string;
+  services: Services;
   check?: string;
   copy?: string[];
   context?: string[];
@@ -44,6 +47,7 @@ export const CONFIG_KEYS: KeySpec[] = [
   { key: "verify", kind: "string", doc: "command that must pass before anything is pushed" },
   { key: "verify_network", kind: "boolean", doc: "let sandboxed verify use the network and Claude credentials (off: verify runs agent-written code)", default: false },
   { key: "verify_retries", kind: "count", doc: "fix rounds the implementer gets when verify fails, before the run fails as verify-failed (0: none)", default: 1 },
+  { key: "prepare", kind: "string", doc: "command (migrations, fixtures) run in the verify sandbox, after the [services.*] are up and before verify" },
   { key: "check", kind: "string", doc: "command (e.g. a typecheck) run in the isolated sandbox before each review; its output goes into the reviewer prompt" },
   { key: "copy", kind: "strings", doc: "gitignored paths or globs copied into each worktree (legacy: .bunker/copy)", default: [] },
   { key: "context", kind: "strings", doc: "repo files (read from the default branch) inlined into the implementer and reviewer prompts", default: [] },
@@ -115,6 +119,21 @@ export function parseSkills(v: unknown, name: string): SkillsConfig {
   return out;
 }
 
+/** Validates `[services.<name>]` tables (image, env, healthcheck); the name is the host name verify reaches the service by. */
+export function parseServices(v: unknown, name: string): Services {
+  if (!isTable(v)) throw new ConfigError(`${name}: services must be a table of [services.<name>] tables`);
+  const out: Services = {};
+  for (const [host, s] of Object.entries(v)) {
+    if (!/^[a-z0-9][a-z0-9-]*$/i.test(host)) throw new ConfigError(`${name}: services.${host}: the name is a host name (letters, digits, -)`);
+    if (!isTable(s)) throw new ConfigError(`${name}: services.${host} must be a table`);
+    if (typeof s.image !== "string" || !s.image.trim()) throw new ConfigError(`${name}: services.${host}.image must be a string (the image to run)`);
+    if (s.healthcheck !== undefined && typeof s.healthcheck !== "string") throw new ConfigError(`${name}: services.${host}.healthcheck must be a string`);
+    if (s.env !== undefined && (!isTable(s.env) || !Object.values(s.env).every((x) => typeof x === "string"))) throw new ConfigError(`${name}: services.${host}.env must be a table of strings`);
+    out[host] = { image: s.image.trim(), ...(s.env ? { env: s.env as Record<string, string> } : {}), ...(s.healthcheck ? { healthcheck: s.healthcheck } : {}) };
+  }
+  return out;
+}
+
 /** Validates the text of a config.toml. Unknown keys come back as warnings; a wrongly typed key throws a ConfigError. */
 export function parseConfig(text: string, name = ".bunker/config.toml"): { config: RepoConfig; warnings: string[] } {
   let raw: unknown;
@@ -123,11 +142,15 @@ export function parseConfig(text: string, name = ".bunker/config.toml"): { confi
   } catch (e) {
     throw new ConfigError(`${name}: invalid TOML: ${e instanceof Error ? e.message : e}`);
   }
-  const config: RepoConfig = { models: {}, skills: {}, watch: {}, merge: {}, notify: {}, clean: {} };
+  const config: RepoConfig = { services: {}, models: {}, skills: {}, watch: {}, merge: {}, notify: {}, clean: {} };
   const warnings: string[] = [];
   const known = new Set(CONFIG_KEYS.map((k) => k.key));
   const root = raw as Record<string, unknown>;
   for (const [k, v] of Object.entries(root)) {
+    if (k === "services") {
+      config.services = parseServices(v, name);
+      continue;
+    }
     // A repo file must not widen its own `bunker` label gate: allow_labelers is user-level only.
     if (k === "queue" && isTable(v)) {
       for (const sub of Object.keys(v)) {
