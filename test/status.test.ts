@@ -125,6 +125,36 @@ describe("collectStatus()", () => {
     expect(s.failed.map((f) => f.reason)).toEqual(["fix it"]);
   });
 
+  test("an issue drops off the failed list once a later run merged it", async () => {
+    const r = repo();
+    const dir = join(r, ".bunker");
+    const rec = createStatusRecorder(dir, { pid: 1, version: "x" });
+    rec.failed({ issue: 280, status: "verify-failed", reason: "x" });
+    rec.failed({ issue: 281, status: "verify-failed", reason: "y" });
+    rec.merged({ issue: 280 });
+    const s = await collectStatus({ repo: r, alive: dead });
+    expect(s.failed.map((f) => f.issue)).toEqual([281]);
+  });
+
+  test("a failure older than a merge in the status file is not listed", async () => {
+    const r = repo();
+    const dir = join(r, ".bunker");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "watch-status.json"),
+      JSON.stringify({
+        pid: 1,
+        version: "x",
+        startedAt: 1,
+        current: [],
+        merged: [{ issue: 280, at: 20 }],
+        failed: [{ issue: 280, status: "verify-failed", reason: "x", at: 10 }, { issue: 7, status: "failed", reason: "z", at: 10 }],
+      }),
+    );
+    const s = await collectStatus({ repo: r, alive: dead });
+    expect(s.failed.map((f) => f.issue)).toEqual([7]);
+  });
+
   test("a run that finishes leaves the current list", () => {
     const r = repo();
     const dir = join(r, ".bunker");
