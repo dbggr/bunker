@@ -1,7 +1,7 @@
 import { $ } from "bun";
 import { waitForMerge } from "../../github/branches.ts";
 import { neutralise } from "../../core/redact.ts";
-import { AWAITING_REVIEW_LABEL, ensureLabel, REVIEW_LABEL } from "../../github/labels.ts";
+import { addPrLabel, AWAITING_REVIEW_LABEL, ensureLabel, REVIEW_LABEL } from "../../github/labels.ts";
 import { emit, emitStage } from "../../core/events.ts";
 import { tailLines } from "../../core/output.ts";
 import { isSensitivePath } from "../../worktree/steering.ts";
@@ -78,8 +78,8 @@ export function publishIssue(ctx: IssueRunContext, input: PublishInput): Promise
     const opened = { review: result, ...(prUrl ? { prUrl } : {}) };
     if (manual && prUrl) {
       await ensureLabel(AWAITING_REVIEW_LABEL, worktree, env);
-      const labelled = await $`gh pr edit ${prUrl} --add-label ${AWAITING_REVIEW_LABEL}`.cwd(worktree).env(env).nothrow().quiet();
-      return fail("awaiting-review", { ...opened, ...(labelled.exitCode === 0 ? {} : { error: `could not add the ${AWAITING_REVIEW_LABEL} label: ${labelled.stderr.toString().trim()}` }) });
+      const labelled = await addPrLabel(prUrl, AWAITING_REVIEW_LABEL, worktree, env);
+      return fail("awaiting-review", { ...opened, ...(labelled.ok ? {} : { error: `could not add the ${AWAITING_REVIEW_LABEL} label: ${labelled.error}` }) });
     }
     if (!merge || !prUrl) return fail("pr-opened", opened);
 
@@ -90,9 +90,9 @@ export function publishIssue(ctx: IssueRunContext, input: PublishInput): Promise
     const sensitive = diff.exitCode === 0 ? diff.stdout.toString().split("\0").filter(isSensitivePath) : [`(could not list the changed files: ${diff.stderr.toString().trim()})`];
     if (sensitive.length) {
       await ensureLabel(REVIEW_LABEL, worktree, env);
-      const labelled = await $`gh pr edit ${prUrl} --add-label ${REVIEW_LABEL}`.cwd(worktree).env(env).nothrow().quiet();
+      const labelled = await addPrLabel(prUrl, REVIEW_LABEL, worktree, env);
       const shown = sensitive.slice(0, 10).join(", ") + (sensitive.length > 10 ? ", …" : "");
-      return fail("needs-review", { ...opened, error: `the PR changes ${shown}, which a human must review: bunker left auto-merge off${labelled.exitCode === 0 ? "" : " (could not add the bunker:review label: " + labelled.stderr.toString().trim() + ")"}` });
+      return fail("needs-review", { ...opened, error: `the PR changes ${shown}, which a human must review: bunker left auto-merge off${labelled.ok ? "" : " (could not add the bunker:review label: " + labelled.error + ")"}` });
     }
 
     // Without a required status check GitHub merges an already-mergeable PR the moment auto-merge is armed.

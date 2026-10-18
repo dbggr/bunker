@@ -161,7 +161,9 @@ if [ "$1 $2" = "pr view" ]; then
   echo '{"state":"OPEN","mergeCommit":null}'
   exit 0
 fi
-if [ "$1 $2" = "pr edit" ] || [ "$1 $2" = "label create" ]; then echo "$*" >> "${root}/edit.log"; exit 0; fi
+if [ "$1 $2" = "pr edit" ]; then echo "GraphQL: Projects (classic) is being deprecated" >&2; exit 1; fi
+if [ "$1 $2 $3" = "api -X POST" ] && [ -f "${root}/label.fail" ]; then echo "HTTP 403: nope" >&2; exit 1; fi
+if [ "$1 $2" = "label create" ] || [ "$1 $2 $3" = "api -X POST" ]; then echo "$*" >> "${root}/edit.log"; exit 0; fi
 if [ "$1 $2" = "pr close" ] || [ "$1 $2" = "pr reopen" ]; then echo "$1 $2" >> "${root}/reopen.log"; exit 0; fi
 if [ "$1 $2" = "api repos/{owner}/{repo}/issues/7" ]; then
   echo "$*" >> "${root}/assoc.log"
@@ -879,7 +881,17 @@ describe("runIssue() --merge", () => {
     expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
     expect(r.error).toContain(path);
     expect(await Bun.file(mergeLog).exists()).toBe(false);
-    expect(await Bun.file(editLog).text()).toContain("pr edit https://github.com/o/r/pull/99 --add-label bunker:review");
+    expect(await Bun.file(editLog).text()).toContain("api -X POST repos/{owner}/{repo}/issues/99/labels -f labels[]=bunker:review");
+  });
+
+  test("a failed label call still surfaces in the error, via REST (gh pr edit is never used)", async () => {
+    const { repo, editLog } = await setup(issue(), "ff");
+    await Bun.write(join(dirname(editLog), "label.fail"), "");
+    const agent: Agent = { command: (p, m = "write") => (m === "write" ? ["sh", "-c", `mkdir -p .bunker && echo x > .bunker/Dockerfile && echo hi > feature.txt && git add -A && git commit -qm "feat: impl"`] : ["sh", "-c", `echo '${APPROVE}'`]) };
+    const r = await run(repo, { agent });
+    expect(r.status).toBe("needs-review");
+    expect(r.error).toContain("could not add the bunker:review label: HTTP 403: nope");
+    expect(await Bun.file(editLog).text()).not.toContain("pr edit");
   });
 
   test.each([".claude/skills/x/SKILL.md", "CLAUDE.md", "sub/AGENTS.md", "pkg/.claude/settings.json"])("a PR touching %s (steers agents) → needs-review", async (path) => {
@@ -1246,7 +1258,7 @@ describe("runIssue() manual-merge mode", () => {
     const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), manual: true });
     expect(r.status).toBe("awaiting-review");
     expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
-    expect(await Bun.file(editLog).text()).toContain("pr edit https://github.com/o/r/pull/99 --add-label bunker:awaiting-review");
+    expect(await Bun.file(editLog).text()).toContain("api -X POST repos/{owner}/{repo}/issues/99/labels -f labels[]=bunker:awaiting-review");
     expect(await Bun.file(mergeLog).exists()).toBe(false);
   });
 
