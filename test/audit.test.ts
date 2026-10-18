@@ -18,6 +18,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   process.env.PATH = origPath;
+  delete process.env.AUDIT_PWD;
   for (const k of TOKEN_VARS) {
     if (origTokens[k] === undefined) delete process.env[k];
     else process.env[k] = origTokens[k];
@@ -57,6 +58,7 @@ exit 1
   );
   await chmod(join(bin, "gh"), 0o755);
   process.env.PATH = `${bin}:${origPath}`;
+  process.env.AUDIT_PWD = join(root, "pwd"); // fakeAgent writes its cwd here
   return { repo, createLog: join(root, "create.log") };
 }
 
@@ -78,7 +80,6 @@ function fakeAgent(output: string, seen: { prompt?: string; mode?: string; cwd?:
 describe("runAudit() severity", () => {
   test("files only high/medium, highest first, within --max-issues; low is reported as not filed", async () => {
     const { repo, createLog } = await setup();
-    process.env.AUDIT_PWD = join(repo, "..", "pwd");
     const out = `<audit>${JSON.stringify({ issues: [issue("Nit", "low"), issue("Med one", "medium"), issue("Sec hole", "high"), issue("Med two", "medium")] })}</audit>`;
     const r = await runAudit({ cwd: repo, agent: fakeAgent(out), sandbox: noSandbox(), maxIssues: 2 });
     expect(r.filed.map((f) => f.title)).toEqual(["Sec hole", "Med one"]);
@@ -141,7 +142,6 @@ describe("runAudit()", () => {
 
   test("audits origin's default branch via a private ref, not the shared FETCH_HEAD", async () => {
     const { repo } = await setup();
-    process.env.AUDIT_PWD = join(repo, "..", "pwd");
     await runAudit({ cwd: repo, agent: fakeAgent(block("A")), sandbox: noSandbox() });
     expect(existsSync(join(repo, ".git", "FETCH_HEAD"))).toBe(false);
     expect((await $`git -C ${repo} for-each-ref refs/bunker`.text()).trim()).toBe("");
@@ -149,7 +149,6 @@ describe("runAudit()", () => {
 
   test("returns the usage the agent's parse reports", async () => {
     const { repo } = await setup();
-    process.env.AUDIT_PWD = join(repo, "..", "pwd");
     const agent: Agent = {
       ...fakeAgent(block("A")),
       parse: (stdout) => ({ text: stdout, usage: { costUsd: 0.42, durationMs: 1500 } }),
@@ -161,14 +160,12 @@ describe("runAudit()", () => {
 
   test("usage is absent when the agent reports none", async () => {
     const { repo } = await setup();
-    process.env.AUDIT_PWD = join(repo, "..", "pwd");
     const r = await runAudit({ cwd: repo, agent: fakeAgent(block("A")), sandbox: noSandbox() });
     expect(r.usage).toBeUndefined();
   });
 
   test("default cap is 5", async () => {
     const { repo } = await setup();
-    process.env.AUDIT_PWD = join(repo, "..", "pwd");
     const out = blocks(..."ABCDEFG".split(""));
     const r = await runAudit({ cwd: repo, agent: fakeAgent(out), sandbox: noSandbox() });
     expect(r.filed).toHaveLength(5);
@@ -176,7 +173,6 @@ describe("runAudit()", () => {
 
   test("quoted <issue> blocks and earlier <audit> examples are never filed", async () => {
     const { repo, createLog } = await setup();
-    process.env.AUDIT_PWD = join(repo, "..", "pwd");
     const out = `e.g. <issue title="X">y</issue> or ${block("Quoted")}\n${block("Real")}`;
     const r = await runAudit({ cwd: repo, agent: fakeAgent(out), sandbox: noSandbox() });
     expect(r.filed.map((f) => f.title)).toEqual(["Real"]);
@@ -185,7 +181,6 @@ describe("runAudit()", () => {
 
   test("re-asks after invalid output, then files", async () => {
     const { repo } = await setup();
-    process.env.AUDIT_PWD = join(repo, "..", "pwd");
     const prompts: string[] = [];
     const agent: Agent = {
       command(prompt) {
@@ -202,7 +197,6 @@ describe("runAudit()", () => {
 
   test("throws and files nothing when output stays invalid after the retries", async () => {
     const { repo, createLog } = await setup();
-    process.env.AUDIT_PWD = join(repo, "..", "pwd");
     let calls = 0;
     const agent: Agent = {
       command() {
@@ -219,7 +213,6 @@ describe("runAudit()", () => {
 describe("runAudit() events", () => {
   test("publishes the audit stage, then done", async () => {
     const { repo } = await setup();
-    process.env.AUDIT_PWD = join(repo, "..", "pwd");
     const events: BunkerEvent[] = [];
     await runAudit({ cwd: repo, agent: fakeAgent(block("A")), sandbox: noSandbox(), onEvent: (e) => events.push(e) });
     const stages = events.filter((e) => e.type === "stage");
@@ -229,7 +222,6 @@ describe("runAudit() events", () => {
 
   test("publishes failed when the audit throws", async () => {
     const { repo } = await setup();
-    process.env.AUDIT_PWD = join(repo, "..", "pwd");
     const events: BunkerEvent[] = [];
     const bad: Agent = { command: () => ["sh", "-c", "exit 3"] };
     await expect(runAudit({ cwd: repo, agent: bad, sandbox: noSandbox(), onEvent: (e) => events.push(e) })).rejects.toThrow();
