@@ -38,7 +38,7 @@ echo "$*" >> "${root}/gh.log"
 if [ "$1 $2" = "issue list" ]; then
   [ -f "${root}/list-fails" ] && exit 1
   printf '['; sep=''
-  for f in "${root}"/issue-*.json; do [ -f "$f" ] || continue; grep -q CLOSED "$f" || continue; n=$(basename "$f" .json); n=\${n#issue-}; printf '%s{"number":%s}' "$sep" "$n"; sep=,; done
+  for f in "${root}"/issue-*.json; do [ -f "$f" ] || continue; [ -f "${root}/list-ignores-state" ] || grep -q CLOSED "$f" || continue; n=$(basename "$f" .json); n=\${n#issue-}; s=$(grep -q CLOSED "$f" && echo CLOSED || echo OPEN); printf '%s{"number":%s,"state":"%s"}' "$sep" "$n" "$s"; sep=,; done
   echo ']'; exit 0
 fi
 if [ "$1 $2" = "issue view" ] && [ -f "${root}/issue-$3.json" ]; then cat "${root}/issue-$3.json"; exit 0; fi
@@ -326,6 +326,17 @@ describe("bunker clean", () => {
       const s1 = await session(repo, 1);
       await run(repo, { yes: true });
       expect(existsSync(s1)).toBe(true);
+    });
+
+    test("trusts each listed issue's state, not the --state filter", async () => {
+      const { root, repo } = await setup();
+      await issueState(root, 1, "CLOSED");
+      await issueState(root, 2, "OPEN");
+      await Bun.write(join(root, "list-ignores-state"), "");
+      const [s1, s2] = [await session(repo, 1), await session(repo, 2)];
+      await run(repo, { yes: true });
+      expect(existsSync(s1)).toBe(false);
+      expect(existsSync(s2)).toBe(true);
     });
 
     test("keeps the session and log of a paused issue even if it is closed", async () => {

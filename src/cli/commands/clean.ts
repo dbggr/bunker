@@ -118,9 +118,10 @@ export async function runClean(o: CleanOptions): Promise<CleanResult> {
   let closedFull = false;
   const closedIssues = async () => {
     if (!closedSet) {
-      const v = await gh("issue", "list", "--state", "closed", "--json", "number", "--limit", String(CLOSED_LIMIT));
-      const list = Array.isArray(v) ? (v as { number?: number }[]) : [];
-      closedSet = new Set(list.flatMap((i) => (typeof i.number === "number" ? [i.number] : [])));
+      const v = await gh("issue", "list", "--state", "closed", "--json", "number,state", "--limit", String(CLOSED_LIMIT));
+      const list = Array.isArray(v) ? (v as { number?: number; state?: string }[]) : [];
+      // Each entry's own state decides, so an issue that is open is never counted as closed.
+      closedSet = new Set(list.flatMap((i) => (typeof i.number === "number" && typeof i.state === "string" && i.state.toUpperCase() !== "OPEN" ? [i.number] : [])));
       closedFull = list.length >= CLOSED_LIMIT;
     }
     return closedSet;
@@ -129,7 +130,7 @@ export async function runClean(o: CleanOptions): Promise<CleanResult> {
     if ((await closedIssues()).has(Number(n))) return true;
     if (!closedFull) return false;
     // The list was truncated: ask about this one issue.
-    const v =(await gh("issue", "view", n, "--json", "state")) as { state?: string } | undefined;
+    const v = (await gh("issue", "view", n, "--json", "state")) as { state?: string } | undefined;
     return v?.state !== undefined && v.state.toUpperCase() !== "OPEN";
   };
   /** The PR(s) of a branch are all merged or closed (and there is at least one). */
