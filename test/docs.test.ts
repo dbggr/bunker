@@ -1,7 +1,7 @@
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { readdirSync } from "node:fs";
 import { cliDoc } from "../scripts/cli-docs.ts";
-import { HELP } from "../src/help.ts";
+import { HELP } from "../src/cli/commands/help.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

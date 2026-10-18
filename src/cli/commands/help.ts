@@ -1,4 +1,4 @@
-import { CONFIG_HELP } from "./config.ts";
+import { CONFIG_HELP } from "../../core/config.ts";
 
 export const HELP = `bunker - run coding agents in sandboxed git worktrees
 

@@ -1,5 +1,5 @@
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
-import { resolveCiTimeout, resolveParallel, resolveWatchSettings } from "../src/settings.ts";
+import { resolveCiTimeout, resolveParallel, resolveWatchSettings } from "../src/core/settings.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

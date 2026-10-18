@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { desktopNotifier, resolveMention } from "../src/notify.ts";
+import { desktopNotifier, resolveMention } from "../src/core/notify.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

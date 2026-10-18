@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { output } from "../src/output.ts";
+import { output } from "../src/core/output.ts";
 import { $ } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

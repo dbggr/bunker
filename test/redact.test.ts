@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { redact } from "../src/redact.ts";
+import { redact } from "../src/core/redact.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -47,7 +47,7 @@ describe("redact()", () => {
 
 describe("neutralise()", () => {
   test("defuses closing keywords, mentions, and redacts tokens", async () => {
-    const { neutralise, codeSpan } = await import("../src/redact.ts");
+    const { neutralise, codeSpan } = await import("../src/core/redact.ts");
     const out = neutralise("Fixes #12, closes https://github.com/o/r/issues/3, resolved o/r#4 cc @someone ghp_abcdefghijklmnop");
     expect(out).not.toMatch(/fixes\s+#12/i);
     expect(out).not.toMatch(/closes\s+https/i);

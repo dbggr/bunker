@@ -4,8 +4,9 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, type Agent, type Sandbox } from "../src/index.ts";
-import { output } from "../src/output.ts";
-import { runIssue, runQueue } from "../src/issue.ts";
+import { output } from "../src/core/output.ts";
+import { runIssue } from "../src/pipeline/issue.ts";
+import { runQueue } from "../src/pipeline/queue.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

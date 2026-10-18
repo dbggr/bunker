@@ -1,4 +1,4 @@
-import { HELP } from "../src/help.ts";
+import { HELP } from "../src/cli/commands/help.ts";
 
 /** The contents of docs/cli.md: `bunker --help`, verbatim, in a fence. */
 export const cliDoc = () =>

@@ -3,7 +3,7 @@ import { $ } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hasAuth, loadBunkerEnv, loadEnvFile } from "../src/env.ts";
+import { hasAuth, loadBunkerEnv, loadEnvFile } from "../src/core/env.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

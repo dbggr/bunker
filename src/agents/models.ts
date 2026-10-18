@@ -1,4 +1,4 @@
-import type { Agent } from "./index.ts";
+import type { Agent } from "./agent.ts";
 
 type Env = Record<string, string | undefined>;
 

@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, type Agent } from "../src/index.ts";
-import { TRIAGE_MARKER, planActions, runTriage } from "../src/triage.ts";
+import { TRIAGE_MARKER, planActions, runTriage } from "../src/pipeline/triage.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

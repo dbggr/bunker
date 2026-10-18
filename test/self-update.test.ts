@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { latestTag, selfUpdate } from "../src/self-update.ts";
+import { latestTag, selfUpdate } from "../src/cli/commands/self-update.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

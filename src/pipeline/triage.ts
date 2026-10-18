@@ -1,11 +1,14 @@
 import { $ } from "bun";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { IdleTimeout, agentLimits, emitStage, lineHook, runSetup, sumUsage, timeoutMessage, type OnEvent, type Timeouts, type Agent, type Sandbox, type Usage } from "./index.ts";
+import { emitStage, lineHook, type OnEvent } from "../core/events.ts";
+import { runSetup } from "../worktree/admin.ts";
+import { IdleTimeout, agentLimits, timeoutMessage, type Timeouts, type Sandbox } from "../sandboxes/exec.ts";
+import { sumUsage, type Agent, type Usage } from "../agents/agent.ts";
 import { fetchDefaultBranch } from "./audit.ts";
-import { modelLabel } from "./models.ts";
-import { neutralise } from "./redact.ts";
-import { extractOutput, readTriageVerdict, triageOutput, type TriageVerdict } from "./structured.ts";
+import { modelLabel } from "../agents/models.ts";
+import { neutralise } from "../core/redact.ts";
+import { extractOutput, readTriageVerdict, triageOutput, type TriageVerdict } from "../core/structured.ts";
 
 /** `dry`: change nothing. `comment`: comment and close. `label`: also apply `bunker` + `priority:*` + `bug` to valid issues (the maintainer's `--yes`). */
 export type TriageMode = "dry" | "comment" | "label";

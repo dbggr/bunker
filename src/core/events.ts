@@ -1,3 +1,4 @@
+import type { Agent } from "../agents/agent.ts";
 /** One thing the agent did, as reported by its streamed output. */
 export type StreamEvent =
   | { type: "text"; text: string }
@@ -210,4 +211,32 @@ export function findUsageLimit(stdout: string): { resetAt?: number } | undefined
     return at !== undefined ? { resetAt: at } : {};
   }
   return undefined;
+}
+
+/** Where an agent run's events are labelled from, and where raw stdout lines go. */
+export interface EventTarget {
+  onEvent?: OnEvent | undefined;
+  /** Every raw stdout line of a streaming agent (already redacted). */
+  onRaw?: ((line: string) => void) | undefined;
+  task?: number;
+  round?: number;
+  role?: "implementer" | "reviewer" | "auditor";
+}
+
+/** The exec `onLine` hook for `agent`: parsed events to onEvent, raw lines to onRaw. Undefined if nobody listens or the agent doesn't stream. */
+export function lineHook(agent: Agent, t: EventTarget): ((line: string) => void) | undefined {
+  if (!agent.parseLine || (!t.onEvent && !t.onRaw)) return undefined;
+  const label = { ...(t.task !== undefined ? { task: t.task } : {}), ...(t.round !== undefined ? { round: t.round } : {}), ...(t.role ? { role: t.role } : {}) };
+  return (line) => {
+    t.onRaw?.(line);
+    for (const e of agent.parseLine!(line)) {
+      if (e.type === "text") emit(t.onEvent, { type: "text", ...label, text: e.text });
+      else if (e.type === "toolCall") emit(t.onEvent, { type: "toolCall", ...label, name: e.summary });
+      else emit(t.onEvent, { type: "result", ...label, ...(e.usage ? { costUsd: e.usage.costUsd } : {}) });
+    }
+  };
+}
+
+export function emitStage(t: Pick<EventTarget, "onEvent" | "task" | "round" | "role">, name: Stage, text?: string, model?: string) {
+  emit(t.onEvent, { type: "stage", name, ...(model ? { model } : {}), ...(t.task !== undefined ? { task: t.task } : {}), ...(t.round !== undefined ? { round: t.round } : {}), ...(t.role ? { role: t.role } : {}), ...(text ? { text } : {}) });
 }

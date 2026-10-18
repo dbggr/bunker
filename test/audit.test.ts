@@ -5,7 +5,7 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, type Agent, type BunkerEvent } from "../src/index.ts";
-import { runAudit } from "../src/audit.ts";
+import { runAudit } from "../src/pipeline/audit.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { join } from "node:path";
-import { formatChecks, runDoctor } from "../src/doctor.ts";
+import { formatChecks, runDoctor } from "../src/cli/commands/doctor.ts";
 import { cleanup, fakeWorld } from "./fakes.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts

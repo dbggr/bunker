@@ -1,5 +1,5 @@
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
-import { options } from "../src/options.ts";
+import { options } from "../src/core/options.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

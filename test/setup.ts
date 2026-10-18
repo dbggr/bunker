@@ -1,5 +1,5 @@
 import { beforeEach, setDefaultTimeout } from "bun:test";
-import { output } from "../src/output.ts";
+import { output } from "../src/core/output.ts";
 
 // Tests spawn many git/gh processes; Bun's 5s default is exceeded on a loaded host (CI, or a suite run beside others,
 // e.g. a parallel bunker verify). A timed-out test leaves its work running, which then races the next test's temp dirs

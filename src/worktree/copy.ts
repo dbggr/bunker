@@ -2,8 +2,8 @@ import { $, Glob } from "bun";
 import { existsSync } from "node:fs";
 import { cp, mkdir, realpath, readdir, stat, appendFile, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { loadRepoConfig } from "./config.ts";
-import { addSecrets } from "./redact.ts";
+import { loadRepoConfig } from "../core/config.ts";
+import { addSecrets } from "../core/redact.ts";
 
 /** The patterns to copy: `override` if given, else `copy` of `<dir>/.bunker/config.toml`, else the lines of the legacy `.bunker/copy` (`#` comments, blanks skipped). */
 export async function copyPatterns(dir: string, override?: string[]): Promise<string[]> {

@@ -3,7 +3,7 @@ import { $ } from "bun";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadPromptTemplate, renderPrompt } from "../src/prompt.ts";
+import { loadPromptTemplate, renderPrompt } from "../src/pipeline/prompt.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

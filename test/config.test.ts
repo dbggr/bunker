@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { join } from "node:path";
-import { ConfigError, effectiveSettings, loadRepoConfig, parseConfig } from "../src/config.ts";
-import { resolveModels } from "../src/models.ts";
-import { copyPatterns } from "../src/copy.ts";
+import { ConfigError, effectiveSettings, loadRepoConfig, parseConfig } from "../src/core/config.ts";
+import { resolveModels } from "../src/agents/models.ts";
+import { copyPatterns } from "../src/worktree/copy.ts";
 import { cleanup, fakeWorld } from "./fakes.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts

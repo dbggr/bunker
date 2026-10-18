@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { rm, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { detectToolchain, runInit, upsertEnvVar, type Io } from "../src/init.ts";
+import { detectToolchain, runInit, upsertEnvVar, type Io } from "../src/cli/commands/init.ts";
 import { cleanup, fakeWorld } from "./fakes.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts

@@ -1,10 +1,13 @@
 import { $ } from "bun";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { IdleTimeout, agentLimits, emitStage, lineHook, runSetup, sumUsage, timeoutMessage, type OnEvent, type Timeouts, type Agent, type Sandbox, type Usage } from "./index.ts";
-import { modelLabel } from "./models.ts";
-import { neutralise } from "./redact.ts";
-import { SEVERITY_HELP, auditOutput, extractOutput, pickFollowUps, type FollowUp } from "./structured.ts";
+import { emitStage, lineHook, type OnEvent } from "../core/events.ts";
+import { runSetup } from "../worktree/admin.ts";
+import { IdleTimeout, agentLimits, timeoutMessage, type Timeouts, type Sandbox } from "../sandboxes/exec.ts";
+import { sumUsage, type Agent, type Usage } from "../agents/agent.ts";
+import { modelLabel } from "../agents/models.ts";
+import { neutralise } from "../core/redact.ts";
+import { SEVERITY_HELP, auditOutput, extractOutput, pickFollowUps, type FollowUp } from "../core/structured.ts";
 
 export interface AuditOptions extends Timeouts {
   agent: Agent;

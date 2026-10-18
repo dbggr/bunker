@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DAY_MS, MONTH_MS, addSpend, capLiftsAt, exceededCaps, formatSpend, loadSpendCaps, spentWithin } from "../src/spend.ts";
+import { DAY_MS, MONTH_MS, addSpend, capLiftsAt, exceededCaps, formatSpend, loadSpendCaps, spentWithin } from "../src/core/spend.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

@@ -3,8 +3,8 @@ import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { redact } from "./redact.ts";
-import type { BunkerEvent, OnEvent } from "./events.ts";
+import { redact } from "../core/redact.ts";
+import type { BunkerEvent, OnEvent } from "../core/events.ts";
 import page from "./ui.html" with { type: "text" };
 
 export interface Hub {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, statSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connectHub, hubReachable, readToken, repoIdFromUrl, startHub, type Hub } from "../src/ui.ts";
+import { connectHub, hubReachable, readToken, repoIdFromUrl, startHub, type Hub } from "../src/ui/ui.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
