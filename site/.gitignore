@@ -1,0 +1,5 @@
+node_modules
+.vitepress/cache
+.vitepress/dist
+# copied from ../docs at build time (scripts/prepare-docs.ts): edit docs/*.md, not these
+guide/
