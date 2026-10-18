@@ -7,6 +7,7 @@ import { noSandbox, type Agent, type Sandbox } from "../src/index.ts";
 import { output } from "../src/core/output.ts";
 import { runIssue } from "../src/pipeline/issue.ts";
 import { runQueue } from "../src/pipeline/queue.ts";
+import { resumeBlocked } from "../src/github/issues.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -376,6 +377,62 @@ describe("blocked issues", () => {
     expect((await $`git -C ${repo} ls-remote --heads origin`.text()).includes("feature/1")).toBe(false);
     expect((await $`git -C ${repo} branch --list ${"feature/1-*"}`.text()).trim()).toBe("");
     expect(await Bun.file(r.worktree).exists()).toBe(false);
+  });
+
+  test("a blocker naming an open issue reuses it: nothing new is filed", async () => {
+    const { repo, createLog } = await setup(issues);
+    const root = join(repo, "..");
+    await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "Existing work", body: "x", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker:queued" }] }));
+    const report = `<report>${JSON.stringify({ blocked_by: [{ title: "Restated", issue: 50 }] })}</report>`;
+    const r = await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: fakeAgent(APPROVE, report) });
+    expect(r.status).toBe("blocked");
+    expect(r.blockedBy).toEqual({ number: 50, title: "Existing work" });
+    expect(await Bun.file(createLog).exists()).toBe(false);
+    expect(await Bun.file(join(root, "edits.log")).text()).toContain("issue comment 1 --body Blocked by #50: ` Existing work `");
+  });
+
+  test("a blocker whose title matches an open issue is rejected as new and reuses that issue", async () => {
+    const { repo, createLog } = await setup([...issues, [60, "Need the THING", "2026-04-01T00:00:00Z"]]);
+    const r = await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: blockingAgent() });
+    expect(r.status).toBe("blocked");
+    expect(r.blockedBy).toEqual({ number: 60, title: "Need the THING" });
+    expect(await Bun.file(createLog).exists()).toBe(false);
+  });
+
+  test("a blocker naming a missing or closed issue is not trusted: falls back to filing", async () => {
+    const { repo } = await setup(issues);
+    const root = join(repo, "..");
+    await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "Done", state: "CLOSED", labels: [] }));
+    const report = `<report>${JSON.stringify({ blocked_by: [{ title: "Need the thing", body: "b", issue: 50 }] })}</report>`;
+    const r = await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: fakeAgent(APPROVE, report) });
+    expect(r.blockedBy).toEqual({ number: 100, title: "Need the thing" });
+  });
+
+  test("an optional dependency is not a block: the prompt says so, and no blocked_by builds normally", async () => {
+    const { repo } = await setup(issues);
+    const prompts: string[] = [];
+    const agent = fakeAgent();
+    const r = await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: { command(p, m = "write") { prompts.push(p); return agent.command(p, m); } } });
+    expect(r.status).toBe("pr-opened");
+    expect(prompts[0]).toContain("cannot be delivered at all");
+    expect(prompts[0]).toContain("optional or secondary part");
+    expect(prompts[0]).toContain("existing open issue");
+  });
+
+  test("unblocks once the issue it was blocked on (a reused one) closes", async () => {
+    const { repo } = await setup(issues, "ff");
+    const root = join(repo, "..");
+    await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "Existing work", body: "x", author: { login: "owner" }, state: "OPEN", labels: [] }));
+    const report = `<report>${JSON.stringify({ blocked_by: [{ title: "Restated", issue: 50 }] })}</report>`;
+    const r = await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: fakeAgent(APPROVE, report) });
+    expect(r.status).toBe("blocked");
+    // The comment bunker left names #50; it closes, and the watcher's resume pass requeues #1.
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker-blocked" }], comments: [{ authorAssociation: "OWNER", body: "Blocked by #50: ` Existing work `" }] }));
+    await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "Existing work", state: "CLOSED", labels: [] }));
+    await Bun.write(join(root, "blocked-list.json"), JSON.stringify([{ number: 1, title: "First", createdAt: "2026-01-01T00:00:00Z" }]));
+    const resumed = await resumeBlocked(repo, process.env as Record<string, string>);
+    expect(resumed.map((q) => q.number)).toEqual([1]);
+    expect(await Bun.file(join(root, "edits.log")).text()).toContain("issue edit 1 --remove-label bunker-blocked --add-label bunker:queued");
   });
 
   test("the old <blocked-by> tag is no longer a block", async () => {
