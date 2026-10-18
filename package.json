@@ -3,7 +3,25 @@
   "module": "src/index.ts",
   "type": "module",
   "version": "0.2.0",
+  "description": "Label a GitHub issue, get back a reviewed, tested, merged pull request: Claude coding agents in sandboxed git worktrees.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dbggr/tool-bunker.git"
+  },
+  "homepage": "https://github.com/dbggr/tool-bunker#readme",
+  "bugs": "https://github.com/dbggr/tool-bunker/issues",
+  "keywords": [
+    "ai",
+    "agents",
+    "claude",
+    "coding-agent",
+    "github",
+    "sandbox",
+    "docker",
+    "git-worktree",
+    "automation"
+  ],
   "private": true,
   "devDependencies": {
     "@types/bun": "1.4.3"

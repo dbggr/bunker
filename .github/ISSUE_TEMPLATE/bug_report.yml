@@ -1,0 +1,41 @@
+name: Bug report
+description: Something bunker did that it shouldn't have, or didn't do
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Security problem? Please don't file it here; see SECURITY.md."
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The command you ran, and the issue or repo setup if relevant.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: bunker --version
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS, Docker and gh versions
+  - type: textarea
+    id: doctor
+    attributes:
+      label: bunker doctor output
+      description: Check it for anything private before pasting; bunker redacts tokens, but read it anyway.
+      render: text
+  - type: textarea
+    id: status
+    attributes:
+      label: Failure reason (from bunker status) or the end of the run log
+      render: text

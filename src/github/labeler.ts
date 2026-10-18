@@ -9,7 +9,7 @@ export const MAINTAINER_ROLES = new Set(["admin", "maintain"]);
 export type LabelerCheck = { ok: true; adder: string } | { ok: false; adder?: string; reason: string; denied: boolean; comment?: string };
 
 /**
- * Who added the current `bunker:queued` label (or the legacy `bunker`) (latest `labeled` event) and whether they may queue work: a repo `admin` or
+ * Who added the current `bunker:queued` label (latest `labeled` event) and whether they may queue work: a repo `admin` or
  * `maintain`er, or one of `allow`. Any lookup failure is a refusal with `denied: false` (fail closed, nothing to tell the adder).
  */
 export async function checkLabeler(issue: number, opts: { cwd: string; env: Env; allow?: string[] }): Promise<LabelerCheck> {

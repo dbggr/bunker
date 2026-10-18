@@ -1,62 +1,62 @@
 # bunker
 
-bunker turns GitHub issues into reviewed, verified, merged PRs. Each issue is worked by a coding agent in its own git worktree and docker sandbox, then reviewed by a second agent. bunker pushes and merges only after your checks pass.
+**Label a GitHub issue. Get back a reviewed, tested, merged pull request.**
+
+bunker runs a Claude coding agent on each issue in its own git worktree and Docker sandbox, has a second agent review the change, runs your tests, and lets GitHub's own required checks decide what merges. You choose the work; bunker does it, and stops to ask when it should.
+
+> **Status: pre-1.0 (v0.2.0).** bunker works its own repository every day (most of its code was written by bunker), but flags, config keys and labels can still change before 1.0. See [release/v1-readiness.md](release/v1-readiness.md) for what 1.0 means.
+
+## How it works
+
+1. **You label an issue** `bunker:queued`. Only repo admins and maintainers can queue work; bunker checks who added the label.
+2. **An agent writes the change** in a sandbox: a fresh git worktree and a Docker container that never sees your GitHub token or SSH keys.
+3. **A second agent reviews it** and sends it back with required changes, for up to a few rounds.
+4. **Your tests run** in the sandbox with no network and no credentials. If they fail, the agent gets one fix round.
+5. **bunker opens a PR and arms GitHub auto-merge.** It merges only when the branch's required status check passes. Changes to CI, bunker's own config or agent instructions always wait for a person; anything it can't finish is labelled `bunker:failed` with the reason.
+
+## Requirements
+
+Linux or macOS with Docker, git and [Bun](https://bun.sh); the [GitHub CLI](https://cli.github.com) logged in; [Claude Code](https://docs.claude.com/en/docs/claude-code/setup) with a Claude subscription or API key; a fine-grained GitHub token (Contents, Pull requests, Issues read/write; Metadata read; *no* Workflows); and a repo with tests and a CI check required by a GitHub **ruleset**. `bunker init` walks you through all of it.
+
+**Cost:** agent runs are billed to your Claude plan or API account. On this repository the average is about $1.15 of agent time per merged issue (Claude Sonnet), and `bunker watch` takes daily and monthly spend caps (`--max-cost-day`, `--max-cost-month`).
 
 ## Install
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dbggr/tool-bunker/main/install.sh | sh
-# while the repo is private:
-gh api repos/dbggr/tool-bunker/contents/install.sh -H 'Accept: application/vnd.github.raw' | sh
 ```
 
-It checks prerequisites first (git and bun to build; docker, gh logged in, and claude to run) and never installs them; it links to each missing one's install page. Then it says what it will do and asks `[y/N]` (`--yes` skips; `--check` only checks; `--skip-runtime-check`, `--ref`, `--uninstall`). It puts a checkout at the latest `vX.Y.Z` tag in `~/.local/share/bunker` (`BUNKER_HOME`) and the binary at `~/.local/bin/bunker` (`BUNKER_BIN_DIR`), and does not edit shell rc files. Re-run it to upgrade; `--uninstall` never touches `~/.config/bunker`.
+The installer checks prerequisites first and never installs them; for each missing one it links its install page. Then it says what it will do and asks `[y/N]` (`--yes` skips; `--check` only checks; `--skip-runtime-check`, `--ref`, `--uninstall`). It puts a checkout of the latest `vX.Y.Z` release in `~/.local/share/bunker` (`BUNKER_HOME`) and the binary at `~/.local/bin/bunker` (`BUNKER_BIN_DIR`), and doesn't edit your shell rc files. Re-run it to upgrade; `--uninstall` never touches `~/.config/bunker`.
 
 ## Quickstart
 
 ```sh
-claude setup-token                  # put the token in ~/.config/bunker/.env
-cd your-repo                        # add .bunker/config.toml (setup, verify)
-bunker issue 12                   # one issue to a PR
-bunker queue --merge              # everything labelled `bunker:queued`
+cd your-repo
+bunker init          # tokens, .bunker/config.toml (setup, verify), sandbox image, labels
+bunker doctor        # every ✓/✗ with the fix for each ✗
+bunker issue 12      # one issue, start to finish, and watch it work
+bunker watch         # then: work everything labelled bunker:queued, unattended
+bunker status        # what it's doing, what merged, and why anything failed
 ```
 
-## Features
+## What else it does
 
-- Worktree and docker sandbox per issue; your checkout is never touched
-- Implement, review, fix rounds, then verify in the sandbox
-- PR with GitHub auto-merge and a landing check
-- Work queue by label, and unattended `bunker watch` with optional daily and monthly spend caps
-- Opt-in `--parallel <n>`: n issues at once, merges still serial and each branch updated to the latest main and re-verified first (2 is a good choice)
-- A PR shepherd (`bunker watch`, `bunker shepherd`) fixes red CI, updates behind branches and resolves conflicts; `bunker status` shows the watcher, queue and failures
-- Manual-merge mode: PRs stay open for you to merge while bunker keeps them green
-- Context and spec files in the prompts, a verify fix round, and per-role skills
-- Agents file out-of-scope findings as `discovered` issues for human triage
-- Scoped GitHub token and output redaction; agents never see GitHub credentials
-- Live multi-repo view with `bunker ui`
-- Read-only `bunker audit` that files improvement ideas
-- `bunker triage`: a read-only agent verifies `discovered` issues (fixed, as designed, duplicate, valid); queueing stays with you
-- Starts each run with a safe `git pull --ff-only` of your checkout (clean, default branch only; `--no-pull` disables it), and `bunker self-update` rebuilds the binary from its own checkout
+Unattended `bunker watch` with `--parallel` runs and spend caps; a PR shepherd that fixes red CI and resolves conflicts; Manual-merge mode; `bunker status` and a live `bunker ui`; context/spec files and per-role skills; `bunker audit` and `bunker triage` for finding and checking work. See [Concepts](docs/concepts.md).
+
+## Safety
+
+bunker is built to be left running, so the defaults are strict. Only maintainers can queue work, and issues edited after labelling are refused. Comments from non-maintainers never reach the agent. The sandbox gets the repo's git internals read-only. Tests run without network or credentials. Changes to `.bunker/`, `.github/`, `.claude/`, `CLAUDE.md` and `AGENTS.md` always wait for human review. Each of these gates has a test that fails if the gate is removed. The full threat model and its trade-offs are in [docs/security.md](docs/security.md).
+
+## Built with bunker
+
+In its first two days bunker wrote and merged 147 of its own pull requests (23 more were written by hand), with about 700 tests and no reverts on `main` ([the numbers and failures](release/v1-readiness.md)). It was inspired by Matt Pocock's [sandcastle](https://github.com/mattpocock/sandcastle), a toolkit for building agent loops with many agents and sandbox providers. bunker is one opinionated loop, from issue to merged PR, with the queue, review, merge and unattended safety built in.
 
 ## Scope
 
-Before v1.0 bunker will not build:
-
-- other agent providers (Claude only)
-- an interactive mode
-- cloud or reusable sandboxes
-- host hooks or plugins: the only code that runs on the host is a `` !`cmd` `` line in `.bunker/prompts/issue.md` (read from the default branch, run without tokens)
-- npm publishing (the package stays `@dbggr/bunker` and private)
+Before v1.0 bunker won't add other agent providers (Claude only), an interactive mode, cloud or reusable sandboxes, host hooks or plugins (the only host-side code is a `` !`cmd` `` line in `.bunker/prompts/issue.md`, read from the default branch and run without tokens), or npm publishing.
 
 ## Docs
 
-- [Getting started](docs/getting-started.md)
-- [Concepts](docs/concepts.md)
-- [Security](docs/security.md): token handling, changes to `.bunker/`, `.github/`, `.claude/`, `CLAUDE.md` and `AGENTS.md` need human review, `--no-sandbox` gives no isolation
-- [Troubleshooting](docs/troubleshooting.md)
-- [CLI reference](docs/cli.md) (generated from `bunker --help`)
-- [Releasing](docs/release.md)
+[Getting started](docs/getting-started.md) · [Concepts](docs/concepts.md) · [Security](docs/security.md) (the threat model; `--no-sandbox` gives no isolation) · [Troubleshooting](docs/troubleshooting.md) · [CLI reference](docs/cli.md) (generated from `bunker --help`) · [Releasing](docs/release.md)
 
-Develop with `bun test` and `bun run typecheck`.
-
-Licensed under the [MIT License](LICENSE).
+Contributions welcome: [CONTRIBUTING.md](CONTRIBUTING.md) (develop with `bun test` and `bun run typecheck`). Report security problems privately: [SECURITY.md](SECURITY.md). [MIT License](LICENSE).
