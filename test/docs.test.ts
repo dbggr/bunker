@@ -1,6 +1,8 @@
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { readdirSync } from "node:fs";
 import { cliDoc } from "../scripts/cli-docs.ts";
+import { CONFIG_KEYS } from "../src/core/config.ts";
+import { MODES } from "../src/cli/modes.ts";
 import { HELP } from "../src/cli/commands/help.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
@@ -14,6 +16,16 @@ describe("docs", () => {
     const help = Bun.spawnSync(["bun", "src/cli.ts", "--help"], { cwd: root }).stdout.toString();
     expect(help.trimEnd()).toBe(HELP.trimEnd());
     expect(await read("docs/cli.md")).toBe(cliDoc());
+  });
+
+  test("cli.md keeps every flag, config key and example of --help, as sectioned tables", async () => {
+    const md = await read("docs/cli.md");
+    for (const h of ["Setup", "Run work", "PRs", "Monitor", "Find work", "Maintenance", "Common flags", "Config keys", "Labels", "Examples"]) expect(md).toMatch(new RegExp(`^## ${h}$`, "m"));
+    for (const m of MODES) expect(md).toMatch(new RegExp(`^### bunker (${m}|"&lt;prompt&gt;")$`, "m"));
+    for (const flag of new Set(HELP.match(/(?<![\w-])--[a-z][a-z-]*/g) ?? [])) expect(md).toContain(flag);
+    for (const k of CONFIG_KEYS) expect(md).toContain(`| ${k.key} | ${k.doc} |`);
+    for (const l of HELP.slice(HELP.indexOf("\nExamples:")).split("\n").map((l) => l.trim()).filter((l) => l.startsWith("bunker "))) expect(md).toContain(l);
+    expect(md).not.toContain("```text");
   });
 
   test("every doc exists and the README links to all of them", async () => {
