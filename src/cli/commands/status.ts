@@ -60,10 +60,11 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
       if (e.type === "meta" && e.logPath && i >= 0) state.current[i]!.logPath = e.logPath;
       else if (e.type === "meta" && e.logPath) state.current.push({ issue: e.issue, stage: "setup", since: e.at, logPath: e.logPath });
       else if (e.type === "stage" && e.name) {
+        const stage = e.name === "verify" && e.text ? `verify (${e.text})` : e.name;
         if (e.name === "merged" || e.name === "failed" || e.name === "done") {
           if (i >= 0) state.current.splice(i, 1);
-        } else if (i < 0) state.current.push({ issue: e.issue, stage: e.name, since: e.at });
-        else if (state.current[i]!.stage !== e.name) Object.assign(state.current[i]!, { stage: e.name, since: e.at });
+        } else if (i < 0) state.current.push({ issue: e.issue, stage, since: e.at });
+        else if (state.current[i]!.stage !== stage) Object.assign(state.current[i]!, { stage, since: e.at });
         else return;
       } else return;
       save();

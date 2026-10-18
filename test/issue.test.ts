@@ -410,7 +410,7 @@ describe("runIssue()", () => {
     try {
       r = await runIssue({
         cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(),
-        verify: "echo verify-says-hi secret-token-value; exit 3",
+        verifyRetries: 0, verify: "echo verify-says-hi secret-token-value; exit 3",
       });
     } finally {
       delete process.env.BUNKER_GH_TOKEN;
@@ -454,7 +454,7 @@ describe("runIssue()", () => {
     const { repo, origin, prLog } = await setup(issue());
     const r = await runIssue({
       cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(),
-      verify: "echo boom-output; exit 4",
+      verifyRetries: 0, verify: "echo boom-output; exit 4",
     });
     expect(r.status).toBe("verify-failed");
     expect(r.verifyOutput).toContain("boom-output");
@@ -464,12 +464,97 @@ describe("runIssue()", () => {
     expect(await Bun.file(join(r.worktree, "feature.txt")).exists()).toBe(true);
   });
 
+  describe("verify fix rounds", () => {
+    // Implementer: first run writes feature.txt; a run whose prompt carries the verify failure also writes fixed.txt. Each costs $0.10.
+    const fixAgent = (prompts: string[] = [], reviewPrompts: string[] = []): Agent => ({
+      command(prompt, mode = "write") {
+        const out = (t: string) => `echo '${JSON.stringify({ type: "result", result: t, total_cost_usd: 0.1, duration_ms: 10 })}'`;
+        if (mode === "write") {
+          prompts.push(prompt);
+          const fix = prompt.includes("verify failed") ? ` && echo ok > fixed.txt` : "";
+          return ["sh", "-c", `echo hi > feature.txt${fix} && git add . && git commit -qm "feat: impl" && ${out("done")}`];
+        }
+        reviewPrompts.push(prompt);
+        return ["sh", "-c", out(APPROVE)];
+      },
+      parse: (stdout) => {
+        const j = JSON.parse(stdout.trim().split("\n").at(-1)!);
+        return { text: j.result, usage: { costUsd: j.total_cost_usd, durationMs: j.duration_ms } };
+      },
+    });
+
+    test("fail then pass → one extra round, reviewed again, both rounds' spend counted", async () => {
+      const { repo } = await setup(issue());
+      const prompts: string[] = [];
+      const reviewPrompts: string[] = [];
+      const events: BunkerEvent[] = [];
+      const r = await runIssue({
+        cwd: repo, issue: 7, agent: fixAgent(prompts, reviewPrompts), sandbox: noSandbox(),
+        verify: "test -f fixed.txt || { echo 'TYPE-ERROR-LINE'; exit 2; }", onEvent: (e) => events.push(e),
+      });
+      expect(r.status).toBe("pr-opened");
+      expect(prompts).toHaveLength(2);
+      expect(prompts[1]).toContain("verify failed");
+      expect(prompts[1]).toContain("TYPE-ERROR-LINE");
+      expect(reviewPrompts).toHaveLength(2);
+      expect(reviewPrompts[1]).toContain("fixed.txt");
+      expect(reviewPrompts[1]).not.toContain("b/feature.txt"); // only the fix round's diff
+      expect(r.review?.usage?.costUsd).toBeCloseTo(0.4);
+      expect(await Bun.file(join(r.worktree, "fixed.txt")).exists()).toBe(true);
+      const log = await Bun.file(r.logPath!).text();
+      expect(log).toContain("verify attempt 1/2");
+      expect(log).toContain("verify attempt 2/2");
+      const stages = events.filter((e) => e.type === "stage" && e.name === "verify");
+      expect(stages.map((e) => e.text)).toEqual(["attempt 1/2", "attempt 2/2"]);
+    });
+
+    test("fail, fail → verify-failed only after verify_retries are used, spend counts both rounds", async () => {
+      const { repo, origin } = await setup(issue());
+      const prompts: string[] = [];
+      const r = await runIssue({ cwd: repo, issue: 7, agent: fixAgent(prompts), sandbox: noSandbox(), verify: "echo STILL-BROKEN; exit 2" });
+      expect(r.status).toBe("verify-failed");
+      expect(r.verifyOutput).toContain("STILL-BROKEN");
+      expect(prompts).toHaveLength(2);
+      expect(r.review?.usage?.costUsd).toBeCloseTo(0.4);
+      expect(await originBranches(origin)).toEqual(["main"]);
+    });
+
+    test("verifyRetries 0 → no fix round", async () => {
+      const { repo } = await setup(issue());
+      const prompts: string[] = [];
+      const r = await runIssue({ cwd: repo, issue: 7, agent: fixAgent(prompts), sandbox: noSandbox(), verify: "exit 2", verifyRetries: 0 });
+      expect(r.status).toBe("verify-failed");
+      expect(prompts).toHaveLength(1);
+    });
+
+    test("the failure given to the implementer is redacted", async () => {
+      const { repo } = await setup(issue());
+      process.env.BUNKER_GH_TOKEN = "secret-token-value";
+      const prompts: string[] = [];
+      try {
+        await runIssue({ cwd: repo, issue: 7, agent: fixAgent(prompts), sandbox: noSandbox(), verify: "echo secret-token-value; exit 2" });
+      } finally {
+        delete process.env.BUNKER_GH_TOKEN;
+      }
+      expect(prompts[1]).toContain("verify failed");
+      expect(prompts[1]).not.toContain("secret-token-value");
+    });
+
+    test("a configured check command's output reaches the reviewer prompt", async () => {
+      const { repo } = await setup(issue());
+      const reviewPrompts: string[] = [];
+      const r = await runIssue({ cwd: repo, issue: 7, agent: fixAgent([], reviewPrompts), sandbox: noSandbox(), check: "echo TYPECHECK-SAYS-HI" });
+      expect(r.status).toBe("pr-opened");
+      expect(reviewPrompts[0]).toContain("TYPECHECK-SAYS-HI");
+    });
+  });
+
   test("verify runs in the sandbox by default, not on the host", async () => {
     const { repo } = await setup(issue());
     const calls: string[][] = [];
     const inner = noSandbox();
     const sandbox = { exec: (cmd: string[], ctx: { worktree: string; gitCommonDir: string }) => (calls.push(cmd), inner.exec(cmd, ctx)) };
-    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox, verify: "echo VERIFYME; exit 4" });
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox, verifyRetries: 0, verify: "echo VERIFYME; exit 4" });
     expect(r.status).toBe("verify-failed");
     expect(r.verifyOutput).toContain("VERIFYME");
     expect(calls.some((c) => c.join(" ").includes("VERIFYME"))).toBe(true);
@@ -480,7 +565,7 @@ describe("runIssue()", () => {
     const calls: string[][] = [];
     const inner = noSandbox();
     const sandbox = { exec: (cmd: string[], ctx: { worktree: string; gitCommonDir: string }) => (calls.push(cmd), inner.exec(cmd, ctx)) };
-    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox, verify: "echo ONHOST; exit 4", verifyOnHost: true });
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox, verifyRetries: 0, verify: "echo ONHOST; exit 4", verifyOnHost: true });
     expect(r.status).toBe("verify-failed");
     expect(r.verifyOutput).toContain("ONHOST");
     expect(calls.some((c) => c.join(" ").includes("ONHOST"))).toBe(false);
@@ -492,7 +577,7 @@ describe("runIssue()", () => {
     const saved = Object.fromEntries(vars.map((k) => [k, process.env[k]]));
     for (const k of vars) process.env[k] = `secret-${k}`;
     try {
-      const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: `echo "[${vars.map((k) => `$${k}`).join("|")}]"; exit 4`, verifyOnHost: true });
+      const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verifyRetries: 0, verify: `echo "[${vars.map((k) => `$${k}`).join("|")}]"; exit 4`, verifyOnHost: true });
       expect(r.verifyOutput).toContain("[||||]");
     } finally {
       for (const k of vars) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
@@ -504,9 +589,9 @@ describe("runIssue()", () => {
     const inner = noSandbox();
     const sandbox = { exec: (cmd: string[], ctx: { worktree: string; gitCommonDir: string; isolate?: boolean }) => (cmd.join(" ").includes("VERIFYME") && seen.push(!!ctx.isolate), inner.exec(cmd, ctx)) };
     const { repo } = await setup(issue());
-    await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox, verify: "echo VERIFYME; exit 4" });
+    await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox, verifyRetries: 0, verify: "echo VERIFYME; exit 4" });
     const { repo: repo2 } = await setup(issue());
-    await runIssue({ cwd: repo2, issue: 7, agent: fakeAgent(APPROVE), sandbox, verify: "echo VERIFYME; exit 4", verifyNetwork: true });
+    await runIssue({ cwd: repo2, issue: 7, agent: fakeAgent(APPROVE), sandbox, verifyRetries: 0, verify: "echo VERIFYME; exit 4", verifyNetwork: true });
     expect(seen).toEqual([true, false]);
   });
 
@@ -604,7 +689,7 @@ describe("runIssue()", () => {
     await $`mkdir -p ${repo}/.bunker`;
     await Bun.write(join(repo, ".bunker", "verify"), "exit 1\n");
     await $`git -C ${repo} add .bunker/verify && git -C ${repo} commit -qm "chore: verify" && git -C ${repo} push -q origin main`;
-    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() });
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verifyRetries: 0 });
     expect(r.status).toBe("verify-failed");
     expect(await originBranches(origin)).toEqual(["main"]);
   });
@@ -894,7 +979,7 @@ describe("redaction", () => {
     process.env.GH_TOKEN = "super-secret-token-value";
     const r = await runIssue({
       cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(),
-      verify: "echo $GH_TOKEN; echo ghp_abcdefghijklmnopqrstuvwxyz0123; exit 4", verifyOnHost: true,
+      verifyRetries: 0, verify: "echo $GH_TOKEN; echo ghp_abcdefghijklmnopqrstuvwxyz0123; exit 4", verifyOnHost: true,
     });
     expect(r.status).toBe("verify-failed");
     expect(r.verifyOutput).toContain("[REDACTED]");
@@ -910,7 +995,7 @@ describe("quiet output", () => {
     output.write = (s) => sink.push(s);
     let term = "";
     const p = createProgress({ write: (s) => (term += s), tty: false });
-    const r = await runIssue({ cwd: repo, issue: 7, agent, sandbox: noSandbox(), verify, onEvent: (e: BunkerEvent) => p.onEvent(e) });
+    const r = await runIssue({ cwd: repo, issue: 7, agent, sandbox: noSandbox(), verify, verifyRetries: 0, onEvent: (e: BunkerEvent) => p.onEvent(e) });
     return { r, sink: sink.join(""), term };
   };
 

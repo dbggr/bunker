@@ -167,6 +167,8 @@ Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a sep
   setup                  shell command run in each worktree before the agent (legacy: .bunker/setup)
   verify                 command that must pass before anything is pushed (legacy: .bunker/verify)
   verify_network         let sandboxed verify use the network and Claude credentials (off: verify runs agent-written code) (default false)
+  verify_retries         fix rounds the implementer gets when verify fails, before the run fails as verify-failed (0: none) (default 1)
+  check                  command (e.g. a typecheck) run in the isolated sandbox before each review; its output goes into the reviewer prompt
   copy                   gitignored paths or globs copied into each worktree (legacy: .bunker/copy)
   context                repo files (read from the default branch) inlined into the implementer and reviewer prompts
   models.implementer     model for the implementer role

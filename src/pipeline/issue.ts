@@ -25,6 +25,10 @@ export interface IssueOptions extends Timeouts {
   copyToWorktree?: string[];
   /** Shell command run in the worktree, inside `sandbox`, once the review approves. */
   verify?: string;
+  /** Fix rounds the implementer gets when verify fails. Defaults to `verify_retries` in the base branch's .bunker/config.toml, else 1. */
+  verifyRetries?: number;
+  /** Shell command run in the sandbox before each review; its output goes into the reviewer prompt. Defaults to `check` in the base branch's .bunker/config.toml. */
+  check?: string;
   /** Run `verify` on the host (with the caller's credentials) instead of in the sandbox. */
   verifyOnHost?: boolean;
   /** Let sandboxed verify use the network (and Claude credentials). Off by default: verify runs agent-written code. */

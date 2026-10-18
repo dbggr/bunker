@@ -8,7 +8,7 @@ import { tailLines } from "../core/output.ts";
 import { emit, emitStage, lineHook, type OnEvent } from "../core/events.ts";
 import { modelLabel } from "../agents/models.ts";
 import { interpret, sumUsage, type Agent, type Usage } from "../agents/agent.ts";
-import { IdleTimeout, timeoutMessage, type Sandbox, type Timeouts } from "../sandboxes/exec.ts";
+import { IdleTimeout, stepLimits, timeoutMessage, type Sandbox, type Timeouts } from "../sandboxes/exec.ts";
 import { type Commit, commitsBetween, mergeBack } from "../worktree/merge.ts";
 import { addWorktree, repoInfo, runSetup, tmpWorktrees, worktreeAdmin, type Worktree } from "../worktree/admin.ts";
 import { sessionStore, type Session } from "../worktree/session.ts";
@@ -44,6 +44,10 @@ export interface ReviewOptions extends Timeouts {
   copyToWorktree?: string[];
   /** Continue a run that stopped on the usage limit (a `pause` from an earlier result): same worktree and branch, same step, same session. */
   resumeFrom?: Pause;
+  /** Shell command run in the worktree, inside `sandbox` (isolated), after each implementer round; its output goes into the reviewer prompt. */
+  check?: string;
+  /** A fix round: the implementer's first run gets `prompt` after the task, resuming `session` if given, and the reviewer is told what was being fixed. */
+  fix?: { prompt: string; session?: Session };
 }
 
 export interface ReviewRound {
@@ -75,6 +79,8 @@ export interface ReviewResult {
   pause?: Pause;
   /** Implementer + reviewer, all rounds, if the agents report it. */
   usage?: Usage;
+  /** The implementer's last session, to continue in a fix round. */
+  implSession?: Session;
   error?: string;
 }
 
@@ -118,6 +124,8 @@ export async function review({
   sessionsDir,
   copyToWorktree,
   resumeFrom,
+  check,
+  fix,
   ...timeouts
 }: ReviewOptions): Promise<ReviewResult> {
   const { base, gitCommonDir } = await repoInfo(cwd);
@@ -159,7 +167,8 @@ export async function review({
       const CONTINUE = "Your session stopped on the Claude usage limit, which has now reset. Continue where you left off and finish the task.";
       const skipImpl = resuming?.role === "reviewer";
       step = { role: "implementer", round: i + 1 };
-      const task = feedback === undefined ? prompt : `${prompt}\n\nA reviewer requested changes:\n${feedback}`;
+      const fixing = i === 0 && !resumeFrom ? fix : undefined;
+      const task = fixing ? `${prompt}\n\n${fixing.prompt}` : feedback === undefined ? prompt : `${prompt}\n\nA reviewer requested changes:\n${feedback}`;
       const implTarget = { onEvent, onRaw, round: i + 1, role: "implementer" as const };
       emitStage(implTarget, "implement", undefined, modelLabel(agent));
       const implHook = lineHook(agent, implTarget);
@@ -173,8 +182,8 @@ export async function review({
         const resumed = resuming?.role === "implementer" ? resuming : undefined;
         impl = await agentStep({
           agent, sandbox, mode: "write", prompt: task, target: implTarget,
-          ...(resumed ? { resumePrompt: CONTINUE } : feedback !== undefined ? { resumePrompt: `A reviewer requested changes:\n${feedback}` } : {}),
-          prev: resumed ? savedSession : resume ? prev : undefined,
+          ...(resumed ? { resumePrompt: CONTINUE } : fixing ? { resumePrompt: fixing.prompt } : feedback !== undefined ? { resumePrompt: `A reviewer requested changes:\n${feedback}` } : {}),
+          prev: resumed ? savedSession : resume ? prev ?? fixing?.session : undefined,
           ctx: implHook ? { ...ctx, onLine: implHook } : ctx,
           dest: join(store.dir, `implementer-${i + 1}.jsonl`), timeouts,
         });
@@ -190,6 +199,12 @@ export async function review({
       }
       step = { role: "reviewer", round: i + 1, implOutput: implOut.text, ...(impl.session ? { implSessionId: impl.session.id } : {}) };
 
+      let checkText = "";
+      if (check) {
+        const out = await sandbox.exec(["sh", "-c", `(${check}) 2>&1`], { ...ctx, limits: stepLimits(timeouts), isolate: true });
+        if (out.timedOut) throw new IdleTimeout(timeoutMessage("check", out.timedOut, timeouts));
+        checkText = `Output of the repo's check command (\`${check}\`, exit ${out.code}):\n${redact(tailLines(out.stdout, 60).slice(-4000))}`;
+      }
       const head = (await $`git -C ${wt.path} rev-parse HEAD`.text()).trim();
       const diff = await $`git -C ${wt.path} diff ${base}..HEAD`.text();
       const revTarget = { onEvent, onRaw, round: i + 1, role: "reviewer" as const };
@@ -198,7 +213,8 @@ export async function review({
       // The reviewer reads the default branch's .claude/, CLAUDE.md and AGENTS.md, never the agent's (reset away below).
       undoSteering = await restoreSteering(wt.path, base);
       // Reviewers never resume: each review is independent.
-      const revPrompt = reviewerPrompt(prompt, diff, reviewerInstruction);
+      const fixNote = fixing ? `This is a fix round: the diff above covers only the fix, made after verify failed. The implementer was told:\n${fixing.prompt}` : undefined;
+      const revPrompt = reviewerPrompt(prompt, diff, [reviewerInstruction, fixNote, checkText].filter(Boolean).join("\n\n") || undefined);
       const revResumed = resuming?.role === "reviewer" ? savedSession : undefined;
       resuming = undefined;
       let rev = await agentStep({
@@ -271,5 +287,5 @@ export async function review({
     if (error) status = "conflict";
   }
   const usage = sumUsage(usages);
-  return { status, branch: wt.branch, commits, rounds, ...(usage ? { usage } : {}), ...(pause ? { pause } : {}), ...(error ? { error } : {}) };
+  return { status, branch: wt.branch, commits, rounds, ...(usage ? { usage } : {}), ...(prev ? { implSession: prev } : {}), ...(pause ? { pause } : {}), ...(error ? { error } : {}) };
 }
