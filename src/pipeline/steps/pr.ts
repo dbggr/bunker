@@ -4,6 +4,7 @@ import { neutralise } from "../../core/redact.ts";
 import { ensureLabel, REVIEW_LABEL } from "../../github/labels.ts";
 import { emit, emitStage } from "../../core/events.ts";
 import { tailLines } from "../../core/output.ts";
+import { STEERING } from "../../worktree/steering.ts";
 import { worktreeAdmin } from "../../worktree/admin.ts";
 import type { Agent } from "../../agents/agent.ts";
 import type { ReviewResult } from "../review.ts";
@@ -73,11 +74,11 @@ export function publishIssue(ctx: IssueRunContext, input: PublishInput): Promise
     const opened = { review: result, ...(prUrl ? { prUrl } : {}) };
     if (!merge || !prUrl) return fail("pr-opened", opened);
 
-    // .bunker/ feeds the host (docker build, copy globs) and .github/ is CI: only a human may merge changes to them.
+    // .bunker/ feeds the host (docker build, copy globs), .github/ is CI and .claude/, CLAUDE.md, AGENTS.md steer agents: only a human may merge changes to them.
     // Fails closed: if the diff can't be read, a human reviews. --no-renames lists the old path of a moved file too;
     // -z keeps paths raw (plain output quotes non-ASCII, quote and tab characters, which would dodge the match).
     const diff = await $`git -C ${worktree} diff -z --name-only --no-renames ${baseSha} HEAD`.nothrow().quiet();
-    const sensitive = diff.exitCode === 0 ? diff.stdout.toString().split("\0").filter((f) => /^\.(bunker|github)\//.test(f)) : [`(could not list the changed files: ${diff.stderr.toString().trim()})`];
+    const sensitive = diff.exitCode === 0 ? diff.stdout.toString().split("\0").filter((f) => /^\.(bunker|github)\//.test(f) || STEERING.test(f)) : [`(could not list the changed files: ${diff.stderr.toString().trim()})`];
     if (sensitive.length) {
       await ensureLabel(REVIEW_LABEL, worktree, env);
       const labelled = await $`gh pr edit ${prUrl} --add-label ${REVIEW_LABEL}`.cwd(worktree).env(env).nothrow().quiet();
