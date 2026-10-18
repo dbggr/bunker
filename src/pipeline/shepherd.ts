@@ -485,6 +485,7 @@ export function createShepherd(o: ShepherdOptions) {
         const info = JSON.parse(view.stdout.toString() || "{}");
         if (info.state !== "MERGED") continue;
         const unverified = await landingProblem(old, info);
+        emit(o.onEvent, { type: "stage", name: "merged", issue: old.issue });
         merged.push({ pr: old.number, url: old.url, issue: old.issue, branch: old.branch, ...(unverified ? { unverified } : {}) });
       }
       seen = new Map(prs.map((p) => [p.number, p]));

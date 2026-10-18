@@ -475,6 +475,23 @@ describe("shepherd pass", () => {
     });
   });
 
+  test("a merged PR emits a merged stage for its issue, so the hub row finishes", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs.push(prJson(10, "fix/7-thing", sha));
+    w.state.checks[10] = PENDING;
+    w.save();
+    const events: any[] = [];
+    const s = shepherd(w, fakeAgent(COMMIT_FIX), { onEvent: (e: any) => events.push(e) });
+    await s.pass();
+    w.state.prs = [];
+    w.state.states[10] = "MERGED";
+    w.state.views = { 10: { mergeCommit: { oid: sha }, headRefOid: sha, baseRefName: "main", files: [{ path: "f.txt" }] } };
+    w.save();
+    await s.pass();
+    expect(events.filter((e) => e.type === "stage")).toMatchObject([{ issue: 7, name: "merged" }]);
+  });
+
   test("a PR closed without merging is not reported merged", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
