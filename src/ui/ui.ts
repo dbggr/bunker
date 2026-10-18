@@ -25,6 +25,12 @@ export interface Publisher {
 
 const HOST = "127.0.0.1";
 export const DEFAULT_PORT = 4321;
+/** The hub port used when --port isn't given: BUNKER_HUB_PORT if set to a valid port (tests point it away from a developer's live hub), else 4321. */
+export function defaultHubPort(): number {
+  const raw = process.env.BUNKER_HUB_PORT;
+  const n = raw === undefined || raw === "" ? NaN : Number(raw);
+  return Number.isInteger(n) && n >= 0 && n <= 65535 ? n : DEFAULT_PORT;
+}
 /** Most events the hub remembers per repo for late-joining pages. */
 export const HISTORY_LIMIT = 2000;
 /** Most distinct repos the hub keeps history for; the least recently active is evicted first. */
@@ -88,7 +94,7 @@ export const viewUrlFor = (port: number, token: string) => `http://${HOST}:${por
  * The shared live view. Always binds to loopback; there is no option to change that.
  * The page and socket are read-only; the one write is POST /publish, which needs the token.
  */
-export function startHub({ port = DEFAULT_PORT, token, historyLimit = HISTORY_LIMIT, repoLimit = REPO_LIMIT }: { port?: number; token: string; historyLimit?: number; repoLimit?: number }): Hub {
+export function startHub({ port = defaultHubPort(), token, historyLimit = HISTORY_LIMIT, repoLimit = REPO_LIMIT }: { port?: number; token: string; historyLimit?: number; repoLimit?: number }): Hub {
   // Replayed to late clients; capped per repo so one busy repo can't evict the rest.
   const history = new Map<string, { seq: number; msg: string; kind?: string | undefined }[]>();
   let seq = 0;
@@ -170,7 +176,7 @@ export async function hubReachable(port: number, token: string): Promise<boolean
 }
 
 /** A publisher for a reachable hub, or undefined when none is running. Delivery failures are swallowed. */
-export async function connectHub({ port = DEFAULT_PORT, repo, token }: { port?: number; repo: string; token: string }): Promise<Publisher | undefined> {
+export async function connectHub({ port = defaultHubPort(), repo, token }: { port?: number; repo: string; token: string }): Promise<Publisher | undefined> {
   if (!(await hubReachable(port, token))) return undefined;
   let chain: Promise<unknown> = Promise.resolve();
   return {

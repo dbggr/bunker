@@ -27,7 +27,7 @@ import { applyIdentity, identityKind } from "../github/identity.ts";
 import { parseGithubRemote } from "./commands/doctor.ts";
 import { redact } from "../core/redact.ts";
 import { createProgress, emit, type BunkerEvent } from "../core/events.ts";
-import { connectHub, hubReachable, readToken, repoId, startHub, viewUrlFor, type Hub, type Publisher } from "../ui/ui.ts";
+import { connectHub, defaultHubPort, hubReachable, readToken, repoId, startHub, viewUrlFor, type Hub, type Publisher } from "../ui/ui.ts";
 import { COMMAND_HELP, HELP } from "./commands/help.ts";
 import { MODES, resolveMode, type Mode } from "./modes.ts";
 import { options } from "../core/options.ts";
@@ -178,7 +178,7 @@ if (!values.ui && (values.port !== undefined || values["ui-keep"])) {
   console.error("bunker: --port and --ui-keep only apply to --ui");
   process.exit(2);
 }
-const uiPort = values.port === undefined ? 4321 : Number(values.port);
+const uiPort = values.port === undefined ? defaultHubPort() : Number(values.port);
 if (!Number.isInteger(uiPort) || uiPort < 0 || uiPort > 65535) {
   console.error("bunker: --port must be an integer between 0 and 65535");
   process.exit(2);

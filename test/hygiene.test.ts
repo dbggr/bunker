@@ -69,3 +69,17 @@ test("with BUNKER_APP_ID in the real ~/.config/bunker/.env, loading the env in a
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("the default hub port is not the developer's live hub (4321), and nothing listens on it", async () => {
+  const { defaultHubPort, hubReachable, readToken } = await import("../src/ui/ui.ts");
+  expect(defaultHubPort()).not.toBe(4321);
+  expect(Number(process.env.BUNKER_HUB_PORT)).toBe(defaultHubPort());
+  expect(await hubReachable(defaultHubPort(), readToken())).toBe(false);
+  const saved = process.env.BUNKER_HUB_PORT;
+  delete process.env.BUNKER_HUB_PORT;
+  try {
+    expect(defaultHubPort()).toBe(4321);
+  } finally {
+    process.env.BUNKER_HUB_PORT = saved;
+  }
+});
