@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { liveGhEnv } from "../github/identity.ts";
 import { parseArgs } from "node:util";
 import { resolveCiTimeout, resolveParallel, resolveTimeouts, resolveWatchSettings } from "../core/settings.ts";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "../core/env.ts";
@@ -22,6 +23,8 @@ import { parseDuration, runWatch } from "./commands/watch.ts";
 import { desktopNotifier, resolveMention } from "../core/notify.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { applyIdentity, identityKind } from "../github/identity.ts";
+import { parseGithubRemote } from "./commands/doctor.ts";
 import { redact } from "../core/redact.ts";
 import { createProgress, emit, type BunkerEvent } from "../core/events.ts";
 import { connectHub, hubReachable, readToken, repoId, startHub, viewUrlFor, type Hub, type Publisher } from "../ui/ui.ts";
@@ -197,6 +200,18 @@ if (!Number.isInteger(limit) || limit < 1) {
 const parallel = guardFlags(() => resolveParallel(values, repoCfg.watch, manual));
 
 await loadBunkerEnv(process.cwd());
+if (identityKind(process.env) !== "pat") {
+  // Opt-in separate GitHub identity: from here on BUNKER_GH_TOKEN is that identity's token.
+  const origin = await $`git remote get-url origin`.quiet().nothrow();
+  const slug = parseGithubRemote(origin.stdout.toString())?.slug;
+  try {
+    if (!slug) throw new Error("a separate GitHub identity needs a GitHub origin remote");
+    await applyIdentity(process.env, slug);
+  } catch (e) {
+    console.error(`bunker: ${redact(e instanceof Error ? e.message : String(e))}`);
+    process.exit(2);
+  }
+}
 if (!values["no-sandbox"] && !hasAuth()) {
   // On the host claude can use your login; in a container it only has what we pass in.
   console.error(AUTH_HINT);
@@ -283,8 +298,7 @@ if (values.audit) {
     });
   }
   const notify = desktopNotifier({ enabled: !values["no-notify"] && repoCfg.notify.enabled !== false && !process.env.BUNKER_TEST_NO_NOTIFY });
-  const ghToken = process.env.BUNKER_GH_TOKEN;
-  const mention = await resolveMention(process.cwd(), (ghToken ? { ...process.env, GH_TOKEN: ghToken } : process.env) as Record<string, string>, repoCfg.notify.github_user);
+    const mention = await resolveMention(process.cwd(), liveGhEnv(), repoCfg.notify.github_user);
   try {
     await runWatch({ notify, mention, onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, manual, ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, logsDays: repoCfg.clean.logs_days ?? 30, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
   } catch (e) {

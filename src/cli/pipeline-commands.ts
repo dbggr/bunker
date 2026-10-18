@@ -1,3 +1,4 @@
+import { liveGhEnv } from "../github/identity.ts";
 import type { RepoConfig } from "../core/config.ts";
 import type { resolveTimeouts } from "../core/settings.ts";
 import type { Agent } from "../agents/agent.ts";
@@ -73,8 +74,7 @@ export async function issueCommand({ manual, values, repoCfg, onEvent, agent, re
   const reviewer = reviewerAgent();
   let result;
   try {
-    const token = process.env.BUNKER_GH_TOKEN;
-    const ghEnv = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
+    const ghEnv = liveGhEnv();
     if (!(await enforceLabeler(issue, { cwd: process.cwd(), env: ghEnv, allow: allowLabelers }))) {
       await publisher?.flush();
       process.exit(1);

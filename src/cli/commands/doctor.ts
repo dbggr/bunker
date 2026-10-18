@@ -6,6 +6,7 @@ import { AUTH_VARS, loadBunkerEnv } from "../../core/env.ts";
 import { DEFAULT_MODEL_LABEL, resolveModels } from "../../agents/models.ts";
 import { ConfigError, effectiveSettings, formatValue, loadRepoConfig } from "../../core/config.ts";
 import { redact } from "../../core/redact.ts";
+import { applyIdentity, identityKind } from "../../github/identity.ts";
 import { AWAITING_REVIEW_LABEL, FAILED_LABEL, IN_PROGRESS_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
 import { SKILL_ROLES, SkillError, resolveSkills, skillPaths } from "../../core/skills.ts";
 import { PRIORITY_LABELS } from "../../core/priority.ts";
@@ -113,7 +114,7 @@ export async function probeGhToken(repo: RepoInfo, defaultBranch: string, env: E
 export const TOKEN_FIX =
   "create a fine-grained token for this one repo with Contents RW, Pull requests RW, Issues RW, Metadata R (nothing else) at https://github.com/settings/personal-access-tokens/new, then set BUNKER_GH_TOKEN in ~/.config/bunker/.env (`bunker init` does this)";
 
-export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ checks: Check[]; code: number; repo?: RepoInfo; defaultBranch?: string }> {
+export async function runDoctor(opts: { cwd: string; env?: Env; fetch?: typeof globalThis.fetch }): Promise<{ checks: Check[]; code: number; repo?: RepoInfo; defaultBranch?: string }> {
   const env = opts.env ?? process.env;
   const cwd = opts.cwd;
   await loadBunkerEnv(cwd, env);
@@ -192,18 +193,47 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
   }
   if (repo) add({ id: "default-branch", group: "repo", label: "default branch", ok: !!defaultBranch, required: false, ...(defaultBranch ? { detail: defaultBranch } : {}), fix: "check `gh auth status` and that you can read the repo" });
 
-  if (!env.BUNKER_GH_TOKEN) {
+  // the identity bunker acts as: the owner's PAT unless a GitHub App or bot account is configured
+  const kind = identityKind(env);
+  let ghEnv: Env = env;
+  let idDetail = "the owner's PAT (BUNKER_GH_TOKEN)";
+  if (kind !== "pat") {
+    const scratch: Env = { ...env };
+    try {
+      const id = await applyIdentity(scratch, repo?.slug ?? "", { ...(opts.fetch ? { fetch: opts.fetch } : {}) });
+      id.stop();
+      ghEnv = scratch;
+      idDetail = kind === "app" ? `GitHub App ${env.BUNKER_APP_ID} (installation token)` : `bot account${scratch.BUNKER_IDENTITY_LOGIN ? ` ${scratch.BUNKER_IDENTITY_LOGIN}` : ""} (BUNKER_BOT_GH_TOKEN)`;
+    } catch (e) {
+      add({ id: "identity", group: "auth", label: `identity: ${kind === "app" ? "GitHub App" : "bot account"}`, ok: false, detail: redact(e instanceof Error ? e.message : String(e)), fix: "check BUNKER_APP_ID / BUNKER_APP_PRIVATE_KEY_PATH (the App must be installed on this repo) or BUNKER_BOT_GH_TOKEN; unset them to use the owner's PAT" });
+    }
+  }
+  const probe = repo && ghEnv.BUNKER_GH_TOKEN ? await probeGhToken(repo, defaultBranch ?? "HEAD", ghEnv) : undefined;
+  if (!checks.some((c) => c.id === "identity")) {
+    const probeNow = probe;
+    add({
+      id: "identity",
+      group: "auth",
+      label: "GitHub identity",
+      ok: true,
+      required: false,
+      detail: `${idDetail}; ${probeNow ? (probeNow.missing.length ? `no access to: ${probeNow.missing.join(", ")}` : "can read the repo, issues and PRs, write per its grants") : "permissions not probed"}`,
+    });
+  }
+
+  if (!env.BUNKER_GH_TOKEN && kind === "pat") {
     add({ id: "auth-gh", group: "auth", label: "BUNKER_GH_TOKEN set", ok: false, fix: TOKEN_FIX });
   } else if (!repo) {
     add({ id: "auth-gh", group: "auth", label: "BUNKER_GH_TOKEN set", ok: true, detail: "not probed (no GitHub origin)" });
+  } else if (!probe) {
+    add({ id: "auth-gh", group: "auth", label: "BUNKER_GH_TOKEN set", ok: false, fix: TOKEN_FIX });
   } else {
-    const probe = await probeGhToken(repo, defaultBranch ?? "HEAD", env);
     add({
       id: "auth-gh",
       group: "auth",
-      label: probe.missing.length ? "BUNKER_GH_TOKEN access" : "BUNKER_GH_TOKEN can read the repo, issues and PRs",
-      ok: probe.missing.length === 0,
-      ...(probe.missing.length ? { detail: `no access to: ${probe.missing.join(", ")}` } : {}),
+      label: probe!.missing.length ? "BUNKER_GH_TOKEN access" : "BUNKER_GH_TOKEN can read the repo, issues and PRs",
+      ok: probe!.missing.length === 0,
+      ...(probe!.missing.length ? { detail: `no access to: ${probe!.missing.join(", ")}` } : {}),
       fix: TOKEN_FIX,
     });
   }

@@ -1,3 +1,4 @@
+import { liveGhEnv } from "../github/identity.ts";
 import { issueBranch, type IssueInfo } from "../github/issues.ts";
 import { markTrust } from "../github/trust.ts";
 import { claimRemoteBranch } from "../github/branches.ts";
@@ -31,7 +32,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
   const token = process.env.BUNKER_GH_TOKEN;
-  const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
+  const env = liveGhEnv();
   const gitCfg = token ? ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"] : [];
   const view = await $`gh issue view ${number} --json number,title,body,author,state,labels,comments`.cwd(cwd).env(env).nothrow().quiet();
   if (view.exitCode !== 0) throw new Error(`gh issue view ${number} failed:\n${view.stderr}`);

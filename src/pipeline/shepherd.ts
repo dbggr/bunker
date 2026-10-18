@@ -1,3 +1,4 @@
+import { liveGhEnv } from "../github/identity.ts";
 import { $ } from "bun";
 import { appendFile } from "node:fs/promises";
 import { existsSync, rmSync } from "node:fs";
@@ -117,7 +118,7 @@ class Refused extends Error {}
 export function createShepherd(o: ShepherdOptions) {
   const cwd = o.cwd ?? process.cwd();
   const token = process.env.BUNKER_GH_TOKEN;
-  const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
+  const env = liveGhEnv();
   const gitCfg = token ? ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"] : [];
   const notify = o.notify ?? noNotify;
   const max = o.maxAttempts ?? MAX_FIX_ATTEMPTS;

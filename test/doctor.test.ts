@@ -189,3 +189,33 @@ describe("doctor storage", () => {
     expect(r.code).toBe(0);
   });
 });
+
+describe("doctor: GitHub identity", () => {
+  test("the PAT is reported by default", async () => {
+    const w = await fakeWorld();
+    const r = await runDoctor({ cwd: w.repo, env: w.env });
+    const c = r.checks.find((c) => c.id === "identity")!;
+    expect(c.ok).toBe(true);
+    expect(c.detail).toContain("owner's PAT");
+  });
+
+  test("a bot account is reported and used for the probes", async () => {
+    const w = await fakeWorld();
+    const fetch = (async () => Response.json({ login: "my-bot" })) as unknown as typeof globalThis.fetch;
+    const env: Record<string, string | undefined> = { ...w.env, BUNKER_BOT_GH_TOKEN: "github_pat_bottoken999" };
+    const r = await runDoctor({ cwd: w.repo, env, fetch });
+    expect(r.checks.find((c) => c.id === "identity")!.detail).toContain("bot account my-bot");
+    expect(await w.ghEnvLog()).toContain("TOKEN=github_pat_bottoken999");
+    expect(env.BUNKER_GH_TOKEN).toBe("github_pat_testtoken123");
+  });
+
+  test("an App that cannot mint a token fails the identity check", async () => {
+    const w = await fakeWorld();
+    const fetch = (async () => new Response("no", { status: 404 })) as unknown as typeof globalThis.fetch;
+    const key = join(w.home, "missing.pem");
+    const r = await runDoctor({ cwd: w.repo, env: { ...w.env, BUNKER_APP_ID: "1", BUNKER_APP_PRIVATE_KEY_PATH: key }, fetch });
+    const c = r.checks.find((c) => c.id === "identity")!;
+    expect(c.ok).toBe(false);
+    expect(c.fix).toContain("BUNKER_APP_ID");
+  });
+});

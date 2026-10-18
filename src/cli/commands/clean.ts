@@ -1,3 +1,4 @@
+import { liveGhEnv } from "../../github/identity.ts";
 import { $ } from "bun";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -102,8 +103,7 @@ export async function runClean(o: CleanOptions): Promise<CleanResult> {
   const baseRef = `refs/remotes/origin/${def}`;
   if ((await $`git -C ${repo} rev-parse --verify -q ${baseRef}`.nothrow().quiet()).exitCode !== 0) return stop(`no origin/${def} to compare against; run git fetch first`);
 
-  const token = process.env.BUNKER_GH_TOKEN;
-  const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
+  const env = liveGhEnv();
   const gh = async (...args: string[]): Promise<unknown> => {
     const r = await $`gh ${args}`.cwd(repo).env(env).nothrow().quiet();
     if (r.exitCode !== 0) return undefined;

@@ -1,3 +1,4 @@
+import { liveGhEnv } from "../../github/identity.ts";
 import { $ } from "bun";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
@@ -123,7 +124,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   if (missing.length) await appendFile(exclude, `${excluded && !excluded.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
   const release = acquireLock(join(dir, "watch.lock"));
   // Crash recovery, whether or not the worktree cleanup runs: the lock is ours, so no `bunker watch` run of ours is live.
-  const stale = await clearStaleInProgress(repo, (process.env.BUNKER_GH_TOKEN ? { ...process.env, GH_TOKEN: process.env.BUNKER_GH_TOKEN } : process.env) as Record<string, string>);
+  const stale = await clearStaleInProgress(repo, liveGhEnv());
   if (stale.length) log(`bunker: cleared a stale bunker:in-progress from ${stale.map((n) => `#${n}`).join(", ")}`);
   if (cleanOnStart) await runClean({ cwd: repo, yes: true, auto: true, ...(logsDays === undefined ? {} : { logsDays }) });
 
@@ -134,8 +135,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     userOnEvent?.(e);
   };
 
-  const token = process.env.BUNKER_GH_TOKEN;
-  const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
+  const env = liveGhEnv();
   const spendFile = join(dir, "watch-spend.json");
   const deadline = forMs === undefined ? Infinity : Date.now() + forMs;
   const stopped = () => !!signal?.aborted || Date.now() >= deadline;
