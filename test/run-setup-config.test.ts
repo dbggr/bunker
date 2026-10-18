@@ -3,7 +3,8 @@ import { $ } from "bun";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { noSandbox, runSetup } from "../src/index.ts";
+import { noSandbox } from "../src/index.ts";
+import { runSetup } from "../src/worktree/admin.ts";
 import { ConfigError } from "../src/core/config.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
