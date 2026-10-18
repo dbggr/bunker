@@ -2,7 +2,7 @@ import { expect, test, setDefaultTimeout } from "bun:test";
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { podman } from "../src/index.ts";
+import { noSandbox, podman } from "../src/index.ts";
 import { liveContainers } from "../src/sandboxes/container.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
@@ -33,4 +33,10 @@ test("the CLI refuses to run inside a bunker sandbox", async () => {
   const err = await new Response(p.stderr).text();
   expect(await p.exited).toBe(2);
   expect(err).toContain("inside a bunker sandbox");
+});
+
+test("--no-sandbox agents are marked too, so they can't run a nested bunker", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bunker-nosandbox-"));
+  const r = await noSandbox().exec(["sh", "-c", 'echo "$BUNKER_IN_SANDBOX"'], { worktree: dir, gitCommonDir: join(dir, ".git") });
+  expect(r.stdout.trim()).toBe("1");
 });

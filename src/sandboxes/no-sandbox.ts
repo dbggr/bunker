@@ -64,7 +64,7 @@ export function noSandbox(opts: { skills?: RoleSkills } = {}): Sandbox {
         ...(name ? { GIT_AUTHOR_NAME: name, GIT_COMMITTER_NAME: name } : {}),
         ...(email ? { GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email } : {}),
       };
-      const env: Record<string, string | undefined> = { ...(isolate ? isolatedEnv() : agentEnv()), ...identity, HOME: dir };
+      const env: Record<string, string | undefined> = { ...(isolate ? isolatedEnv() : agentEnv()), ...identity, HOME: dir, BUNKER_IN_SANDBOX: "1" };
       delete env.XDG_CONFIG_HOME;
       return guardGit(worktree, gitCommonDir, () =>
         // detached: own process group, so a terminal Ctrl-C reaches only bunker, which lets the step finish.
