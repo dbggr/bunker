@@ -4,7 +4,8 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeCode, noSandbox, review, type Agent, type BunkerEvent } from "../src/index.ts";
-import { createProgress, findStreamResult, hyperlink, parseClaudeStreamLine } from "../src/core/events.ts";
+import { createProgress, findStreamResult, hyperlink, lineHook, parseClaudeStreamLine } from "../src/core/events.ts";
+import { estimateCostUsd } from "../src/core/pricing.ts";
 import { runIssue } from "../src/pipeline/issue.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
@@ -222,5 +223,78 @@ exit 0
     } finally {
       process.env.PATH = origPath;
     }
+  });
+});
+
+describe("running usage estimate", () => {
+  const withUsage = (id: string, model: string, usage: object, ...content: object[]) =>
+    JSON.stringify({ type: "assistant", message: { id, model, usage, content } });
+  const u = { input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: 2000, cache_creation_input_tokens: 100 };
+
+  test("parseClaudeStreamLine emits the tokens of an assistant message", () => {
+    const evs = parseClaudeStreamLine(withUsage("m1", "claude-sonnet-5-5", u, { type: "text", text: "hi" }));
+    expect(evs).toContainEqual({ type: "usage", id: "m1", model: "claude-sonnet-5-5", tokens: { input: 1000, output: 500, cacheRead: 2000, cacheWrite: 100 } });
+    expect(evs).toContainEqual({ type: "text", text: "hi" });
+  });
+
+  test("estimateCostUsd prices known models and gives nothing for unknown ones", () => {
+    const t = { input: 1e6, output: 1e6, cacheRead: 1e6, cacheWrite: 1e6 };
+    expect(estimateCostUsd("claude-sonnet-5-5", t)).toBeCloseTo(3 + 15 + 0.3 + 3.75);
+    expect(estimateCostUsd("claude-mystery-9", t)).toBeUndefined();
+    expect(estimateCostUsd(undefined, t)).toBeUndefined();
+  });
+
+  test("Opus 4 and 4.1 keep their higher price, dated or not; newer Opus does not", () => {
+    const t = { input: 1e6, output: 0, cacheRead: 0, cacheWrite: 0 };
+    for (const id of ["claude-opus-4", "claude-opus-4-1", "claude-opus-4-20250514", "claude-opus-4-1-20250805"]) expect(estimateCostUsd(id, t)).toBe(15);
+    for (const id of ["claude-opus-4-5", "claude-opus-4-5-20251101", "claude-opus-5-5"]) expect(estimateCostUsd(id, t)).toBe(5);
+  });
+
+  const run = (lines: string[]) => {
+    const events: BunkerEvent[] = [];
+    const hook = lineHook({ parseLine: parseClaudeStreamLine, command: () => [] } as Agent, { onEvent: (e) => events.push(e) })!;
+    for (const l of lines) hook(l);
+    return events;
+  };
+
+  test("lineHook emits a running total per call, counting a message once", () => {
+    const usage = run([
+      withUsage("m1", "claude-sonnet-5-5", u, { type: "text", text: "a" }),
+      withUsage("m1", "claude-sonnet-5-5", u, { type: "tool_use", name: "Edit", input: {} }),
+      withUsage("m2", "claude-sonnet-5-5", u, { type: "text", text: "b" }),
+    ]).filter((e) => e.type === "usage");
+    expect(usage).toHaveLength(3);
+    expect(usage[0]!.tokens).toEqual({ input: 1000, output: 500, cacheRead: 2000, cacheWrite: 100 });
+    expect(usage[2]!.tokens).toEqual({ input: 2000, output: 1000, cacheRead: 4000, cacheWrite: 200 });
+    expect(usage[2]!.estCostUsd).toBeCloseTo(2 * (1000 * 3 + 500 * 15 + 2000 * 0.3 + 100 * 3.75) / 1e6);
+  });
+
+  test("an unknown model has tokens but no estimated cost", () => {
+    const [e] = run([withUsage("m1", "mystery", u)]);
+    expect(e!.type).toBe("usage");
+    expect(e!.tokens!.input).toBe(1000);
+    expect(e!.estCostUsd).toBeUndefined();
+  });
+
+  const feed = (events: Partial<BunkerEvent>[]) => {
+    let out = "";
+    const p = createProgress({ write: (s) => (out += s), tty: true });
+    events.forEach((e, n) => p.onEvent({ type: "text", at: 1000 + n, ...e } as BunkerEvent));
+    return out.split("\r\x1b[K").pop()!;
+  };
+
+  test("progress shows ~$ while a step runs and the exact total after its result, never summed", () => {
+    expect(feed([{ type: "usage", estCostUsd: 1.234, tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } }])).toContain("~$1.23");
+    const after = feed([{ type: "usage", estCostUsd: 1.234 }, { type: "result", costUsd: 1.5 }]);
+    expect(after).toContain("$1.50");
+    expect(after).not.toContain("~");
+    // a second call's estimate adds to the first call's exact cost
+    expect(feed([{ type: "result", costUsd: 1 }, { type: "usage", estCostUsd: 0.5 }])).toContain("~$1.50");
+  });
+
+  test("progress shows tokens only for an unknown model", () => {
+    const line = feed([{ type: "usage", tokens: { input: 1000, output: 500, cacheRead: 0, cacheWrite: 0 } }]);
+    expect(line).toContain("1.5k tok");
+    expect(line).not.toContain("~$");
   });
 });

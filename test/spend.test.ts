@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DAY_MS, MONTH_MS, addSpend, capLiftsAt, exceededCaps, formatSpend, loadSpendCaps, spentWithin } from "../src/core/spend.ts";
+import { DAY_MS, MONTH_MS, addSpend, budgetSnapshot, capLiftsAt, exceededCaps, formatSpend, loadSpendCaps, spentWithin } from "../src/core/spend.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -74,4 +74,22 @@ test("kebab-case spend caps (deprecated) are still read", async () => {
   mkdirSync(join(home, "bunker"));
   writeFileSync(join(home, "bunker", "config.toml"), "max-cost-day = 5\n");
   expect(await loadSpendCaps({ XDG_CONFIG_HOME: home })).toEqual({ day: 5 });
+});
+
+describe("budgetSnapshot()", () => {
+  test("spent and caps per window, plus when work resumes if a cap is hit", () => {
+    const f = seed([{ at: Date.now() - 3_600_000, usd: 25 }]);
+    const b = budgetSnapshot(f, { day: 20 });
+    expect(b.day.spentUsd).toBeCloseTo(25);
+    expect(b.day.capUsd).toBe(20);
+    expect(b.month.capUsd).toBeUndefined();
+    expect(b.pausedUntil).toBeGreaterThan(Date.now());
+  });
+
+  test("estimates are never recorded: caps read the file only", () => {
+    const f = seed([{ at: Date.now() - 1000, usd: 5 }]);
+    budgetSnapshot(f, { day: 10 });
+    expect(exceededCaps(f, { day: 10 })).toEqual([]);
+    expect(spentWithin(f, DAY_MS)).toBeCloseTo(5);
+  });
 });

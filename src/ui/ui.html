@@ -24,6 +24,11 @@
   .tab .x { color: #888; margin-left: 4px; } .tab .x:hover { color: #fff; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: #666; display: inline-block; }
   .dot.working { background: #4a4; } .dot.waiting { background: #db6; } .dot.failed { background: #c44; }
+  .budget { border: 1px solid #333; border-radius: 6px; margin-bottom: 10px; padding: 8px 12px; background: #181818; }
+  .budget:empty { display: none; }
+  .bar { height: 6px; background: #333; border-radius: 3px; margin: 4px 0 8px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: #4a4; }
+  .bar.warn > i { background: #db6; } .bar.full > i { background: #c44; }
   .pane { display: none; } .pane.sel { display: block; }
 </style>
 </head>
@@ -60,7 +65,10 @@ function getRepo(name) {
   pane.className = "pane";
   tabs.appendChild(tab);
   main.appendChild(pane);
-  r = { name, tab, pane, issues: new Map() };
+  const budget = document.createElement("div");
+  budget.className = "budget";
+  pane.appendChild(budget);
+  r = { name, tab, pane, issues: new Map(), budget, spend: undefined };
   repos.set(name, r);
   return r;
 }
@@ -95,7 +103,7 @@ function get(r, k) {
   el.querySelector(".head").onclick = () => el.classList.toggle("open");
   el.querySelector("b").textContent = k;
   r.pane.appendChild(el);
-  i = { el, start: undefined, end: undefined, cost: 0, feed: el.querySelector(".feed"), done: false, stage: "" };
+  i = { el, start: undefined, end: undefined, cost: 0, est: undefined, tokens: 0, feed: el.querySelector(".feed"), done: false, stage: "" };
   r.issues.set(k, i);
   return i;
 }
@@ -107,10 +115,49 @@ function line(i, cls, text) {
   i.feed.appendChild(d);
   if (stick) i.feed.scrollTop = i.feed.scrollHeight;
 }
+const usd = (n) => "$" + n.toFixed(2);
+const tokens = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
+// Exact cost of finished agent calls, plus a marked estimate of the call in flight (replaced, never summed, once its result arrives).
+function costText(i) {
+  if (i.est !== undefined) return "~" + usd(i.cost + i.est);
+  return usd(i.cost) + (i.tokens ? " · " + tokens(i.tokens) + " tok" : "");
+}
+function renderBudget(r) {
+  const b = r.spend;
+  if (!b) { r.budget.replaceChildren(); return; }
+  let est = 0;
+  for (const i of r.issues.values()) if (!i.done && i.est !== undefined) est += i.est;
+  const mark = est > 0 ? "~" : "";
+  const parts = [["today", b.day, 1], ["30 days", b.month, 1]].map(([label, w]) => {
+    const spent = w.spentUsd + est;
+    return label + " " + mark + usd(spent) + (w.capUsd !== undefined ? " / " + usd(w.capUsd).replace(/\.00$/, "") : " (no cap)");
+  });
+  const head = document.createElement("div");
+  head.textContent = parts.join(" · ");
+  const kids = [head];
+  for (const w of [b.day, b.month]) {
+    if (w.capUsd === undefined) continue;
+    const frac = (w.spentUsd + est) / w.capUsd;
+    const bar = document.createElement("div");
+    bar.className = "bar" + (frac >= 1 ? " full" : frac >= 0.8 ? " warn" : "");
+    const fill = document.createElement("i");
+    fill.style.width = Math.min(100, frac * 100) + "%";
+    bar.appendChild(fill);
+    kids.push(bar);
+  }
+  if (b.pausedUntil && b.pausedUntil > Date.now()) {
+    const p = document.createElement("div");
+    p.className = "muted";
+    p.textContent = "no new issues until " + new Date(b.pausedUntil).toLocaleString();
+    kids.push(p);
+  }
+  r.budget.replaceChildren(...kids);
+}
 function onEvent(m) {
   if (closed.has(m.repo)) return;
   const e = m.event;
   const r = getRepo(m.repo);
+  if (e.type === "budget") { r.spend = e.budget; renderBudget(r); return; }
   const i = get(r, key(e));
   i.start ??= e.at;
   i.end = e.at;
@@ -129,8 +176,11 @@ function onEvent(m) {
     if (e.url) { const a = document.createElement("a"); a.href = e.url; a.textContent = "PR"; a.target = "_blank"; a.rel = "noreferrer"; q(".pr").replaceChildren(a); }
   } else if (e.type === "toolCall") line(i, "tool", "▸ " + e.name);
   else if (e.type === "text") line(i, "txt", e.text || "");
-  else if (e.type === "result") { i.cost += e.costUsd || 0; line(i, "res", "result" + (e.costUsd ? " $" + e.costUsd.toFixed(2) : "")); }
-  q(".cost").textContent = "$" + i.cost.toFixed(2);
+  else if (e.type === "usage") { i.est = e.estCostUsd; i.tokens = e.tokens ? e.tokens.input + e.tokens.output + e.tokens.cacheRead + e.tokens.cacheWrite : 0; }
+  else if (e.type === "result") { i.cost += e.costUsd || 0; i.est = undefined; i.tokens = 0; line(i, "res", "result" + (e.costUsd ? " $" + e.costUsd.toFixed(2) : "")); }
+  if (e.type === "stage" && i.done) { i.est = undefined; i.tokens = 0; }
+  q(".cost").textContent = costText(i);
+  renderBudget(r);
   render();
 }
 setInterval(() => { for (const r of repos.values()) for (const i of r.issues.values()) if (i.start && !i.done) i.el.querySelector(".time").textContent = clock(Date.now() - i.start); }, 1000);

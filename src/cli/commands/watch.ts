@@ -2,7 +2,8 @@ import { $ } from "bun";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { join } from "node:path";
-import { addSpend, DAY_MS, exceededCaps, formatSpend, type SpendCaps } from "../../core/spend.ts";
+import { emit } from "../../core/events.ts";
+import { addSpend, budgetSnapshot, DAY_MS, exceededCaps, formatSpend, type SpendCaps } from "../../core/spend.ts";
 import { safePull } from "../../github/pull.ts";
 import { clearStaleInProgress, runClean } from "./clean.ts";
 import { codeSpan, redact } from "../../core/redact.ts";
@@ -153,7 +154,12 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     ...(maxCostMonthUsd === undefined ? {} : { month: maxCostMonthUsd }),
   };
   const capped = () => exceededCaps(spendFile, caps);
-  const record = (usd: number) => addSpend(spendFile, usd);
+  /** The spend against the caps, for the hub: exact costs only. */
+  const publishBudget = () => emit(opts.onEvent, { type: "budget", budget: budgetSnapshot(spendFile, caps) });
+  const record = (usd: number) => {
+    addSpend(spendFile, usd);
+    publishBudget();
+  };
 
   const stateFile = join(dir, "watch-state.json");
   const readState = (): { lastAuditAt?: number; lastTriageAt?: number } => {
@@ -264,12 +270,14 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
 
   const summary: WatchSummary = { passes: 0, merged: 0, failed: 0, spentUsd: 0 };
   let idlePasses = 0;
+  publishBudget();
   try {
     while (!stopped()) {
       const hit = capped();
       if (hit.length) {
         // Every exceeded window must free up before work resumes.
         const at = Math.max(...hit.map((h) => h.liftsAt));
+        publishBudget();
         notify("bunker: spend cap reached", `${hit.map((h) => `${h.window === "day" ? "daily" : "monthly"} $${h.spent.toFixed(2)} of $${h.cap}`).join(", ")}; no new issues until ${new Date(at).toLocaleString()}`);
         for (const h of hit) log(`bunker: ${h.window === "day" ? "daily" : "monthly"} spend cap reached ($${h.spent.toFixed(2)} of $${h.cap} in ${h.window === "day" ? "24 h" : "30 days"}); no new issues, sleeping until ${new Date(at).toISOString()}`);
         // Re-check at least daily: a timer can't be that long.

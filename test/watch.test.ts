@@ -329,6 +329,16 @@ describe("runWatch()", () => {
     expect(await Bun.file(join(repo, ".git", "info", "exclude")).text()).toContain(".bunker/watch-spend.json");
   });
 
+  test("publishes a budget event at start and when a cap is hit, from the exact spend file", async () => {
+    const { repo } = await setup(three.slice(0, 1));
+    await Bun.write(join(repo, ".bunker", "watch-spend.json"), JSON.stringify([{ at: Date.now() - 3_600_000, usd: 25 }]));
+    const budgets: any[] = [];
+    await runWatch({ ...base, cwd: repo, agent: fakeAgent(), maxCostUsd: 20, forMs: 300, log: () => {}, onEvent: (e) => e.type === "budget" && budgets.push(e.budget) });
+    expect(budgets.length).toBeGreaterThanOrEqual(2);
+    expect(budgets[0].day).toEqual({ spentUsd: 25, capUsd: 20 });
+    expect(budgets.at(-1).pausedUntil).toBeGreaterThan(Date.now());
+  });
+
   test("spend from the last 24 h blocks work; older spend does not", async () => {
     const { repo } = await setup(three.slice(0, 1));
     await Bun.write(join(repo, ".bunker", "watch-spend.json"), JSON.stringify([{ at: Date.now() - 3_600_000, usd: 25 }]));

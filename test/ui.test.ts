@@ -250,3 +250,31 @@ describe("repoIdFromUrl()", () => {
     expect(repoIdFromUrl(undefined, "/x/dir")).toBe("dir");
   });
 });
+
+describe("hub replay of cost events", () => {
+  test("a page opened mid-run gets the latest usage and budget, not every update", async () => {
+    hub = startHub({ port: 0, token: TOKEN });
+    const ev = (e: object) => publish(hub!.url, { repo: "a/one", event: e }, TOKEN);
+    await ev({ type: "stage", issue: 1, name: "implement", at: 1 });
+    for (let i = 1; i <= 5; i++) await ev({ type: "usage", issue: 1, estCostUsd: i, at: 1 + i });
+    for (let i = 1; i <= 3; i++) await ev({ type: "budget", budget: { day: { spentUsd: i }, month: { spentUsd: i } }, at: 10 + i });
+    const late = await connect(hub.viewUrl);
+    await until(() => late.messages.length === 3);
+    await Bun.sleep(50);
+    expect(late.messages.map((m) => m.event.type)).toEqual(["stage", "usage", "budget"]);
+    expect(late.messages[1].event.estCostUsd).toBe(5);
+    expect(late.messages[2].event.budget.day.spentUsd).toBe(3);
+    late.ws.close();
+  });
+
+  test("usage updates don't evict the results that carry the exact cost", async () => {
+    hub = startHub({ port: 0, token: TOKEN, historyLimit: 3 });
+    const ev = (e: object) => publish(hub!.url, { repo: "a/one", event: e }, TOKEN);
+    await ev({ type: "result", issue: 1, costUsd: 2, at: 1 });
+    for (let i = 1; i <= 10; i++) await ev({ type: "usage", issue: 1, estCostUsd: i, at: 1 + i });
+    const late = await connect(hub.viewUrl);
+    await until(() => late.messages.length === 2);
+    expect(late.messages.map((m) => m.event.type)).toEqual(["result", "usage"]);
+    late.ws.close();
+  });
+});
