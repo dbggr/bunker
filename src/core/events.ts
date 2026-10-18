@@ -1,15 +1,18 @@
 import type { Agent } from "../agents/agent.ts";
+import { addTokens, estimateCostUsd, formatTokens, noTokens, type Tokens } from "./pricing.ts";
 /** One thing the agent did, as reported by its streamed output. */
 export type StreamEvent =
   | { type: "text"; text: string }
   | { type: "toolCall"; name: string; summary: string }
+  /** Tokens of one assistant message (`id` repeats across the lines of one message). */
+  | { type: "usage"; id?: string; model?: string; tokens: Tokens }
   | { type: "result"; text: string; usage?: { costUsd: number; durationMs: number } };
 
 export type Stage = "setup" | "audit" | "implement" | "review" | "verify" | "PR" | "waiting for merge" | "merged" | "done" | "failed";
 
 /** Progress from a run. `name` is the stage, or the tool call (e.g. "Edit src/cli.ts"). */
 export interface BunkerEvent {
-  type: "stage" | "text" | "toolCall" | "result" | "meta" | "note";
+  type: "stage" | "text" | "toolCall" | "result" | "meta" | "note" | "usage" | "budget";
   issue?: number;
   /** Index of the task, for runAll(). */
   task?: number;
@@ -24,11 +27,28 @@ export interface BunkerEvent {
   reason?: string;
   /** On "result": what that agent run cost. */
   costUsd?: number;
+  /** On "usage": tokens so far in the running agent call, and their estimated cost (absent for a model without a price). Replaced by the exact `costUsd` of the "result". */
+  tokens?: Tokens;
+  estCostUsd?: number;
+  /** On "budget": the watcher's spend against its caps (exact costs only). */
+  budget?: Budget;
   /** On "meta": the run-log path and the PR URL, once known. */
   logPath?: string;
   url?: string;
   /** Epoch milliseconds. */
   at: number;
+}
+
+export interface BudgetWindow {
+  spentUsd: number;
+  capUsd?: number;
+}
+
+export interface Budget {
+  day: BudgetWindow;
+  month: BudgetWindow;
+  /** Set while a cap has stopped new work: when it resumes (epoch ms). */
+  pausedUntil?: number;
 }
 
 export type OnEvent = (event: BunkerEvent) => void;
@@ -63,6 +83,16 @@ export function parseClaudeStreamLine(line: string): StreamEvent[] {
   }
   if (j.type !== "assistant" || !Array.isArray(j.message?.content)) return [];
   const out: StreamEvent[] = [];
+  const u = j.message.usage;
+  if (u && typeof u === "object") {
+    const n = (v: unknown) => (typeof v === "number" && v > 0 ? v : 0);
+    out.push({
+      type: "usage",
+      ...(typeof j.message.id === "string" ? { id: j.message.id } : {}),
+      ...(typeof j.message.model === "string" ? { model: j.message.model } : {}),
+      tokens: { input: n(u.input_tokens), output: n(u.output_tokens), cacheRead: n(u.cache_read_input_tokens), cacheWrite: n(u.cache_creation_input_tokens) },
+    });
+  }
   for (const block of j.message.content) {
     if (block?.type === "text" && typeof block.text === "string") out.push({ type: "text", text: block.text });
     else if (block?.type === "tool_use" && typeof block.name === "string") {
@@ -122,6 +152,8 @@ export function createProgress({ write, tty, columns = 100 }: ProgressOptions): 
   let live = false;
   let tools = 0;
   let cost = 0;
+  // Running estimate of the agent call in flight, per issue/task; replaced by the exact cost at its result.
+  const running = new Map<string, { usd?: number; tokens: number }>();
   let tool = "";
   let startedAt: number | undefined;
   let where = "";
@@ -139,6 +171,7 @@ export function createProgress({ write, tty, columns = 100 }: ProgressOptions): 
       .filter(Boolean)
       .join(" ");
   const onEvent: OnEvent = (e) => {
+    if (e.type === "budget") return;
     if (e.type === "meta") {
       if (e.url) urls.set(key(e), e.url);
       return;
@@ -165,13 +198,21 @@ export function createProgress({ write, tty, columns = 100 }: ProgressOptions): 
       tools++;
       tool = e.name ?? "";
     }
+    if (e.type === "usage") running.set(key(e), { ...(e.estCostUsd === undefined ? {} : { usd: e.estCostUsd }), tokens: e.tokens ? e.tokens.input + e.tokens.output + e.tokens.cacheRead + e.tokens.cacheWrite : 0 });
     if (e.type === "result") {
       cost += e.costUsd ?? 0;
+      running.delete(key(e));
       tool = "";
     }
     if (!tty) return;
+    const money = () => {
+      const est = [...running.values()];
+      const usd = est.reduce((a, r) => a + (r.usd ?? 0), 0);
+      const unpriced = est.reduce((a, r) => a + (r.usd === undefined ? r.tokens : 0), 0);
+      return [est.some((r) => r.usd !== undefined) ? `~$${(cost + usd).toFixed(2)}` : `$${cost.toFixed(2)}`, unpriced ? `${formatTokens(unpriced)} tok` : ""].filter(Boolean).join(" · ");
+    };
     where = who(e) || where;
-    const line = [where, tool || "thinking", `${tools} tools`, clock(e.at - startedAt), `$${cost.toFixed(2)}`].filter(Boolean).join(" · ");
+    const line = [where, tool || "thinking", `${tools} tools`, clock(e.at - startedAt), money()].filter(Boolean).join(" · ");
     write(`\r\x1b[K${line.length >= columns ? line.slice(0, columns - 1) : line}`);
     live = true;
   };
@@ -227,10 +268,25 @@ export interface EventTarget {
 export function lineHook(agent: Agent, t: EventTarget): ((line: string) => void) | undefined {
   if (!agent.parseLine || (!t.onEvent && !t.onRaw)) return undefined;
   const label = { ...(t.task !== undefined ? { task: t.task } : {}), ...(t.round !== undefined ? { round: t.round } : {}), ...(t.role ? { role: t.role } : {}) };
+  // Per call: the latest tokens of each message, so a message split over several lines counts once.
+  const seen = new Map<string, { model?: string; tokens: Tokens }>();
+  let anon = 0;
   return (line) => {
     t.onRaw?.(line);
     for (const e of agent.parseLine!(line)) {
-      if (e.type === "text") emit(t.onEvent, { type: "text", ...label, text: e.text });
+      if (e.type === "usage") {
+        seen.set(e.id ?? `anon${anon++}`, { ...(e.model ? { model: e.model } : {}), tokens: e.tokens });
+        let tokens = noTokens();
+        let usd: number | undefined;
+        for (const m of seen.values()) {
+          tokens = addTokens(tokens, m.tokens);
+          const c = estimateCostUsd(m.model, m.tokens);
+          if (c !== undefined) usd = (usd ?? 0) + c;
+        }
+        // A message of an unknown model has tokens but no price: the dollar figure would understate, so drop it.
+        const priced = [...seen.values()].every((m) => estimateCostUsd(m.model, m.tokens) !== undefined);
+        emit(t.onEvent, { type: "usage", ...label, tokens, ...(priced && usd !== undefined ? { estCostUsd: usd } : {}) });
+      } else if (e.type === "text") emit(t.onEvent, { type: "text", ...label, text: e.text });
       else if (e.type === "toolCall") emit(t.onEvent, { type: "toolCall", ...label, name: e.summary });
       else emit(t.onEvent, { type: "result", ...label, ...(e.usage ? { costUsd: e.usage.costUsd } : {}) });
     }

@@ -90,7 +90,7 @@ export const viewUrlFor = (port: number, token: string) => `http://${HOST}:${por
  */
 export function startHub({ port = DEFAULT_PORT, token, historyLimit = HISTORY_LIMIT, repoLimit = REPO_LIMIT }: { port?: number; token: string; historyLimit?: number; repoLimit?: number }): Hub {
   // Replayed to late clients; capped per repo so one busy repo can't evict the rest.
-  const history = new Map<string, { seq: number; msg: string }[]>();
+  const history = new Map<string, { seq: number; msg: string; kind?: string | undefined }[]>();
   let seq = 0;
   const server = Bun.serve({
     hostname: HOST,
@@ -119,11 +119,15 @@ export function startHub({ port = DEFAULT_PORT, token, historyLimit = HISTORY_LI
         const repo = redact(body.repo);
         const msg = JSON.stringify({ repo, event: clean(body.event) });
         const list = history.get(repo) ?? [];
+        // A late page needs only the latest usage per run and the latest budget; keeping every one would push results out of the history.
+        const ev = body.event;
+        const kind = ev.type === "budget" ? "budget" : ev.type === "usage" || ev.type === "result" ? `run:${ev.issue}:${ev.task}` : undefined;
+        if (kind) for (let n = list.length - 1; n >= 0; n--) if (list[n]!.kind === (ev.type === "budget" ? "budget" : kind)) list.splice(n, 1);
         // Re-insert so Map order runs from least to most recently active.
         history.delete(repo);
         history.set(repo, list);
         while (history.size > repoLimit) history.delete(history.keys().next().value!);
-        list.push({ seq: seq++, msg });
+        list.push({ seq: seq++, msg, ...(ev.type === "budget" || ev.type === "usage" ? { kind } : {}) });
         if (list.length > historyLimit) list.splice(0, list.length - historyLimit);
         server.publish("events", msg);
         return new Response(null, { status: 204 });

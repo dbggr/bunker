@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { readUserConfig } from "./user-config.ts";
+import type { Budget } from "./events.ts";
 
 export const DAY_MS = 24 * 3_600_000;
 export const MONTH_MS = 30 * DAY_MS;
@@ -87,4 +88,15 @@ export async function loadSpendCaps(env: Record<string, string | undefined> = pr
     caps[field] = v;
   }
   return caps;
+}
+
+/** Exact spend against the caps, as published to the hub; `pausedUntil` is set while a cap has stopped work. */
+export function budgetSnapshot(file: string, caps: SpendCaps): Budget {
+  const win = (ms: number, cap?: number) => ({ spentUsd: spentWithin(file, ms), ...(cap === undefined ? {} : { capUsd: cap }) });
+  const hit = exceededCaps(file, caps);
+  return {
+    day: win(DAY_MS, caps.day),
+    month: win(MONTH_MS, caps.month),
+    ...(hit.length ? { pausedUntil: Math.max(...hit.map((h) => h.liftsAt)) } : {}),
+  };
 }
