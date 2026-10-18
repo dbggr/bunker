@@ -5,7 +5,8 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { noSandbox, type Agent } from "../src/index.ts";
-import { cleanupInterrupted, issueBranch, runIssue } from "../src/issue.ts";
+import { cleanupInterrupted, runIssue } from "../src/issue.ts";
+import { issueBranch } from "../src/github/issues.ts";
 import { output } from "../src/core/output.ts";
 import { createProgress, type BunkerEvent } from "../src/core/events.ts";
 

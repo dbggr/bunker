@@ -2,7 +2,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkLabeler, configAllowedLabelers, enforceLabeler } from "../src/labeler.ts";
+import { checkLabeler, configAllowedLabelers, enforceLabeler } from "../src/github/labeler.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

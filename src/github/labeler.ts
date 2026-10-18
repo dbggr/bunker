@@ -1,5 +1,5 @@
 import { $ } from "bun";
-import { readUserConfig } from "./core/user-config.ts";
+import { readUserConfig } from "../core/user-config.ts";
 
 type Env = Record<string, string>;
 

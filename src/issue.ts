@@ -1,5 +1,9 @@
 import { SEVERITY_HELP, pickFollowUps, type Severity } from "./core/structured.ts";
-import { enforceLabeler, MAINTAINER_ROLES } from "./labeler.ts";
+import { enforceLabeler } from "./github/labeler.ts";
+import { blockerRefs, isDone, isLiveShape, issueBranch, markBlocked, resumeBlocked, type IssueInfo } from "./github/issues.ts";
+import { markTrust, TRUSTED_ASSOCIATIONS } from "./github/trust.ts";
+import { claimRemoteBranch, stamp, waitForMerge, type LeftoverOpts } from "./github/branches.ts";
+import { listQueued } from "./github/queue.ts";
 import { describeQueue, orderQueue, PRIORITY_LABELS, type Queued } from "./core/priority.ts";
 import { $ } from "bun";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -19,20 +23,6 @@ import { runSetup, worktreeAdmin } from "./worktree/admin.ts";
 import { isolatedEnv } from "./sandboxes/env.ts";
 import { stepLimits, timeoutMessage, type Timeouts, type Sandbox } from "./sandboxes/exec.ts";
 import type { Agent, Usage } from "./agents/agent.ts";
-
-export interface IssueInfo {
-  number: number;
-  title: string;
-  body: string;
-  author?: { login?: string } | null;
-  authorAssociation?: string;
-  state: string;
-  labels: { name: string }[];
-  /** Oldest first, as `gh issue view --json comments` returns them. */
-  comments?: { author?: { login?: string } | null; authorAssociation?: string; body: string; trusted?: boolean }[];
-  /** Set by `markTrust`: the body's author has admin/maintain permission. */
-  bodyTrusted?: boolean;
-}
 
 export interface IssueOptions extends Timeouts {
   issue: number;
@@ -99,8 +89,6 @@ export interface IssueResult {
   filed: { number: number; title: string }[];
 }
 
-const CONVENTIONAL_PREFIX = /^\s*(feat|fix|chore|docs|refactor|test|perf|build|ci|style|revert)(\([^)]*\))?!?:\s*/i;
-const MAX_SLUG = 40;
 const VERIFY_TAIL = 2000;
 /** Follow-ups filed per issue run. */
 const MAX_FOLLOW_UPS = 1;
@@ -141,42 +129,6 @@ function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: st
 
 const isPlaceholder = (title: string) => !/[\p{L}\p{N}]/u.test(title) || title.toLowerCase() === "short title";
 
-const isObj = (x: unknown): x is Record<string, unknown> => x !== null && typeof x === "object";
-
-/** True when a parsed `gh issue view` response has every field runQueue reads in a usable shape. */
-function isLiveShape(live: Record<string, unknown>): boolean {
-  const { labels, body, comments } = live;
-  return (
-    Array.isArray(labels) && labels.every(isObj) &&
-    (body == null || typeof body === "string") &&
-    (comments == null || (Array.isArray(comments) && comments.every((c) => isObj(c) && typeof c.body === "string")))
-  );
-}
-
-/** Issue numbers named by `Blocked by #N` / `Depends on #N` (case-insensitive) in the body (if its author is trusted) and trusted comments. */
-export function blockerRefs(issue: Pick<IssueInfo, "body" | "comments" | "bodyTrusted">): number[] {
-  const texts = [...(issue.bodyTrusted ? [issue.body ?? ""] : []), ...(issue.comments ?? []).filter((c) => c.trusted).map((c) => c.body)];
-  const refs = new Set<number>();
-  for (const t of texts) for (const m of t.matchAll(/\b(?:blocked\s+by|depends\s+on)\s+#(\d+)/gi)) refs.add(Number(m[1]));
-  return [...refs];
-}
-
-/** `fix/<N>-<slug>` for a bug-labelled issue, else `feature/<N>-<slug>`. */
-export function issueBranch(issue: Pick<IssueInfo, "number" | "title" | "labels">): { branch: string; slug: string } {
-  let slug = issue.title
-    .replace(CONVENTIONAL_PREFIX, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  if (slug.length > MAX_SLUG) {
-    // Cut at a word boundary; a single over-long word is cut hard.
-    const cut = slug.lastIndexOf("-", MAX_SLUG);
-    slug = slug.slice(0, cut > 0 ? cut : MAX_SLUG);
-  }
-  const type = issue.labels.some((l) => l.name === "bug") ? "fix" : "feature";
-  return { branch: `${type}/${issue.number}-${slug}`, slug };
-}
-
 /** Model label for the PR body, which must never mention the agent vendor. */
 const prModel = (a: Agent): string => a.model || "account default";
 
@@ -187,125 +139,6 @@ function reviewLines(result: ReviewResult, agent: Agent, reviewer: Agent): strin
 }
 
 const notFiledLines = (items: { title: string; severity?: string }[]) => items.map((f) => `- ${codeSpan(f.title)} (${f.severity ?? "medium"})`).join("\n");
-
-const BLOCKED_LABEL = "bunker-blocked";
-
-type Env = Record<string, string>;
-
-/** Swaps `bunker` for `bunker-blocked` on the issue and says what it waits on. */
-async function markBlocked(issue: number, blocker: { number: number; title: string }, cwd: string, env: Env, mention?: string): Promise<void> {
-  await $`gh label create ${BLOCKED_LABEL} --description ${"waiting on another issue; bunker relabels it `bunker` once that is closed"} --color FBCA04`.cwd(cwd).env(env).nothrow().quiet();
-  const edit = await $`gh issue edit ${issue} --remove-label bunker --add-label ${BLOCKED_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
-  if (edit.exitCode !== 0) output.warn(`bunker: could not relabel #${issue}: ${edit.stderr.toString().trim()}`);
-  await $`gh issue comment ${issue} --body ${`${mention ? `${mention} ` : ""}Blocked by #${blocker.number}: ${codeSpan(blocker.title)}`}`.cwd(cwd).env(env).nothrow().quiet();
-}
-
-/** Whether #n is closed (any reason, incl. not planned: a rejected blocker no longer blocks); undefined if gh can't say. */
-async function isDone(n: number, cwd: string, env: Env): Promise<boolean | undefined> {
-  const v = await $`gh issue view ${n} --json state`.cwd(cwd).env(env).nothrow().quiet();
-  if (v.exitCode !== 0) return undefined;
-  try {
-    const j = JSON.parse(v.stdout.toString()) as { state: string };
-    return j.state.toUpperCase() === "CLOSED";
-  } catch {
-    return undefined;
-  }
-}
-
-/** Open issues labelled `bunker-blocked` whose blockers are all closed go back to `bunker`. Best effort. */
-export async function resumeBlocked(cwd: string, env: Env): Promise<Queued[]> {
-  const list = await $`gh issue list --label ${BLOCKED_LABEL} --state open --limit 1000 --json number,title,createdAt`.cwd(cwd).env(env).nothrow().quiet();
-  if (list.exitCode !== 0) return [];
-  let found: { number: number; title?: unknown; createdAt?: unknown }[];
-  try {
-    found = JSON.parse(list.stdout.toString());
-  } catch {
-    return [];
-  }
-  const resumed: Queued[] = [];
-  for (const { number: n, title, createdAt } of found) {
-    const v = await $`gh issue view ${n} --json body,author,comments,state,labels`.cwd(cwd).env(env).nothrow().quiet();
-    if (v.exitCode !== 0) continue;
-    let info: IssueInfo;
-    try {
-      info = JSON.parse(v.stdout.toString());
-    } catch {
-      continue;
-    }
-    if (info.state.toUpperCase() !== "OPEN" || !info.labels.some((l) => l.name === BLOCKED_LABEL)) continue;
-    await markTrust(info, cwd, env);
-    const refs = blockerRefs(info);
-    if (!refs.length) continue;
-    const states = await Promise.all(refs.map((r) => isDone(r, cwd, env)));
-    if (!states.every((s) => s === true)) continue;
-    const edit = await $`gh issue edit ${n} --remove-label ${BLOCKED_LABEL} --add-label bunker`.cwd(cwd).env(env).nothrow().quiet();
-    if (edit.exitCode !== 0) continue;
-    await $`gh issue comment ${n} --body ${`Unblocked: ${refs.map((r) => `#${r}`).join(", ")} ${refs.length === 1 ? "is" : "are"} closed`}`.cwd(cwd).env(env).nothrow().quiet();
-    resumed.push({ number: n, title: typeof title === "string" ? title : "", createdAt: typeof createdAt === "string" ? createdAt : "", labels: [{ name: "bunker" }] });
-  }
-  return resumed;
-}
-
-/** Polls the PR (Pull requests: Read only) until GitHub merged or closed it, or the timeout passed. */
-async function waitForMerge(
-  prUrl: string,
-  cwd: string,
-  env: Record<string, string>,
-  timeoutMs: number,
-  pollMs: number,
-): Promise<{ outcome: "merged" | "closed" | "timeout"; detail?: string }> {
-  const deadline = Date.now() + timeoutMs;
-  let lastError = "";
-  for (;;) {
-    const view = await $`gh pr view ${prUrl} --json state,mergeCommit`.cwd(cwd).env(env).nothrow().quiet();
-    if (view.exitCode === 0) {
-      try {
-        const state = JSON.parse(view.stdout.toString()).state;
-        if (state === "MERGED") return { outcome: "merged" };
-        if (state === "CLOSED") return { outcome: "closed", detail: "the PR was closed without merging (state: CLOSED)" };
-        lastError = "";
-      } catch {
-        lastError = "unparseable gh pr view response";
-      }
-    } else {
-      lastError = `gh pr view failed (exit ${view.exitCode}): ${view.stderr}`.trimEnd();
-    }
-    if (Date.now() >= deadline) {
-      return { outcome: "timeout", detail: `PR not merged after ${timeoutMs / 60_000} min; auto-merge stays armed on the PR${lastError ? `\n${lastError}` : ""}` };
-    }
-    await Bun.sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
-  }
-}
-
-/** Authors whose issue body is shown unfenced; anyone else can open an issue on a public repo. */
-const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
-/** Associations worth a permission lookup before trusting a comment. */
-const MAYBE_TRUSTED = new Set(["MEMBER", "COLLABORATOR"]);
-
-/**
- * Sets `trusted` on each comment and `bodyTrusted` on the issue: only the repo owner and users with admin/maintain permission
- * count (a read/triage collaborator does not). Fails closed when the permission lookup fails. The body needs `author`.
- */
-export async function markTrust(info: Pick<IssueInfo, "author" | "comments" | "bodyTrusted">, cwd: string, env: Record<string, string | undefined>): Promise<void> {
-  const cache = new Map<string, Promise<boolean>>();
-  const maintainer = (login: string | undefined) => {
-    if (!login) return Promise.resolve(false);
-    let p = cache.get(login);
-    if (!p) {
-      p = (async () => {
-        const perm = await $`gh api repos/{owner}/{repo}/collaborators/${login}/permission --jq .role_name`.cwd(cwd).env(env as Record<string, string>).nothrow().quiet();
-        return perm.exitCode === 0 && MAINTAINER_ROLES.has(perm.stdout.toString().trim());
-      })();
-      cache.set(login, p);
-    }
-    return p;
-  };
-  info.bodyTrusted = await maintainer(info.author?.login);
-  await Promise.all((info.comments ?? []).map(async (c) => {
-    const assoc = c.authorAssociation ?? "";
-    c.trusted = assoc === "OWNER" || (MAYBE_TRUSTED.has(assoc) && (await maintainer(c.author?.login)));
-  }));
-}
 
 /** The issue's title and body as prompt text; fenced and flagged as untrusted unless the author is trusted. */
 function issueSection(number: number, issue: IssueInfo): string {
@@ -394,39 +227,6 @@ export async function runIssue(opts: IssueOptions): Promise<IssueResult> {
  * under a `bunker/stale/<n>-<timestamp>` tag; an open PR on origin means the issue is already being handled.
  * Only ever touches `{feature|fix}/<n>-<slug>` for this issue.
  */
-type LeftoverOpts = { repo: string; cwd: string; number: number; branch: string; worktree: string; baseSha: string; remote: string; gitCfg: string[]; env: Record<string, string>; log: (t: string, s?: string) => void; onEvent?: OnEvent };
-
-/**
- * Deal with origin's copy of this issue's branch: an open PR means the issue is already being handled; otherwise the
- * remote tip is kept under a tag and its sha returned, so the push can replace it with a lease on exactly that sha.
- */
-async function claimRemoteBranch(o: LeftoverOpts): Promise<{ prUrl?: string; remoteSha?: string }> {
-  const { repo, number, branch } = o;
-  if (!new RegExp(`^(feature|fix)/${number}-[a-z0-9-]*$`).test(branch)) return {};
-  const remoteSha = (await $`git ${o.gitCfg} -C ${repo} ls-remote --heads ${o.remote} ${`refs/heads/${branch}`}`.env(o.env).nothrow().quiet()).stdout.toString().trim().split(/\s+/)[0] || undefined;
-  if (remoteSha) {
-    const prs = await $`gh pr list --head ${branch} --state open --json url`.cwd(o.cwd).env(o.env).nothrow().quiet();
-    // Only a successful lookup with an empty list means "no open PR"; anything else must not lead to replacing the branch.
-    let list: { url?: string }[] | undefined;
-    try {
-      if (prs.exitCode === 0) list = JSON.parse(prs.stdout.toString());
-    } catch {}
-    if (!Array.isArray(list)) throw new Error(`could not check for an open PR on ${branch} of #${number}:\n${prs.stderr}`);
-    const url = list[0]?.url;
-    if (url) {
-      emit(o.onEvent, { type: "note", text: `#${number} is already in progress: ${url}` });
-      return { prUrl: url };
-    }
-    // No open PR (e.g. a closed one): keep the remote tip under a tag; the push will replace it.
-    const tag = `bunker/stale/${number}-remote-${stamp()}`;
-    const kept = await $`git ${o.gitCfg} -C ${repo} fetch -q ${o.remote} ${`refs/heads/${branch}:refs/tags/${tag}`}`.env(o.env).nothrow().quiet();
-    if (kept.exitCode !== 0) throw new Error(`could not keep origin's ${branch} of #${number} as ${tag}:\n${kept.stderr}`);
-    o.log("stale remote branch kept", tag);
-    emit(o.onEvent, { type: "note", text: `#${number}: origin already has ${branch} without an open PR; kept it as tag ${tag} and will replace it` });
-  }
-  return { remoteSha };
-}
-
 async function reclaimLeftover(o: LeftoverOpts): Promise<{ prUrl?: string; remoteSha?: string }> {
   const { repo, number, branch, worktree, baseSha } = o;
   if (!new RegExp(`^(feature|fix)/${number}-[a-z0-9-]*$`).test(branch)) return {};
@@ -461,8 +261,6 @@ async function reclaimLeftover(o: LeftoverOpts): Promise<{ prUrl?: string; remot
   if (hasBranch) await worktreeAdmin(repo, () => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
   return { remoteSha };
 }
-
-export const stamp = () => new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 
 async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyOnHost, verifyNetwork, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, mention, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
@@ -852,51 +650,6 @@ async function runIssueInner({ issue: number, cwd = process.cwd(), agent, review
     return fail("merged", opened);
   };
   return merge && mergeTurn ? mergeTurn(publish) : publish();
-}
-
-export async function listQueued(cwd: string, env: Env): Promise<Queued[]> {
-  const list = await $`gh issue list --label bunker --state open --limit 1000 --json number,title,createdAt,labels`.cwd(cwd).env(env).nothrow().quiet();
-  // A transient failure of one list must not abort the queue; the other list may still succeed.
-  if (list.exitCode !== 0) {
-    output.warn(`bunker: gh issue list failed:\n${list.stderr}`);
-    return [];
-  }
-  try {
-    const parsed: unknown = JSON.parse(list.stdout.toString());
-    if (!Array.isArray(parsed)) throw new Error("not an array");
-    return parsed.filter((i): i is Queued => i !== null && typeof i === "object" && typeof i.number === "number" && typeof i.title === "string" && typeof i.createdAt === "string").map((i) => ({ ...i, labels: Array.isArray(i.labels) ? i.labels.filter((l) => l !== null && typeof l === "object" && typeof l.name === "string") : [] }));
-  } catch {
-    output.warn("bunker: gh issue list returned unparseable output");
-    return [];
-  }
-}
-
-/** Open `bunker` issues that could start now: not in `skip`, not waiting on an open `Blocked by #N` issue. */
-export async function countWaiting(cwd: string, env: Env, skip: (issue: number) => boolean | Promise<boolean> = () => false): Promise<number> {
-  let n = 0;
-  for (const q of await listQueued(cwd, env)) {
-    if (await skip(q.number)) continue;
-    const view = await $`gh issue view ${q.number} --json state,labels,body,author,comments`.cwd(cwd).env(env).nothrow().quiet();
-    if (view.exitCode !== 0) continue;
-    let live: Pick<IssueInfo, "state" | "labels" | "body" | "author" | "comments" | "bodyTrusted">;
-    try {
-      live = JSON.parse(view.stdout.toString());
-      if (live === null || typeof live !== "object" || !isLiveShape(live)) continue;
-    } catch {
-      continue;
-    }
-    if (live.state !== "OPEN" || !live.labels.some((l) => l.name === "bunker")) continue;
-    let blocked = false;
-    await markTrust(live, cwd, env);
-    for (const ref of blockerRefs(live)) {
-      if ((await isDone(ref, cwd, env)) === false) {
-        blocked = true;
-        break;
-      }
-    }
-    if (!blocked) n++;
-  }
-  return n;
 }
 
 export interface QueueOptions extends Omit<IssueOptions, "issue"> {

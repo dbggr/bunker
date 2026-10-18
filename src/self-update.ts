@@ -3,7 +3,7 @@ import { accessSync, constants, copyFileSync, existsSync, mkdirSync, mkdtempSync
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { buildLabel, bunkerHome } from "./build-info.ts";
-import { pullBlocker, safePull } from "./pull.ts";
+import { pullBlocker, safePull } from "./github/pull.ts";
 import { alive } from "./watch.ts";
 
 const version = (home: string) => {

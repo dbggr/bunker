@@ -3,8 +3,8 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realp
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { alive } from "./watch.ts";
-import { defaultBranchOf } from "./pull.ts";
-import { stamp } from "./issue.ts";
+import { defaultBranchOf } from "./github/pull.ts";
+import { stamp } from "./github/branches.ts";
 import { worktreeAdmin } from "./worktree/admin.ts";
 
 export interface CleanOptions {
