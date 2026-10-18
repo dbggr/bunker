@@ -26,5 +26,7 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
-  }
+  },
+  // The docs site has its own package and toolchain (site/package.json).
+  "exclude": ["site", "node_modules", "dist"]
 }
