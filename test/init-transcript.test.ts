@@ -71,7 +71,7 @@ describe("transcript: fresh Node repo with no lockfile", () => {
     expect(t).toContain("[5/8] Sandbox image");
     expect(t).toMatch(/Why this matters:/);
     expect(t).toContain("▰▰▰▰▱▱▱▱ 4 of 8");
-    expect(t).toContain("Detected npm");
+    expect(t).toContain("Chosen: npm");
     expect(t).toContain("no lockfile");
     const toml = Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text());
     expect(toml).toEqual({ setup: "npm install", verify: "npm test" });
@@ -108,7 +108,7 @@ describe("transcript: unknown toolchain", () => {
     const s = scripted({ answers: [[/^Setup command/, "make deps"], [/^Verify command/, "make test"]] });
     const sb = fakeSandbox();
     await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io, sandbox: sb.sandbox });
-    expect(s.text()).toContain("Couldn't recognise the toolchain");
+    expect(s.text()).toContain("Custom commands:");
     expect(Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text())).toEqual({ setup: "make deps", verify: "make test" });
     expect(sb.calls.map((c) => c.cmd)).toEqual(["(make deps) 2>&1", "(make test) 2>&1"]);
   });
@@ -122,10 +122,47 @@ describe("transcript: unknown toolchain", () => {
   });
   test("several candidates: asks which, listing them", async () => {
     const w = await repoWith({ "package.json": JSON.stringify({ scripts: { test: "x" } }), "package-lock.json": "{}", "pyproject.toml": "" });
-    const s = scripted({ answers: [[/Which one/, "2"]] });
+    const s = scripted({ answers: [[/^Numbers/, "6"]] });
     await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io, sandbox: fakeSandbox().sandbox });
-    expect(s.text()).toMatch(/1\) npm[\s\S]*2\) python/);
+    expect(s.text()).toMatch(/\[x\] 2\) npm[\s\S]*\[x\] 6\) python/);
     expect(Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text())).toMatchObject({ verify: "pytest" });
+  });
+  test("presets: detected are pre-selected, nothing detected selects nothing", async () => {
+    const w = await repoWith({ "package.json": JSON.stringify({ scripts: { test: "x" } }), "package-lock.json": "{}" });
+    const s = scripted();
+    await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io, sandbox: fakeSandbox().sandbox });
+    expect(s.text()).toContain("[ ] 1) bun: setup bun install --frozen-lockfile, verify bun test");
+    expect(s.text()).toContain("[x] 2) npm");
+    expect(s.text()).not.toMatch(/\[x\] \d\) (bun|php|go)/);
+    expect(s.text()).toMatch(/customi[sz]e[\s\S]*\.bunker\/config\.toml[\s\S]*verify = "npm test"/i);
+    const n = await repoWith({ Makefile: "x" });
+    const t = scripted();
+    await runInit({ cwd: n.repo, env: n.env, yes: false, io: t.io, sandbox: fakeSandbox().sandbox });
+    expect(t.text()).not.toContain("[x]");
+    expect(t.text()).toContain("custom");
+  });
+  test("presets: several picks combine with && in list order, Dockerfile from each", async () => {
+    const w = await repoWith({ Makefile: "x" });
+    const s = scripted({ answers: [[/^Numbers/, "6 1"]] });
+    await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io, sandbox: fakeSandbox().sandbox });
+    const toml = Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text());
+    expect(toml).toEqual({ setup: "bun install --frozen-lockfile && pip install -r requirements.txt", verify: "bun test && pytest" });
+    const df = await Bun.file(join(w.repo, ".bunker/Dockerfile")).text();
+    expect(df).toContain("oven/bun");
+    expect(df).toContain("python3");
+  });
+  test("presets: custom keeps the free-text prompts, even when something is detected", async () => {
+    const w = await repoWith({ "package-lock.json": "{}", "package.json": "{}" });
+    const s = scripted({ answers: [[/^Numbers/, "custom"], [/^Setup command/, "make deps"], [/^Verify command/, "make test"]] });
+    await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io, sandbox: fakeSandbox().sandbox });
+    expect(Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text())).toEqual({ setup: "make deps", verify: "make test" });
+  });
+  test("presets: --yes asks nothing and uses the detected toolchain", async () => {
+    const w = await repoWith({ "package.json": JSON.stringify({ scripts: { test: "x" } }), "package-lock.json": "{}" });
+    const s = scripted();
+    await runInit({ cwd: w.repo, env: w.env, yes: true, io: s.io, sandbox: fakeSandbox().sandbox });
+    expect(s.asked.filter((q) => /^Numbers/.test(q))).toEqual([]);
+    expect(Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text())).toEqual({ setup: "npm ci", verify: "npm test" });
   });
   test("monorepo: asks which package", async () => {
     const w = await repoWith({ "package.json": JSON.stringify({ workspaces: ["packages/*"] }), "package-lock.json": "{}", "packages/a/package.json": JSON.stringify({ name: "@x/a", scripts: { test: "x" } }), "packages/b/package.json": JSON.stringify({ name: "@x/b" }) });

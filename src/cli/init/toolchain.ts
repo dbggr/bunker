@@ -86,6 +86,36 @@ export function detectToolchains(root: string): Toolchain[] {
   return out;
 }
 
+/** Generic presets the init toolchain step offers, in list order (detection refines the commands of the ones it finds). */
+export function toolchainPresets(): Toolchain[] {
+  const node = (name: string, setup: string, dockerfile: string): Toolchain => ({ name, setup, verify: `${name} test`, dockerfile });
+  return [
+    node("bun", "bun install --frozen-lockfile", BUN_RUNTIME),
+    node("npm", "npm install", NODE_RUNTIME),
+    node("pnpm", "pnpm install --frozen-lockfile", `${NODE_RUNTIME}\nRUN corepack enable`),
+    node("yarn", "yarn install --frozen-lockfile", `${NODE_RUNTIME}\nRUN corepack enable`),
+    { name: "php", setup: "composer install --no-interaction", verify: "composer test", dockerfile: `${apt("php-cli php-xml php-mbstring unzip")}\nCOPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer` },
+    { name: "python", setup: "pip install -r requirements.txt", verify: "pytest", dockerfile: apt("python3 python3-pip python3-venv") },
+    { name: "rust", setup: "cargo fetch", verify: "cargo test", dockerfile: apt("cargo") },
+    { name: "go", setup: "go mod download", verify: "go test ./...", dockerfile: "COPY --from=golang:1.23 /usr/local/go /usr/local/go\nENV PATH=/usr/local/go/bin:$PATH" },
+  ];
+}
+
+/** Several toolchains as one: setup and verify joined with `&&` in the given order, Dockerfile lines from each (repeats dropped). */
+export function combineToolchains(list: Toolchain[]): Toolchain | undefined {
+  if (list.length <= 1) return list[0];
+  const seen = new Set<string>();
+  const dockerfile = list.flatMap((t) => t.dockerfile.split("\n")).filter((l) => !seen.has(l) && !!seen.add(l)).join("\n");
+  const notes = list.map((t) => t.note).filter(Boolean);
+  return {
+    name: list.map((t) => t.name).join("+"),
+    setup: list.map((t) => t.setup).filter(Boolean).join(" && "),
+    verify: list.map((t) => t.verify).filter(Boolean).join(" && "),
+    dockerfile,
+    ...(notes.length ? { note: notes.join("; ") } : {}),
+  };
+}
+
 /** The most likely toolchain, or undefined. */
 export const detectToolchain = async (root: string): Promise<Toolchain | undefined> => detectToolchains(root)[0];
 
@@ -138,7 +168,7 @@ export function ciWorkflow(tc: Toolchain, branch: string): string {
     go: ["- uses: actions/setup-go@v5", "  with:", "    go-version: stable"],
     rust: [],
   };
-  const steps = ["- uses: actions/checkout@v4", ...(uses[tc.name] ?? []), `- run: ${JSON.stringify(tc.setup)}`, `- run: ${JSON.stringify(tc.verify)}`];
+  const steps = ["- uses: actions/checkout@v4", ...tc.name.split("+").flatMap((n) => uses[n] ?? []), `- run: ${JSON.stringify(tc.setup)}`, `- run: ${JSON.stringify(tc.verify)}`];
   return [
     "# Written by `bunker init`. bunker merges only when this job (`test`) passes, so keep the job name.",
     "name: CI",
