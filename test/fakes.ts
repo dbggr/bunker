@@ -57,7 +57,8 @@ esac`,
     "pulls.json": "[]",
     "branch.json": "{}",
     "labels.json": JSON.stringify(["bunker:queued", "bunker:in-progress", "bunker:failed", "bunker:review", "discovered", "bunker-blocked", "priority:high", "priority:medium", "priority:low"].map((name) => ({ name }))),
-    "protection.json": JSON.stringify({ contexts: ["test"], checks: [{ context: "test" }] }),
+    "protection.json": "",
+    "rules.json": JSON.stringify([{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "test" }] } }]),
     ...opts.files,
   };
   for (const [name, content] of Object.entries(good)) if (content !== "") await Bun.write(join(data, name), content);
