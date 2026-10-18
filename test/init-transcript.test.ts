@@ -449,14 +449,23 @@ describe("toolchain detection", () => {
     expect(tc).toMatchObject({ setup: "composer install --no-interaction", verify: "composer test" });
     expect(tc.dockerfile).toContain("php8.2-cli");
   });
-  test("php: tests that need a database get no verify and a note", async () => {
+  test("php: tests that need a database get a DB-free verify and a note that tests are left to CI", async () => {
     const ci = await at({ "composer.json": "{}", ".github/workflows/ci.yml": "jobs:\n  t:\n    services:\n      postgres:\n        image: postgres:18.1-alpine\n" });
-    expect(detectToolchains(ci)[0]).toMatchObject({ verify: "" });
-    expect(detectToolchains(ci)[0]!.note).toMatch(/database/i);
-    const env = await at({ "composer.json": "{}", ".env.test": "DATABASE_URL=postgresql://app:pw@database:5432/app\n" });
-    expect(detectToolchains(env)[0]!.verify).toBe("");
+    expect(detectToolchains(ci)[0]).toMatchObject({ verify: "composer validate --no-check-publish" });
+    expect(detectToolchains(ci)[0]!.note).toMatch(/database.*CI/is);
+    const sf = await at({ "backend/composer.json": "{}", "backend/bin/console": "", "backend/config/services.yaml": "", "backend/.env.test": "DATABASE_URL=postgresql://app:pw@database:5432/app\n" });
+    expect(detectToolchains(sf)[0]!.verify).toBe("cd backend && composer validate --no-check-publish && php bin/console lint:container && php bin/console lint:yaml config");
     const local = await at({ "composer.json": "{}", ".env.test": "DATABASE_URL=sqlite:///var/test.db\n" });
-    expect(detectToolchains(local)[0]!.verify).not.toBe("");
+    expect(detectToolchains(local)[0]!.verify).toBe("vendor/bin/phpunit");
+  });
+  test("a gitignored .env beside composer.json that exists locally is proposed as copy", async () => {
+    const w = await repoWith({ ".gitignore": "backend/.env\n", "backend/composer.json": "{}" });
+    await Bun.write(join(w.repo, "backend/.env"), "APP_ENV=dev\n");
+    expect(detectToolchains(w.repo)[0]!.copy).toEqual(["backend/.env"]);
+    const tracked = await repoWith({ "backend/composer.json": "{}", "backend/.env": "A=1\n" });
+    expect(detectToolchains(tracked.repo)[0]!.copy).toBeUndefined();
+    const absent = await repoWith({ ".gitignore": "backend/.env\n", "backend/composer.json": "{}" });
+    expect(detectToolchains(absent.repo)[0]!.copy).toBeUndefined();
   });
   test("a placeholder test script falls back to build, with a note", async () => {
     const tc = detectToolchains(await at({ "package.json": JSON.stringify({ scripts: { test: 'echo "Error: no test specified" && exit 1', build: "tsc" } }), "package-lock.json": "{}" }))[0]!;
@@ -469,6 +478,35 @@ describe("toolchain detection", () => {
     expect(pkgs).toEqual([{ dir: "apps/web", name: "web" }, { dir: "libs/core", name: "core" }]);
     const tc = detectToolchains(root)[0]!;
     expect(forPackage(root, tc, pkgs[1]!).verify).toBe("pnpm --filter ./libs/core run build");
+  });
+});
+
+describe("transcript: Symfony in a subdirectory, gitignored .env, DB-backed tests", () => {
+  test("writes copy and a DB-free verify; the dry run sees the copied .env", async () => {
+    const w = await repoWith({
+      ".gitignore": "backend/.env\n",
+      "backend/composer.json": JSON.stringify({ require: { php: ">=8.2" } }),
+      "backend/bin/console": "",
+      "backend/config/services.yaml": "",
+      "backend/.env.test": "DATABASE_URL=postgresql://app:pw@database:5432/app\n",
+    });
+    await Bun.write(join(w.repo, "backend/.env"), "APP_ENV=dev\n");
+    const seen: boolean[] = [];
+    const sandbox: Sandbox = {
+      exec: async (_cmd, ctx) => {
+        seen.push(await exists(join(ctx.worktree, "backend/.env")));
+        return { code: 0, stdout: "" };
+      },
+    };
+    const s = scripted();
+    await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io, sandbox, runBunker: async () => 0 });
+    const toml = Bun.TOML.parse(await Bun.file(join(w.repo, ".bunker/config.toml")).text()) as Record<string, unknown>;
+    expect(toml.setup).toBe("cd backend && composer install --no-interaction");
+    expect(toml.copy).toEqual(["backend/.env"]);
+    expect(String(toml.verify)).toContain("php bin/console lint:container");
+    expect(seen).toEqual([true, true]);
+    expect(s.text()).toMatch(/CI/);
+    expect(s.text()).toContain("setup and verify pass in the sandbox");
   });
 });
 
