@@ -32,7 +32,6 @@ export const options = {
   watch: { type: "boolean", default: false },
   interval: { type: "string" },
   for: { type: "string" },
-  "max-cost": { type: "string" },
   "max-cost-day": { type: "string" },
   "max-cost-month": { type: "string" },
   "audit-every": { type: "string" },

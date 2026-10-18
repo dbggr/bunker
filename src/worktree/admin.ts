@@ -19,7 +19,7 @@ export async function repoInfo(cwd: string) {
 
 /**
  * Runs the setup step in `worktree`, inside `sandbox`: `setup` if given, else the repo's
- * `.bunker/setup` script if present. Returns undefined when there is no setup, else the command result.
+ * `setup` from .bunker/config.toml. Returns undefined when there is no setup, else the command result.
  * Rejects with ConfigError if `.bunker/config.toml` is invalid.
  */
 export async function runSetup(
@@ -28,7 +28,7 @@ export async function runSetup(
   setup?: string,
   timeouts: Timeouts = {},
 ): Promise<{ cmd: string; code: number; stdout: string; timedOut?: "idle" | "step" } | undefined> {
-  const cmd = setup ?? (await loadRepoConfig(ctx.worktree).then((c) => c.config.setup ?? c.legacy.setup));
+  const cmd = setup ?? (await loadRepoConfig(ctx.worktree).then((c) => c.config.setup));
   if (!cmd) return undefined;
   const out = await sandbox.exec(["sh", "-c", `(${cmd}) 2>&1`], { ...ctx, limits: stepLimits(timeouts) });
   return { cmd, ...out };

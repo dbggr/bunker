@@ -59,8 +59,8 @@ issue and queue:
                              Merges stay serial, in queue order: each PR's branch is first updated to the latest default
                              branch and re-verified; a conflict or failure then gets one fresh attempt from the new main.
                              Trade-off: more concurrent spend, and rework when issues touch the same files; 2 is a good choice
-  --setup "<cmd>"            run in the worktree before the agent (default: setup in config.toml, else .bunker/setup)
-  --verify "<cmd>"           run after approval; a failure stops before pushing (default: verify in config.toml, else .bunker/verify)
+  --setup "<cmd>"            run in the worktree before the agent (default: setup in config.toml)
+  --verify "<cmd>"           run after approval; a failure stops before pushing (default: verify in config.toml)
   --verify-on-host           run --verify on the host instead of in the sandbox
   --merge                    auto-merge the PR once checks pass (requires --verify or verify in config.toml)
   --ci-timeout <min>         (--merge) minutes to wait for the merge (default 30); under watch the shepherd waits, not the run
@@ -86,7 +86,7 @@ watch:
                              blocked comments @-mention notify.github_user (default: the repo owner, if a user account)
   --max-cost-day <usd>       stop starting issues once this much (notional USD, as \`claude -p\` reports it) was spent in a rolling 24 h,
                              then sleep until the window frees up; kept in .bunker/watch-spend.json (default: no cap).
-                             Also max_cost_day in ~/.config/bunker/config.toml. \`--max-cost\` is an alias
+                             Also max_cost_day in ~/.config/bunker/config.toml
   --max-cost-month <usd>     same for a rolling 30 days (default: no cap; config.toml: max_cost_month)
   --audit-every <days>       also run audit at most once per this many days, kept in .bunker/watch-state.json (default off; 30 is a good value)
   --triage-every <hours>     also run triage at most once per this many hours, comment and close only (default off)
@@ -155,9 +155,9 @@ clean:
   current run's /tmp/bunker-* worktree and bunker/<id> branch if it has no commits.
 
 Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a separate file):
-  Precedence: CLI flag > env var > config.toml > legacy files (.bunker/setup, verify, copy) > built-in default.
-  Legacy files keep working but are deprecated (a note is printed when both exist). Unknown keys warn; a key of
-  the wrong type exits 2.
+  Precedence: CLI flag > env var > config.toml > .bunker/copy > built-in default.
+  A leftover .bunker/setup or .bunker/verify file is an error: move it into config.toml. Unknown keys warn; a key
+  of the wrong type exits 2.
   Keys (tables: [models], [skills], [watch], [merge], [clean], [notify]):
 ${CONFIG_HELP}
 
@@ -208,8 +208,8 @@ const COMMON_OPTIONS = `Common options:
 const ROUND_OPTIONS = `  --max-rounds <n>           review rounds before giving up (default 2)
   --reviewer-model <id>      model for the reviewer
   --no-resume                start every implementer round in a fresh agent session`;
-const PIPELINE_OPTIONS = `  --setup "<cmd>"            run in the worktree before the agent (default: setup in config.toml, else .bunker/setup)
-  --verify "<cmd>"           run after approval; a failure stops before pushing (default: verify in config.toml, else .bunker/verify)
+const PIPELINE_OPTIONS = `  --setup "<cmd>"            run in the worktree before the agent (default: setup in config.toml)
+  --verify "<cmd>"           run after approval; a failure stops before pushing (default: verify in config.toml)
   --verify-on-host           run --verify on the host instead of in the sandbox
   --merge                    auto-merge the PR once checks pass (requires --verify or verify in config.toml)
   --ci-timeout <min>         (--merge) minutes to wait for the merge (default 30)
@@ -250,7 +250,7 @@ Keep working the queue unattended, auto-merging, until Ctrl-C. Needs --verify or
 Options:
   --interval <min>           minutes to sleep when no work is waiting (default 10)
   --for <duration>           stop starting new issues after this long, e.g. 5h, 90m, 2h30m
-  --max-cost-day <usd>       stop starting issues once this much was spent in a rolling 24 h (\`--max-cost\` is an alias)
+  --max-cost-day <usd>       stop starting issues once this much was spent in a rolling 24 h
   --max-cost-month <usd>     same for a rolling 30 days
   --audit-every <days>       also run \`bunker audit\` at most once per this many days (default off)
   --triage-every <hours>     also run triage at most once per this many hours (default off)

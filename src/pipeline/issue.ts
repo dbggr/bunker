@@ -19,7 +19,7 @@ export interface IssueOptions extends Timeouts {
   maxRounds?: number;
   /** Resume the implementer's agent session across review rounds. Defaults to true. */
   resume?: boolean;
-  /** Shell command run in the worktree, inside `sandbox`, before the first agent run. Defaults to the repo's `.bunker/setup` script if present. */
+  /** Shell command run in the worktree, inside `sandbox`, before the first agent run. Defaults to `setup` in .bunker/config.toml. */
   setup?: string;
   /** Host-relative paths or globs copied from the repo checkout into the worktree before setup (e.g. `.env`). Overrides `.bunker/copy`. Never committed. */
   copyToWorktree?: string[];

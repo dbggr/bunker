@@ -20,7 +20,7 @@ const ALLOWED: Record<Mode | "", string[]> = {
   review: [...COMMON, ...ROUNDS],
   issue: [...COMMON, ...PIPELINE],
   queue: [...COMMON, ...PIPELINE, "limit", "parallel"],
-  watch: [...COMMON, ...PIPELINE, "parallel", "no-merge", "no-notify", "interval", "for", "max-cost", "max-cost-day", "max-cost-month", "audit-every", "triage-every", "auditor-model", "max-issues"],
+  watch: [...COMMON, ...PIPELINE, "parallel", "no-merge", "no-notify", "interval", "for", "max-cost-day", "max-cost-month", "audit-every", "triage-every", "auditor-model", "max-issues"],
   audit: [...COMMON, "auditor-model", "max-issues", "focus", "setup", ...LIVE],
 };
 

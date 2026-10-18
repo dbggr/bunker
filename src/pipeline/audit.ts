@@ -18,7 +18,7 @@ export interface AuditOptions extends Timeouts {
   maxIssues?: number;
   /** Steer the audit towards an area or theme. */
   focus?: string;
-  /** Shell command run in the worktree, inside `sandbox`, before the agent. Defaults to the repo's `.bunker/setup` script if present. */
+  /** Shell command run in the worktree, inside `sandbox`, before the agent. Defaults to `setup` in .bunker/config.toml. */
   setup?: string;
   /** Times to re-ask the agent for a missing or invalid `<audit>` block. Defaults to 2. */
   maxRetries?: number;

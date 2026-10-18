@@ -69,11 +69,11 @@ describe("spend caps config", () => {
   });
 });
 
-test("kebab-case spend caps (deprecated) are still read", async () => {
+test("kebab-case spend caps are an error naming the snake_case key", async () => {
   const home = tmp();
   mkdirSync(join(home, "bunker"));
   writeFileSync(join(home, "bunker", "config.toml"), "max-cost-day = 5\n");
-  expect(await loadSpendCaps({ XDG_CONFIG_HOME: home })).toEqual({ day: 5 });
+  await expect(loadSpendCaps({ XDG_CONFIG_HOME: home })).rejects.toThrow(/"max-cost-day".*max_cost_day/);
 });
 
 describe("budgetSnapshot()", () => {

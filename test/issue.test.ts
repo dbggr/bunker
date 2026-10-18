@@ -648,11 +648,10 @@ describe("runIssue()", () => {
     expect(await originBranches(origin)).toEqual(["main"]);
   });
 
-  test(".bunker/setup is the default; explicit setup overrides it", async () => {
+  test("setup in .bunker/config.toml is the default; explicit setup overrides it", async () => {
     const { repo } = await setup(issue());
-    await $`mkdir -p ${repo}/.bunker`;
-    await Bun.write(join(repo, ".bunker", "setup"), "echo FROMFILE > setup.out\n");
-    await $`git -C ${repo} add .bunker/setup && git -C ${repo} commit -qm "chore: setup" && git -C ${repo} push -q origin main`;
+    await Bun.write(join(repo, ".bunker", "config.toml"), 'setup = "echo FROMFILE > setup.out"\n');
+    await $`git -C ${repo} add .bunker && git -C ${repo} commit -qm "chore: setup" && git -C ${repo} push -q origin main`;
     const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() });
     expect(r.status).toBe("pr-opened");
     expect((await Bun.file(join(r.worktree, "setup.out")).text()).trim()).toBe("FROMFILE");
@@ -670,76 +669,50 @@ describe("runIssue()", () => {
     expect(await Bun.file(prLog).text()).toContain("(implementer: impl-m, reviewer: rev-m)");
   });
 
-  test(".bunker/verify is the default verify; --verify overrides it; PR body names the source", async () => {
+  test("verify in config.toml is the default verify; --verify overrides it; PR body names the source", async () => {
     const { repo, prLog } = await setup(issue());
-    await $`mkdir -p ${repo}/.bunker`;
-    await Bun.write(join(repo, ".bunker", "verify"), "test -f feature.txt\n");
-    await $`git -C ${repo} add .bunker/verify && git -C ${repo} commit -qm "chore: verify" && git -C ${repo} push -q origin main`;
+    await Bun.write(join(repo, ".bunker", "config.toml"), 'verify = "test -f feature.txt"\n');
+    await $`git -C ${repo} add .bunker && git -C ${repo} commit -qm "chore: verify" && git -C ${repo} push -q origin main`;
     const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() });
     expect(r.status).toBe("pr-opened");
-    expect(await Bun.file(prLog).text()).toContain("Verify: `test -f feature.txt` passed (.bunker/verify)");
+    expect(await Bun.file(prLog).text()).toContain("Verify: `test -f feature.txt` passed (.bunker/config.toml)");
     await $`git -C ${repo} worktree remove --force ${r.worktree} && git -C ${repo} branch -D ${r.branch} && git -C ${repo} push -q origin --delete ${r.branch}`.quiet();
     const r2 = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: "true" });
     expect(r2.status).toBe("pr-opened");
     expect(await Bun.file(prLog).text()).toContain("Verify: `true` passed (--verify)");
   });
 
-  test(".bunker/verify failing → verify-failed", async () => {
+  test("verify in config.toml failing → verify-failed", async () => {
     const { repo, origin } = await setup(issue());
-    await $`mkdir -p ${repo}/.bunker`;
-    await Bun.write(join(repo, ".bunker", "verify"), "exit 1\n");
-    await $`git -C ${repo} add .bunker/verify && git -C ${repo} commit -qm "chore: verify" && git -C ${repo} push -q origin main`;
+    await Bun.write(join(repo, ".bunker", "config.toml"), 'verify = "exit 1"\n');
+    await $`git -C ${repo} add .bunker && git -C ${repo} commit -qm "chore: verify" && git -C ${repo} push -q origin main`;
     const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verifyRetries: 0 });
     expect(r.status).toBe("verify-failed");
     expect(await originBranches(origin)).toEqual(["main"]);
   });
 
-  test("merge with only a .bunker/verify file is accepted; with neither it fails before any work", async () => {
+  test("merge with verify in config.toml on origin is accepted; with none it fails before any work", async () => {
     const { repo } = await setup(issue(), "ff");
     const none = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), merge: true, ciPollMs: 10 });
     expect(none.status).toBe("failed");
-    expect(none.error).toContain(".bunker/verify");
+    expect(none.error).toContain("config.toml");
     expect(none.error).toContain("--verify");
-    await $`mkdir -p ${repo}/.bunker`;
-    await Bun.write(join(repo, ".bunker", "verify"), "test -f feature.txt\n");
-    await $`git -C ${repo} add .bunker/verify && git -C ${repo} commit -qm "chore: verify" && git -C ${repo} push -q origin main`;
-    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), merge: true, ciPollMs: 10 });
-    expect(r.status).toBe("merged");
-  });
-
-  test("verify in .bunker/config.toml on origin satisfies merge, and wins over the legacy file", async () => {
-    const { repo } = await setup(issue(), "ff");
-    await $`mkdir -p ${repo}/.bunker`;
     await Bun.write(join(repo, ".bunker", "config.toml"), 'verify = "test -f feature.txt"\n');
-    await Bun.write(join(repo, ".bunker", "verify"), "false\n");
-    await $`git -C ${repo} add .bunker && git -C ${repo} commit -qm "chore: config" && git -C ${repo} push -q origin main`;
+    await $`git -C ${repo} add .bunker && git -C ${repo} commit -qm "chore: verify" && git -C ${repo} push -q origin main`;
     const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), merge: true, ciPollMs: 10 });
     expect(r.status).toBe("merged");
   });
 
-  test("a blank .bunker/verify on origin does not satisfy merge", async () => {
+  test.each(["verify", "setup"])("a .bunker/%s on origin fails the run, naming the config.toml fix, before any work", async (name) => {
     const { repo, origin } = await setup(issue(), "ff");
-    await $`mkdir -p ${repo}/.bunker`;
-    await Bun.write(join(repo, ".bunker", "verify"), "  \n");
-    await $`git -C ${repo} add .bunker/verify && git -C ${repo} commit -qm "chore: verify" && git -C ${repo} push -q origin main`;
+    await Bun.write(join(repo, ".bunker", "config.toml"), 'verify = "true"\n');
+    await Bun.write(join(repo, ".bunker", name), "true\n");
+    await $`git -C ${repo} add .bunker && git -C ${repo} commit -qm "chore: legacy" && git -C ${repo} push -q origin main`;
     const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), merge: true, ciPollMs: 10 });
     expect(r.status).toBe("failed");
-    expect(r.error).toContain(".bunker/verify");
+    expect(r.error).toContain(`.bunker/${name} is no longer read`);
+    expect(r.error).toContain(`${name} = "…"`);
     expect(await originBranches(origin)).toEqual(["main"]);
-  });
-
-  test("a .bunker/verify that exists only on origin satisfies merge; one only in the checkout does not", async () => {
-    const { repo } = await setup(issue(), "ff");
-    await $`mkdir -p ${repo}/.bunker`;
-    await Bun.write(join(repo, ".bunker", "verify"), "test -f feature.txt\n");
-    const local = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), merge: true, ciPollMs: 10 });
-    expect(local.status).toBe("failed");
-    expect(local.error).toContain("merge requires");
-    await $`git -C ${repo} add .bunker/verify && git -C ${repo} commit -qm "chore: verify" && git -C ${repo} push -q origin main`;
-    await $`git -C ${repo} reset -q --hard HEAD~1`;
-    expect(await Bun.file(join(repo, ".bunker", "verify")).exists()).toBe(false);
-    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), merge: true, ciPollMs: 10 });
-    expect(r.status).toBe("merged");
   });
 
   test("verifyOnHost without any verify command fails before any work", async () => {
@@ -898,7 +871,7 @@ describe("runIssue() --merge", () => {
     expect((await Bun.file(join(dirname(mergeLog), "rules.log")).text()).trim()).toBe("api repos/{owner}/{repo}/rules/branches/main");
   });
 
-  test.each([".bunker/verify", ".github/workflows/ci.yml"])("a PR touching %s → no auto-merge, labelled bunker:review, needs-review", async (path) => {
+  test.each([".bunker/Dockerfile", ".github/workflows/ci.yml"])("a PR touching %s → no auto-merge, labelled bunker:review, needs-review", async (path) => {
     const { repo, mergeLog, editLog } = await setup(issue(), "ff");
     const agent: Agent = { command: (p, m = "write") => (m === "write" ? ["sh", "-c", `mkdir -p $(dirname ${path}) && echo x > ${path} && echo hi > feature.txt && git add -A && git commit -qm "feat: impl"`] : ["sh", "-c", `echo '${APPROVE}'`]) };
     const r = await run(repo, { agent });

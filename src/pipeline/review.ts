@@ -30,7 +30,7 @@ export interface ReviewOptions extends Timeouts {
   maxRetries?: number;
   /** Extra instruction appended to every reviewer prompt. */
   reviewerInstruction?: string;
-  /** Shell command run in the worktree, inside `sandbox`, before the first agent run. Defaults to `.bunker/setup` if present. */
+  /** Shell command run in the worktree, inside `sandbox`, before the first agent run. Defaults to `setup` in .bunker/config.toml. */
   setup?: string;
   /** Progress events: stages, agent text and tool calls, results. */
   onEvent?: OnEvent;

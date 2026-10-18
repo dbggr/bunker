@@ -119,7 +119,7 @@ describe("subcommands", () => {
   test("every mode runs through its subcommand", () => {
     // Each gets past option checks and fails on something later (a bad issue number, no verify command, no repo config, …).
     expect(cli("issue", "0", "--no-pull", "--no-sandbox").err).toContain("issue number must be a positive integer");
-    expect(cli("watch", "--max-cost", "1", "--max-cost-day", "1", "--no-sandbox").err).toContain("--max-cost is an alias");
+    expect(cli("watch", "--max-cost", "1", "--no-sandbox").code).toBe(2);
     for (const args of [["queue", "--limit", "0"], ["audit", "--max-issues", "0"]]) expect(cli(...args, "--no-sandbox").err).toContain("must be a positive integer");
     expect(cli("review", "x", "--max-rounds", "0", "--no-sandbox").err).toContain("--max-rounds must be a positive integer");
     expect(cli("task", "x", "y", "--max-iterations", "0", "--no-sandbox").err).toContain("--max-iterations must be a positive integer");

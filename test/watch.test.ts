@@ -557,9 +557,9 @@ describe("bunker --watch (CLI)", () => {
     expect(run(repo, "queue", "--no-sandbox", "--parallel", "2", "--limit", "1").err).not.toMatch(/--parallel/);
   });
 
-  test("invalid --for, --interval, --max-cost exit 2", async () => {
+  test("invalid --for, --interval, --max-cost-day exit 2", async () => {
     const { repo } = await setup([]);
-    for (const a of [["--for", "5x"], ["--interval", "0"], ["--max-cost", "-1"], ["--max-cost-day", "0"], ["--max-cost-month", "abc"]]) {
+    for (const a of [["--for", "5x"], ["--interval", "0"], ["--max-cost", "1"], ["--max-cost-day", "0"], ["--max-cost-month", "abc"]]) {
       expect(run(repo, "watch", "--no-sandbox", "--verify", "true", ...a).code).toBe(2);
     }
   });
@@ -568,7 +568,7 @@ describe("bunker --watch (CLI)", () => {
     const { repo, root } = await setup([]);
     const xdg = join(root, "xdg");
     await Bun.write(join(xdg, "bunker", "config.toml"), "max_cost_day = 20\n");
-    await Bun.write(join(repo, ".bunker", "verify"), "true");
+    await Bun.write(join(repo, ".bunker", "config.toml"), 'verify = "true"');
     await Bun.write(join(repo, ".bunker", "watch-spend.json"), JSON.stringify([{ at: Date.now() - 1000, usd: 25 }]));
     const p = Bun.spawn(["bun", join(import.meta.dir, "..", "src", "cli.ts"), "watch", "--no-sandbox", "--interval", "0.01"], { cwd: repo, stdout: "pipe", stderr: "pipe", env: { ...process.env, XDG_CONFIG_HOME: xdg } });
     const reader = p.stdout.getReader();
@@ -591,7 +591,7 @@ describe("bunker --watch (CLI)", () => {
     await chmod(join(bin, "notify-send"), 0o755);
     await Bun.write(join(bin, "osascript"), `#!/bin/sh\necho "$@" >> "${calls}"\n`);
     await chmod(join(bin, "osascript"), 0o755);
-    await Bun.write(join(repo, ".bunker", "verify"), "true");
+    await Bun.write(join(repo, ".bunker", "config.toml"), 'verify = "true"');
     await Bun.write(join(repo, ".bunker", "watch-spend.json"), JSON.stringify([{ at: Date.now() - 1000, usd: 25 }]));
     const p = Bun.spawn(["bun", join(import.meta.dir, "..", "src", "cli.ts"), "watch", "--no-sandbox", "--interval", "0.01", "--max-cost-day", "20"], { cwd: repo, stdout: "pipe", stderr: "pipe", env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
     const reader = p.stdout.getReader();
@@ -609,7 +609,7 @@ describe("bunker --watch (CLI)", () => {
 
   test("SIGINT finishes cleanly and exits 0", async () => {
     const { repo } = await setup([]);
-    await Bun.write(join(repo, ".bunker", "verify"), "true");
+    await Bun.write(join(repo, ".bunker", "config.toml"), 'verify = "true"');
     const p = Bun.spawn(["bun", join(import.meta.dir, "..", "src", "cli.ts"), "watch", "--no-sandbox", "--interval", "0.01"], { cwd: repo, stdout: "pipe", stderr: "pipe", env: process.env });
     const reader = p.stdout.getReader();
     let seen = "";

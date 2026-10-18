@@ -108,30 +108,30 @@ describe("parseConfig", () => {
 });
 
 describe("loadRepoConfig", () => {
-  test("no files: empty, no legacy, no notes", async () => {
+  test("no files: empty config", async () => {
     const w = await fakeWorld();
-    await Bun.$`rm ${w.repo}/.bunker/verify`;
+    await Bun.$`rm ${w.repo}/.bunker/config.toml`;
     const r = await loadRepoConfig(w.repo);
     expect(r.config.verify).toBeUndefined();
     expect(r.legacy).toEqual({});
-    expect(r.notes).toEqual([]);
+    expect(r.removedFiles).toEqual([]);
   });
 
-  test("reads legacy files", async () => {
+  test("reads the legacy copy file", async () => {
     const w = await fakeWorld();
-    await Bun.write(join(w.repo, ".bunker/setup"), "make deps\n");
     await Bun.write(join(w.repo, ".bunker/copy"), "# c\n.env\n\n");
-    const r = await loadRepoConfig(w.repo);
-    expect(r.legacy).toEqual({ setup: "sh .bunker/setup", verify: "bun test", copy: [".env"] });
+    expect((await loadRepoConfig(w.repo)).legacy).toEqual({ copy: [".env"] });
   });
 
-  test("both config.toml and legacy files: one deprecation note", async () => {
+  test.each(["verify", "setup"])(".bunker/%s is an error naming the config.toml fix, and is never read", async (name) => {
     const w = await fakeWorld();
-    await Bun.write(join(w.repo, ".bunker/config.toml"), 'verify = "make"\n');
-    const r = await loadRepoConfig(w.repo);
-    expect(r.notes).toHaveLength(1);
-    expect(r.notes[0]).toContain("deprecated");
-    expect(r.notes[0]).toContain(".bunker/verify");
+    await Bun.write(join(w.repo, ".bunker", name), "make\n");
+    const err = await loadRepoConfig(w.repo).then(() => "", (e: Error) => e.message);
+    expect(err).toContain(`.bunker/${name} is no longer read`);
+    expect(err).toContain(`${name} = "…"`);
+    const r = await loadRepoConfig(w.repo, { lenient: true });
+    expect(r.removedFiles).toEqual([name]);
+    expect(r.legacy).toEqual({});
   });
 });
 
@@ -139,11 +139,10 @@ describe("precedence", () => {
   const cfg = parseConfig(FULL).config;
 
   test("config.toml beats legacy beats default", () => {
-    const legacy = { verify: "legacy-verify", setup: "sh .bunker/setup", copy: ["l"] };
+    const legacy = { copy: ["l"] };
     const s = effectiveSettings({ config: cfg, legacy, env: {} });
     expect(s.find((x) => x.key === "verify")).toMatchObject({ value: "bun test", source: "config.toml" });
     const l = effectiveSettings({ config: parseConfig("").config, legacy, env: {} });
-    expect(l.find((x) => x.key === "verify")).toMatchObject({ value: "legacy-verify", source: ".bunker/verify" });
     expect(l.find((x) => x.key === "copy")).toMatchObject({ value: ["l"], source: ".bunker/copy" });
     expect(l.find((x) => x.key === "watch.interval")).toMatchObject({ value: 10, source: "default" });
     expect(l.find((x) => x.key === "verify")).toBeDefined();
@@ -201,10 +200,10 @@ describe("cli", () => {
 
   test("doctor shows each setting's value and source", async () => {
     const w = await fakeWorld();
-    await Bun.write(join(w.repo, ".bunker/config.toml"), '[watch]\ninterval = 7\n');
+    await Bun.write(join(w.repo, ".bunker/config.toml"), 'verify = "bun test"\n[watch]\ninterval = 7\n');
     const r = await run(w.repo, w.env, "doctor");
     expect(r.out).toContain("watch.interval: 7 (config.toml)");
-    expect(r.out).toContain("verify: bun test (.bunker/verify)");
+    expect(r.out).toContain("verify: bun test (config.toml)");
     expect(r.out).toContain("merge.ci_timeout: 30 (default)");
   });
 });

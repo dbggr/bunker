@@ -19,8 +19,8 @@ describe("watch settings: CLI flag over config.toml", () => {
     expect(r.caps).toEqual({ day: 1.5, month: 20 });
   });
 
-  test("--max-cost (alias) overrides watch.max_cost_day", () => {
-    expect(resolveWatchSettings({ "max-cost": "3" }, cfg, {}).caps.day).toBe(3);
+  test("--max-cost is not an alias of --max-cost-day", () => {
+    expect(resolveWatchSettings({ "max-cost": "3" }, cfg, {}).caps.day).not.toBe(3);
   });
 
   test("--audit-every overrides watch.audit_every", () => {

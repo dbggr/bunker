@@ -33,7 +33,7 @@ describe("doctor", () => {
       files: { "labels.json": JSON.stringify([{ name: "bunker:queued" }]), "repo.json": JSON.stringify({ default_branch: "main", allow_auto_merge: false }), "rules.json": "" },
       noTools: ["docker"],
     });
-    await Bun.$`rm ${join(w.repo, ".github/workflows/ci.yml")} ${join(w.repo, ".bunker/verify")}`;
+    await Bun.$`rm ${join(w.repo, ".github/workflows/ci.yml")} ${join(w.repo, ".bunker/config.toml")}`;
     const env = { ...w.env };
     delete (env as Record<string, string | undefined>).CLAUDE_CODE_OAUTH_TOKEN;
     const r = await runDoctor({ cwd: w.repo, env });
@@ -153,18 +153,28 @@ describe("doctor spend", () => {
   });
 });
 
-describe("doctor deprecated user config keys", () => {
+describe("doctor removed user config keys", () => {
   test("flags kebab-case keys with the snake_case fix; clean config has no such check", async () => {
     const w = await fakeWorld();
     const xdg = join(w.repo, "xdg");
     const env = { ...w.env, XDG_CONFIG_HOME: xdg };
-    expect((await runDoctor({ cwd: w.repo, env })).checks.find((c) => c.id === "config-deprecated")).toBeUndefined();
+    expect((await runDoctor({ cwd: w.repo, env })).checks.find((c) => c.id === "config-removed-key")).toBeUndefined();
     await Bun.write(join(xdg, "bunker", "config.toml"), "max-cost-day = 5\n");
-    const c = (await runDoctor({ cwd: w.repo, env })).checks.find((c) => c.id === "config-deprecated");
+    const c = (await runDoctor({ cwd: w.repo, env })).checks.find((c) => c.id === "config-removed-key");
     expect(c?.ok).toBe(false);
     expect(c?.required).toBe(false);
     expect(c?.detail).toContain("max-cost-day");
     expect(c?.fix).toContain("max_cost_day");
+  });
+
+  test("a leftover .bunker/verify or .bunker/setup is reported with the config.toml fix", async () => {
+    const w = await fakeWorld();
+    await Bun.write(join(w.repo, ".bunker/verify"), "true\n");
+    await Bun.write(join(w.repo, ".bunker/setup"), "true\n");
+    const checks = (await runDoctor({ cwd: w.repo, env: w.env })).checks.filter((c) => c.id === "config-removed-file");
+    expect(checks.map((c) => c.label).sort()).toEqual([".bunker/setup", ".bunker/verify"]);
+    expect(checks.every((c) => c.ok === false)).toBe(true);
+    expect(checks.find((c) => c.label === ".bunker/verify")?.fix).toContain('verify = "…"');
   });
 });
 

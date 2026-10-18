@@ -28,7 +28,7 @@ The prompt for an issue comes from a template. A repo overrides the built-in one
 - `{{KEY}}` is replaced by a value. Built-ins: `ISSUE_NUMBER`, `ISSUE_TITLE`, `BRANCH`, `REPO`, `BASE`, plus `ISSUE` (the fenced issue title and body), `COMMENTS` (trusted comments) and `CONVENTION` (the follow-up reporting instructions). An unknown key is an error and fails the run.
 - `` !`cmd` `` is replaced by the output of `cmd`, run with bash on the host, in the worktree, with a 30 second timeout. It gets the isolated env: no GitHub or Claude tokens. A command that fails or times out fails the run.
 
-Only the template is ever expanded. Issue text and comments are substituted as values after the template is scanned and are never re-expanded, and command output is not re-expanded either, so `{{X}}` or `` !`id` `` in an issue stays literal. Commands run only from repo-owned prompt files, never from issue text or agent output. Treat `.bunker/prompts/` like `.bunker/setup`: it runs code on your host.
+Only the template is ever expanded. Issue text and comments are substituted as values after the template is scanned and are never re-expanded, and command output is not re-expanded either, so `{{X}}` or `` !`id` `` in an issue stays literal. Commands run only from repo-owned prompt files, never from issue text or agent output. Treat `.bunker/prompts/` like `setup` in `.bunker/config.toml`: it runs code on your host.
 
 ## Verify in the sandbox
 
