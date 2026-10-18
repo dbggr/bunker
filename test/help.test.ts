@@ -25,6 +25,13 @@ describe("--help", () => {
       expect(r.out).toContain("--max-rounds");
     });
   }
+  test("names the real queueing label, every config table and every label", () => {
+    const { out } = cli("--help");
+    expect(out).toContain("[clean]");
+    expect(out).toContain("[notify]");
+    expect(out).not.toContain("the four labels");
+    expect(out).not.toMatch(/ bunker \+ priority/);
+  });
   test("documents defaults", () => {
     const { out } = cli("--help");
     expect(out).toMatch(/--max-rounds <n>.*default 2/);

@@ -26,7 +26,7 @@ describe("docs", () => {
   });
 
   test("every flag shown in the docs and README exists in --help", async () => {
-    const known = new Set([...(HELP.match(/--[a-z][a-z-]*/g) ?? []), "--name", "--yes", "--check", "--skip-runtime-check", "--ref", "--uninstall"]); // --name: `gh label edit` in the label migration; the rest: install.sh
+    const known = new Set([...(HELP.match(/--[a-z][a-z-]*/g) ?? []), "--name", "--yes", "--check", "--skip-runtime-check", "--ref", "--uninstall", "--network"]); // --name: `gh label edit` in the label migration; --network: the container's `--network host`; the rest: install.sh
     for (const f of [...docs, "README.md"]) {
       for (const flag of new Set((await read(f)).match(/(?<![\w-])--[a-z][a-z-]*/g) ?? [])) {
         if (!known.has(flag)) throw new Error(`${f} mentions ${flag}, which is not in --help`);
@@ -50,6 +50,30 @@ describe("docs", () => {
     }
     expect(sec).not.toContain("needs-human-review"); // no longer set; the label is bunker:review
     expect(sec).toContain("bunker:review");
+  });
+
+  test("the docs match main after the 2026-10-18 changes (#363)", async () => {
+    const [concepts, sec, start, trouble, readme, how, v1] = await Promise.all(["docs/concepts.md", "docs/security.md", "docs/getting-started.md", "docs/troubleshooting.md", "README.md", "release/design/how-bunker-works.html", "release/v1-readiness.md"].map(read));
+    for (const s of ["--network host", "verify_retries", "clean.logs_days", "awaiting-review", "paused-usage-limit", "already-in-progress", "bad-output", "read from origin's default branch"]) expect(concepts).toContain(s);
+    expect(concepts).not.toContain("bunker never reads CI itself");
+    expect(concepts).not.toContain("read from the worktree");
+    for (const s of ["localhost", "only `.bunker/prompts/issue.md`", "`check`"]) expect(sec).toContain(s);
+    for (const s of ["install.sh", "[clean]", "[notify]", "verify_network", "verify_retries", "context", "merge.mode"]) expect(start).toContain(s);
+    expect(start).not.toContain("[queue]");
+    expect(start).not.toContain("bun run build && install");
+    expect(trouble).toContain("no required status check");
+    expect(trouble).toContain("`verify-failed`");
+    expect(trouble).not.toContain(".bunker/setup");
+    for (const s of ["shepherd", "bunker status", "Manual-merge", "skills", "AGENTS.md"]) expect(readme).toContain(s);
+    expect(readme).not.toMatch(/^- (prompt templating|host hooks)$/m);
+    expect(how).not.toContain("your computer");
+    expect(how).not.toContain("asks before changing");
+    expect(v1).not.toContain("`--issue`/`--queue`");
+    expect(v1).toContain("23 keys");
+    expect(start).toContain("triage_every");
+    expect(start).toContain("max_cost_month");
+    expect(cliDoc()).toContain("watch.triage_every");
+    expect(cliDoc()).toContain("max_cost_day");
   });
 
   test("README has no flag tables and stays short", async () => {

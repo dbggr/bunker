@@ -46,9 +46,9 @@ All 24 failed runs, by class (`failureClasses` in the script):
 | Class | all | recent | Root cause | Status |
 |---|---|---|---|---|
 | Merge plumbing before GitHub auto-merge | 6 | 0 | bunker polled CI itself with a token that can't read checks (403 → "unreadable", 5–20 min "pending" waits, `gh pr merge` refused while checks ran) | **Fixed**: GitHub auto-merge plus a required check (#63/#65); the ruleset makes it readable (iac-github#58, #285) |
-| Agent code failed typecheck at verify | 4 | 3 | the implementer and reviewer approved code that `tsc` rejects (#120, #214, #230, #285); the reviewer doesn't run the typecheck | **Open**: the biggest lever left; see section 4, "verify feedback" |
+| Agent code failed typecheck at verify | 4 | 3 | the implementer and reviewer approved code that `tsc` rejects (#120, #214, #230, #285); the reviewer didn't run the typecheck (now `check` gives it the typecheck output) | **Open**: the biggest lever left; see section 4, "verify feedback" |
 | CI wait over `--ci-timeout` | 4 | 0 | the suite took over 30 min in the flaky window (#120, #131, #134, #135); auto-merge stayed armed and later merged | **Fixed** with #149; would also be absorbed by the PR shepherd (#283) |
-| Workflow push refused | 2 | 0 | the agent edited `.github/workflows/ci.yml` (#77, #149) and the token's missing Workflows permission refused the push, **as designed** | **By design**; since #277 such PRs also need human review. The run is still wasted: the prompt should say workflows are off-limits |
+| Workflow push refused | 2 | 0 | the agent edited `.github/workflows/ci.yml` (#77, #149) and the token's missing Workflows permission refused the push, **as designed** | **By design**; since #277 such PRs also need human review. The prompt now says workflows are off-limits |
 | Leftover branch after a restart | 2 | 0 | a restarted watch found the previous attempt's branch (#131, #132) | **Fixed**: #160, #201 |
 | Docker image missing | 2 | 2 | a host `bun test` deleted the watcher's image mid-run (#214, #230) | **Fixed**: #295 |
 | Agent code failed a test at verify | 2 | 2 | a missing `setDefaultTimeout` guard (#230), and #307's first attempt breaking a usage-limit resume test (merged later as PR #326) | **Open** (same lever as typecheck) |
@@ -97,24 +97,24 @@ Thresholds over a **14-day `--watch` soak** on tool-bunker plus at least one rep
 
 **The two levers that move most of the ✗ rows:**
 1. **Verify feedback (#336).** When verify fails, give the failure to the implementer for one fix round instead of ending the run. In the recent window that alone turns 5 of 8 failures into retries, which takes success above 90% and removes most re-queues.
-2. **Test hygiene gates (#337).** A guard test that no test reaches the real Docker daemon, notifier or network (the #293/#295 class), plus running the reviewer with `bun run typecheck` output in its prompt.
+2. **Test hygiene gates (#337).** A guard test that no test reaches the real Docker daemon, notifier or network (the #293/#295 class), plus running the reviewer with `bun run typecheck` output in its prompt (the `check` key).
 
 ## 5. Release contract: what 1.0 freezes
 
 After 1.0.0, removing or renaming any of these needs 2.0:
 
-- **CLI:** 13 entry points (`init`, `doctor`, `status`, `clean`, `triage`, `ui`, `self-update`, plus `--issue`/`--queue`/`--watch`/`--audit`/`--review`/`--task`) and 45 flags (`docs/cli.md`)
-- **Repo config** (`.bunker/config.toml`): `setup verify verify_network copy models.* watch.* merge.ci_timeout clean.logs_days notify.*` (18 keys)
+- **CLI:** subcommands (`init`, `doctor`, `issue`, `queue`, `watch`, `shepherd`, `status`, `clean`, `triage`, `ui`, `audit`, `review`, `task`, `self-update`) plus the bare `bunker "<prompt>"`, and the flags in `docs/cli.md`; the old mode flags were removed (#358)
+- **Repo config** (`.bunker/config.toml`): `setup verify verify_network verify_retries check copy context models.* skills watch.* merge.mode merge.ci_timeout clean.logs_days notify.*` (23 keys)
 - **User config** (`~/.config/bunker/config.toml`): `max_cost_day max_cost_month allow_labelers` (the kebab-case spellings are still read for one release, with a deprecation warning)
-- **Labels** (after #312): `bunker:queued`, `bunker:in-progress`, `bunker:failed`, `bunker:review`, plus `bunker-blocked`, `bunker-exclude`, `discovered`, `priority:*`, `severity:*`. The old `bunker`/`bunker-failed`/`needs-human-review` names are no longer read or written (removed in #347); `bunker doctor` flags any still on the repo
-- **Library exports** (`src/index.ts`): 20 export lines
+- **Labels** (after #312): `bunker:queued`, `bunker:in-progress`, `bunker:failed`, `bunker:review`, plus `bunker:awaiting-review`, `bunker-blocked`, `discovered`, `priority:*`, `severity:*`. The old `bunker`/`bunker-failed`/`needs-human-review` names are no longer read or written (the cleanup was #356); `bunker doctor` flags any still on the repo
+- **Library exports** (`src/index.ts`): 14 export lines (trimmed in #352)
 - **Files:** `.bunker/` layout (`config.toml`, `Dockerfile`, `prompts/*.md`, `runs/`, `sessions/`), the `.env` locations, and the PR body format other tools may parse
 
 **Fix before freezing** (each would be a breaking change after 1.0):
 - **Config naming (#338), resolved:** both files are snake_case now (`max_cost_day`, `watch.max_cost_day`); the user config's old kebab-case keys are read for one release with a deprecation warning, and `bunker doctor` flags them.
-- **The CLI mixes two styles (#340, your decision):** subcommands (`bunker status`, `bunker clean`) next to mode flags (`bunker --issue 7`, `bunker --watch`). Decide whether 1.0 is `bunker issue 7` / `bunker watch`, with the flags kept as aliases, or keeps the flags.
-- **Internal plumbing is exported (#339):** `worktreeAdmin`, `worktreeAdminLockPath`, `runSetup`, `buildBaseImage`, `hardenHostGit`, `IdleTimeout` and the `DEFAULT_*_MS` constants. Trim the library surface to what an embedder needs (`run`, `runAll`, `review`, the agent and sandbox factories, and their types).
-- **Labels:** #312 landed (PR #331). `bunker-blocked` and `bunker-exclude` are still outside the `bunker:` namespace; move them too, or accept the mix, before the freeze.
+- **The CLI shape (#340), resolved:** every mode is a subcommand (`bunker issue 7`, `bunker watch`) and the old mode flags are removed (#358).
+- **Internal plumbing is exported (#339), resolved:** the library surface was trimmed to what an embedder needs (`run`, `runAll`, `review`, the agent and sandbox factories, and their types) in #352.
+- **Labels:** #312 landed (PR #331). `bunker-blocked` is still outside the `bunker:` namespace; move it too, or accept the mix, before the freeze.
 - **Identity:** #286 (App or bot) changes the token setup. Only blocking if 1.0 is public.
 
 ## 6. Verification that doesn't rely on the author or the user
@@ -164,17 +164,17 @@ From `bun scripts/mutate-gates.ts`: each gate is broken on its own, then the sui
 | #322 audit test noise | **done** | test hygiene |
 | #308 install script | **done** | needed for the clean-install check |
 | #319 context/spec files | **done** (PR #333) | additive |
-| #338 config key naming | **blocks 1.0** | contract |
-| #339 library export trim | **blocks 1.0** | contract |
-| #340 CLI shape | **blocks 1.0** | contract; your decision |
-| #336 verify feedback round | **blocks 1.0** | the bar: success rate and interventions |
-| #337 test hygiene guard | **blocks 1.0** | the bar: escapes |
+| #338 config key naming | **done** | contract |
+| #339 library export trim | **done** (#352) | contract |
+| #340 CLI shape | **done** (#358) | contract |
+| #336 verify feedback round | **done** | the bar: success rate and interventions |
+| #337 test hygiene guard | **done** | the bar: escapes |
 | #286 bot identity | blocks 1.0 **only if public** | changes token setup |
-| #283 PR shepherd | after 1.0 | additive (opt-in), large; the CI-timeout class is gone without it |
-| #317 skills | after 1.0 | additive config |
-| #327 live cost + budget in the hub | after 1.0 | UI only |
+| #283 PR shepherd | **done** | not opt-in: `bunker watch` runs it on every pass |
+| #317 skills | **done** | additive config |
+| #327 live cost + budget in the hub | **done** (#359) | UI only |
 | #309 release binaries | after 1.0 (public) | distribution |
 | #289 demo video | after 1.0 | by design |
-| #280 session fork | **drop** | no use yet; re-file when one appears |
+| #280 session fork | **done** (#353) | shipped as `fork()` on a run result |
 
-**Order:** decide #340, then #338 and #339 (contract), #336 and #337 (the bar). After that, start the 14-day soak plus the benchmark, chaos and red-team checks; tag 1.0.0 when the bar holds for the whole window.
+**Order:** the contract and the bar items above are done. Next, start the 14-day soak plus the benchmark, chaos and red-team checks; tag 1.0.0 when the bar holds for the whole window.

@@ -113,7 +113,7 @@ triage:
                              Bunker posts the verdict as a comment, sanitised and redacted. Dry run by default: prints verdicts and
                              planned actions, changes nothing. Failed or unparseable verdicts leave the issue untouched
   --yes                      (triage) comment and close fixed / duplicate issues (as-designed: closed not planned), and label valid
-                             ones bunker + priority:* + bug as you. Valid issues are never labelled bunker without --yes
+                             ones bunker:queued + priority:* + bug as you. Valid issues are never labelled bunker:queued without --yes
   --limit <n>                (triage) max issues per run, oldest first (default 10)
   watch --triage-every       runs triage unattended in comment-and-close mode only: it never labels
 
@@ -126,7 +126,7 @@ init and doctor:
   bunker init                interactive, per repo: runs doctor, then walks each ✗: Claude token (via \`claude setup-token\`)
                              and the scoped GitHub token (hidden input, validated, stored 0600 in ~/.config/bunker/.env),
                              .bunker/config.toml (setup, verify) and Dockerfile for the detected toolchain (asks before each write, never
-                             overwrites), models, and the four labels. It never changes repo settings (auto-merge, branch
+                             overwrites), models, and every label bunker uses. It never changes repo settings (auto-merge, branch
                              protection, required checks): it prints what to set. Ends with doctor and the first command to run
   A one-word prompt "init" or "doctor" is read as the subcommand; to use it as a prompt put -- first: bunker -- init
                              (or make it longer than one word).
@@ -158,7 +158,7 @@ Repo config (.bunker/config.toml, parsed as TOML; .bunker/Dockerfile stays a sep
   Precedence: CLI flag > env var > config.toml > legacy files (.bunker/setup, verify, copy) > built-in default.
   Legacy files keep working but are deprecated (a note is printed when both exist). Unknown keys warn; a key of
   the wrong type exits 2.
-  Keys (tables: [models], [watch], [merge]):
+  Keys (tables: [models], [skills], [watch], [merge], [clean], [notify]):
 ${CONFIG_HELP}
 
 Legacy .bunker/copy (same as copy in config.toml):
