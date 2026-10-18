@@ -112,7 +112,24 @@ export async function runClean(o: CleanOptions): Promise<CleanResult> {
       return undefined;
     }
   };
+  // Closed issue numbers, fetched once. A failed fetch means nothing counts as closed (folders are kept).
+  const CLOSED_LIMIT = 1000;
+  let closedSet: Set<number> | undefined;
+  let closedFull = false;
+  const closedIssues = async () => {
+    if (!closedSet) {
+      const v = await gh("issue", "list", "--state", "closed", "--json", "number,state", "--limit", String(CLOSED_LIMIT));
+      const list = Array.isArray(v) ? (v as { number?: number; state?: string }[]) : [];
+      // Each entry's own state decides, so an issue that is open is never counted as closed.
+      closedSet = new Set(list.flatMap((i) => (typeof i.number === "number" && typeof i.state === "string" && i.state.toUpperCase() !== "OPEN" ? [i.number] : [])));
+      closedFull = list.length >= CLOSED_LIMIT;
+    }
+    return closedSet;
+  };
   const issueClosed = async (n: string) => {
+    if ((await closedIssues()).has(Number(n))) return true;
+    if (!closedFull) return false;
+    // The list was truncated: ask about this one issue.
     const v = (await gh("issue", "view", n, "--json", "state")) as { state?: string } | undefined;
     return v?.state !== undefined && v.state.toUpperCase() !== "OPEN";
   };
@@ -268,7 +285,9 @@ export async function runClean(o: CleanOptions): Promise<CleanResult> {
   }
   // Sessions only matter while their issue is open; a failed lookup keeps the folder.
   const sessionsDir = join(repo, ".bunker", "sessions");
-  for (const n of existsSync(sessionsDir) ? readdirSync(sessionsDir).filter((d) => /^\d+$/.test(d)) : []) {
+  const sessionFolders = existsSync(sessionsDir) ? readdirSync(sessionsDir).filter((d) => /^\d+$/.test(d)) : [];
+  if (sessionFolders.length > 0 && !o.auto) note(`checking ${sessionFolders.length} session folder(s) against closed issues...`);
+  for (const n of sessionFolders) {
     if (busyIssues.has(n) || !(await issueClosed(n))) continue;
     if (!o.auto) note(`${verb}remove ${join(sessionsDir, n)} (issue #${n} is closed)`);
     acted = true;
