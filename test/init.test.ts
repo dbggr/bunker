@@ -238,3 +238,17 @@ describe("cli", () => {
     expect(r.err).toContain("--yes");
   });
 });
+
+describe("init services", () => {
+  test("declared services are shown and an image that can't be pulled is reported", async () => {
+    const w = await bunRepo();
+    await Bun.write(join(w.repo, ".bunker/config.toml"), 'verify = "bun test"\n[services.database]\nimage = "postgres:18"\n[services.cache]\nimage = "nope:1"\n');
+    const bin = w.env.PATH!.split(":")[0]!;
+    await Bun.write(join(bin, "docker"), `#!/bin/sh\necho "$*" | grep -q nope && exit 1\nexit 0\n`);
+    await Bun.$`chmod +x ${join(bin, "docker")}`;
+    const s = scripted();
+    await runInit({ cwd: w.repo, env: w.env, yes: true, io: s.io });
+    expect(s.text()).toContain("Service database (postgres:18)");
+    expect(s.text()).toContain("Service cache (nope:1): the image can't be pulled");
+  });
+});

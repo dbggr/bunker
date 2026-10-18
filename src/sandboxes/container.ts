@@ -5,6 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { output } from "../core/output.ts";
 import { gitMountArgs, guardGit } from "./git-guard.ts";
 import type { RoleSkills } from "../core/skills.ts";
+import { startServices } from "./services.ts";
 import { killGroup, teeStdout, type Sandbox } from "./exec.ts";
 import baseDockerfile from "../../images/base/Dockerfile" with { type: "text" };
 
@@ -98,6 +99,7 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
   // The container is throwaway; its claude session files live in a host dir mounted over ~/.claude/projects.
   let store: string | undefined;
   return {
+    startServices: (services) => startServices(bin, services),
     get projectsDir() {
       if (!store) {
         store = mkdtempSync(join(tmpdir(), "bunker-claude-projects-"));
@@ -109,7 +111,7 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
     exec(cmd, ctx) {
       // Arrow function: `this.projectsDir` below still means this sandbox.
       return guardGit(ctx.worktree, ctx.gitCommonDir, async () => {
-      const { worktree, gitCommonDir, prefix, onLine, limits, isolate, stdin, role } = ctx;
+      const { worktree, gitCommonDir, prefix, onLine, limits, isolate, network, stdin, role } = ctx;
       const [entrypoint, ...args] = cmd;
       if (!entrypoint) throw new Error("empty agent command");
       if (!images.has(gitCommonDir)) images.set(gitCommonDir, resolveImage(bin, opts, worktree, gitCommonDir));
@@ -133,7 +135,8 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
         // Verify runs code the agent wrote: no network to send anything out, and no credentials to send.
         // Non-isolated runs use the host network: the default bridge creates and removes a veth per run, and each link event makes Chrome fail in-flight requests (ERR_NETWORK_CHANGED).
         // Tradeoff: the container can reach the host's localhost services; it already runs the agent with credentials and full outbound network.
-        ...(isolate ? ["--network", "none"] : ["--network", "host", ...env.flatMap((name) => ["-e", name])]), // name only: value comes from our env, never argv
+        // With services the command joins their internal network (no route out) instead.
+        ...(network ? ["--network", network, ...(isolate ? [] : env.flatMap((name) => ["-e", name]))] : isolate ? ["--network", "none"] : ["--network", "host", ...env.flatMap((name) => ["-e", name])]), // name only: value comes from our env, never argv
         ...identity,
         "-v", `${this.projectsDir}:/tmp/.claude/projects`,
         ...(role ? opts.skills?.[role] ?? [] : []).flatMap((k) => ["-v", `${k.path}:/tmp/.claude/skills/${k.name}:ro`]),

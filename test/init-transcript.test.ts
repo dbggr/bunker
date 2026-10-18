@@ -61,7 +61,7 @@ const noTokens = (env: Record<string, string>) => {
 
 describe("transcript: fresh Node repo with no lockfile", () => {
   test("oriented steps, npm install / npm test, edit offer, confirm names each file, dry run isolates verify", async () => {
-    const w = await repoWith({ "package.json": JSON.stringify({ name: "projstat", scripts: { test: "node --test" } }) });
+    const w = await repoWith({ "package.json": JSON.stringify({ name: "demo-node", scripts: { test: "node --test" } }) });
     const s = scripted();
     const sb = fakeSandbox();
     expect(await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io, sandbox: sb.sandbox, runBunker: async () => 0 })).toBeGreaterThanOrEqual(0);
