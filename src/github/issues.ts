@@ -115,3 +115,57 @@ export async function resumeBlocked(cwd: string, env: Env): Promise<Queued[]> {
   }
   return resumed;
 }
+
+const normTitle = (t: string) => t.toLowerCase().replace(/\s+/g, " ").trim();
+
+/** The open issue #n (with its title); undefined if it doesn't exist, is closed, or gh can't say. */
+export async function openIssue(n: number, cwd: string, env: Env): Promise<{ number: number; title: string } | undefined> {
+  const v = await $`gh issue view ${n} --json number,title,state`.cwd(cwd).env(env).nothrow().quiet();
+  if (v.exitCode !== 0) return undefined;
+  try {
+    const j = JSON.parse(v.stdout.toString()) as { title: string; state: string };
+    return j.state.toUpperCase() === "OPEN" && typeof j.title === "string" ? { number: n, title: j.title } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** An open issue whose title equals `title` (case and spacing aside), so a blocker isn't filed twice. */
+export async function findOpenByTitle(title: string, cwd: string, env: Env, except?: number): Promise<{ number: number; title: string } | undefined> {
+  const list = await $`gh issue list --state open --limit 1000 --json number,title`.cwd(cwd).env(env).nothrow().quiet();
+  if (list.exitCode !== 0) return undefined;
+  try {
+    const found = (JSON.parse(list.stdout.toString()) as { number: number; title: string }[]).find((i) => typeof i?.title === "string" && i.number !== except && normTitle(i.title) === normTitle(title));
+    return found ? { number: found.number, title: found.title } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Open `bunker-blocked` issues and the open issues each still waits on. Empty if gh can't say. */
+export async function listBlocked(cwd: string, env: Env): Promise<{ number: number; title: string; waitingOn: number[] }[]> {
+  const list = await $`gh issue list --label ${BLOCKED_LABEL} --state open --limit 1000 --json number,title`.cwd(cwd).env(env).nothrow().quiet();
+  if (list.exitCode !== 0) return [];
+  let found: { number: number; title?: unknown }[];
+  try {
+    found = JSON.parse(list.stdout.toString());
+  } catch {
+    return [];
+  }
+  const out: { number: number; title: string; waitingOn: number[] }[] = [];
+  for (const { number: n, title } of found) {
+    const v = await $`gh issue view ${n} --json body,author,comments`.cwd(cwd).env(env).nothrow().quiet();
+    let refs: number[] = [];
+    if (v.exitCode === 0) {
+      try {
+        const info = JSON.parse(v.stdout.toString()) as IssueInfo;
+        await markTrust(info, cwd, env);
+        refs = blockerRefs(info);
+      } catch {}
+    }
+    const open: number[] = [];
+    for (const r of refs) if ((await isDone(r, cwd, env)) !== true) open.push(r);
+    out.push({ number: n, title: typeof title === "string" ? title : "", waitingOn: open });
+  }
+  return out;
+}

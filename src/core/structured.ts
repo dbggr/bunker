@@ -64,6 +64,8 @@ export interface FollowUp {
   severity?: Severity;
   /** The follow-up is a defect; it is filed with the `bug` label. */
   bug?: boolean;
+  /** For `blocked_by`: the existing open issue this waits on, instead of a new one to file. */
+  issue?: number;
 }
 
 export interface Report {
@@ -82,10 +84,11 @@ function followUps(v: unknown, field: string): FollowUp[] {
   if (v === undefined) return [];
   if (!Array.isArray(v)) throw new Error(`"${field}" must be an array of {"title","body"}`);
   return v.map((x, i) => {
-    if (!isObj(x) || typeof x.title !== "string" || typeof x.body !== "string") throw new Error(`"${field}[${i}]" must be {"title": string, "body": string}`);
+    if (!isObj(x) || typeof x.title !== "string" || (typeof x.body !== "string" && !(x.issue !== undefined && x.body === undefined))) throw new Error(`"${field}[${i}]" must be {"title": string, "body": string}`);
+    if (x.issue !== undefined && (!Number.isInteger(x.issue) || (x.issue as number) < 1)) throw new Error(`"${field}[${i}].issue" must be an issue number`);
     if (x.bug !== undefined && typeof x.bug !== "boolean") throw new Error(`"${field}[${i}].bug" must be a boolean`);
     if (x.severity !== undefined && !SEVERITIES.includes(x.severity as Severity)) throw new Error(`"${field}[${i}].severity" must be "high", "medium" or "low"`);
-    return { title: x.title, body: x.body, ...(x.severity ? { severity: x.severity as Severity } : {}), ...(x.bug === true ? { bug: true } : {}) };
+    return { title: x.title, body: (x.body as string | undefined) ?? "", ...(x.issue !== undefined ? { issue: x.issue as number } : {}), ...(x.severity ? { severity: x.severity as Severity } : {}), ...(x.bug === true ? { bug: true } : {}) };
   });
 }
 

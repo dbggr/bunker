@@ -14,23 +14,25 @@ export const ISSUE_PROMPT = "{{ISSUE}}{{COMMENTS}}Use Conventional Commits for y
 
 export const ISSUE_CONVENTION =
   "For problems you find outside this task's scope, do not fix them; instead report them. " +
-  "If this issue cannot be done until something else is done, do not work around it: report what blocks it and stop. " +
+  "Block only when this issue cannot be delivered at all without other work. If only an optional or secondary part of the spec depends on it, build the rest and file a follow-up (or note it in the PR) instead of blocking. " +
+  "If it really cannot be done until something else is done, do not work around it: report what blocks it and stop. " +
+  'If what it waits on is an existing open issue (queued, in progress or labelled), give that number as "issue" in the blocked_by item instead of describing a new one; do not file a duplicate. ' +
   'Report by ending your answer with <report>{"issues": [{"title": "short title", "body": "one-paragraph body", "bug": true if it is a defect, "severity": "high|medium|low"}], ' +
   "Never set a priority; a human does that when triaging. " + SEVERITY_HELP + " At most one follow-up is filed per run, the most severe; the rest are only listed, so report only what matters. " +
-  '"blocked_by": [{"title": "short title", "body": "why it blocks, plus acceptance criteria"}]}</report> (valid JSON; both lists optional, omit the whole block if there is nothing to report; only the last <report> counts). ' +
+  '"blocked_by": [{"title": "short title", "body": "why it blocks, plus acceptance criteria", "issue": 12 (only for an existing open issue)}]}</report> (valid JSON; both lists optional, omit the whole block if there is nothing to report; only the last <report> counts). ' +
   "If after checking you find there is nothing to change (the issue is already fixed on the default branch, the behaviour is as designed, it duplicates another issue, or it cannot be reproduced), make no commits and end with " +
   '<no-change>{"verdict": "fixed" | "as-designed" | "duplicate" | "cannot-reproduce", "reason": "why, for the maintainer", "evidence": ["file:line", "#PR", "commit hash"], "duplicate_of": 7}</no-change> instead ("duplicate_of" only for "duplicate"). ' +
   "Every piece of evidence is checked against the default branch: a file:line, a commit or a PR that does not exist gets the verdict rejected. A reviewer must agree with it too. If in doubt, do the work.";
 
 export const REVIEWER_CONVENTION =
   "Out-of-scope problems you find go in the verdict's \"issues\" (do not ask for them to be fixed). " +
-  'If this issue cannot be done until something else is done, put that in "blocked_by".';
+  'If this issue cannot be delivered at all until something else is done, put that in "blocked_by" (with "issue": N if it is an existing open issue); an optional or secondary part that depends on it is not a block.';
 
 /** Follow-ups from the agents' structured `<report>` / `<verdict>` output. */
-export function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: string; body: string; bug?: boolean; severity?: Severity }[]; blocker?: { title: string; body: string } } {
+export function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { title: string; body: string; bug?: boolean; severity?: Severity }[]; blocker?: { title: string; body: string; issue?: number } } {
   const real = (f: { title: string }) => !isPlaceholder(f.title.trim());
   const seen = new Map<string, { body: string; bug: boolean; severity?: Severity }>();
-  const blocked: { title: string; body: string }[] = [];
+  const blocked: { title: string; body: string; issue?: number }[] = [];
   for (const r of rounds) {
     const sources = [
       { structured: r.report },
@@ -40,7 +42,7 @@ export function collectFollowUps(rounds: ReviewResult["rounds"]): { issues: { ti
       const issues = structured ? structured.issues : [];
       const blocks = structured ? structured.blocked_by : [];
       for (const i of issues) if (real(i) && !seen.has(i.title.trim())) seen.set(i.title.trim(), { body: i.body.trim(), bug: "bug" in i && i.bug === true, ...(((i as { severity?: Severity }).severity) ? { severity: (i as { severity?: Severity }).severity } : {}) });
-      for (const b of blocks) if (real(b)) blocked.push({ title: b.title.trim(), body: b.body.trim() });
+      for (const b of blocks) if (real(b)) blocked.push({ title: b.title.trim(), body: b.body.trim(), ...(b.issue ? { issue: b.issue } : {}) });
     }
   }
   return { issues: [...seen].map(([title, f]) => ({ title, body: f.body, ...(f.bug ? { bug: true } : {}), ...(f.severity ? { severity: f.severity } : {}) })), ...(blocked[0] ? { blocker: blocked[0] } : {}) };

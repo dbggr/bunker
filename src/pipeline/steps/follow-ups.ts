@@ -1,6 +1,6 @@
 import { $ } from "bun";
 import { pickFollowUps } from "../../core/structured.ts";
-import { markBlocked } from "../../github/issues.ts";
+import { findOpenByTitle, markBlocked, openIssue } from "../../github/issues.ts";
 import { neutralise } from "../../core/redact.ts";
 import { emit } from "../../core/events.ts";
 import { worktreeAdmin } from "../../worktree/admin.ts";
@@ -47,12 +47,16 @@ export async function fileFollowUps(ctx: IssueRunContext, result: ReviewResult, 
   }
   // The issue can't be done yet: file what it waits on, park it, and leave nothing behind.
   if (blocker) {
-    const created = await $`gh issue create --label discovered --title ${neutralise(blocker.title)} --body ${`${neutralise(blocker.body)}\n\nBlocks #${number}.`}`.cwd(cwd).env(env).nothrow().quiet();
+    // An existing open issue (named by number, or with the same title) is reused rather than filed again.
+    let existing = blocker.issue && blocker.issue !== number ? await openIssue(blocker.issue, cwd, env) : undefined;
+    if (blocker.issue && !existing) log(`blocked_by names #${blocker.issue}, which is not an open issue`, blocker.title);
+    existing ??= await findOpenByTitle(blocker.title, cwd, env, number);
+    const created = existing ? { exitCode: 0, stdout: Buffer.from(`/issues/${existing.number}`), stderr: Buffer.from("") } : await $`gh issue create --label discovered --title ${neutralise(blocker.title)} --body ${`${neutralise(blocker.body)}\n\nBlocks #${number}.`}`.cwd(cwd).env(env).nothrow().quiet();
     const m = created.exitCode === 0 ? /\/issues\/(\d+)/.exec(created.stdout.toString()) : null;
     if (!m) {
       log(`gh issue create failed: ${blocker.title}`, created.stderr.toString());
     } else {
-      const blockedBy = { number: Number(m[1]), title: blocker.title };
+      const blockedBy = { number: Number(m[1]), title: existing?.title ?? blocker.title };
       await markBlocked(number, blockedBy, cwd, env, mention);
       await worktreeAdmin(repo, () => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
       await worktreeAdmin(repo, () => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());

@@ -20,6 +20,7 @@ import { output } from "../core/output.ts";
 import { runClean } from "./commands/clean.ts";
 import { collectStatus, formatStatus } from "./commands/status.ts";
 import { listQueued } from "../github/queue.ts";
+import { listBlocked } from "../github/issues.ts";
 import { alive } from "./commands/watch.ts";
 import { guardFlags, type CliValues } from "./args.ts";
 import { createShepherd } from "../pipeline/shepherd.ts";
@@ -63,7 +64,7 @@ export async function statusCommand(values: CliValues) {
   const fileCaps = await loadSpendCaps().catch(() => ({}));
   const caps = { ...(cfg.watch.max_cost_day === undefined ? {} : { day: cfg.watch.max_cost_day }), ...(cfg.watch.max_cost_month === undefined ? {} : { month: cfg.watch.max_cost_month }), ...fileCaps };
   const env = liveGhEnv();
-  const report = await collectStatus({ repo, caps, alive, queue: () => listQueued(repo, env) });
+  const report = await collectStatus({ repo, caps, alive, queue: () => listQueued(repo, env), blocked: () => listBlocked(repo, env) });
   console.log(values.json ? JSON.stringify(report, null, 2) : formatStatus(report));
   process.exit(0);
 }
