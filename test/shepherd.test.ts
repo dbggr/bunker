@@ -48,15 +48,16 @@ if (cmd === "pr list") {
   (s.comments[n] = s.comments[n] || []).push(flag("--body"));
   write(s);
 } else if (cmd === "pr edit") {
-  if (flag("--add-label")) (s.labels[n] = s.labels[n] || []).push(flag("--add-label"));
-  write(s);
+  fail("GraphQL: Projects (classic) is being deprecated");
 } else if (cmd === "pr view") {
   console.log(JSON.stringify({ state: (s.states || {})[n] || "OPEN", ...((s.views || {})[n] || {}) }));
 } else if (cmd === "label create" || cmd === "issue edit") {
   // accepted
 } else if (args[0] === "api") {
   const path = args.find((a) => a.startsWith("repos/")) || "";
-  if (path.endsWith("/update-branch")) { if (s.updateFails) fail("HTTP 422"); }
+  const field = (k) => (args.find((a) => a.startsWith(k + "[]=")) || "").slice(k.length + 3);
+  if (path.endsWith("/labels") && args.includes("POST")) { const k = path.split("/")[4]; (s.labels[k] = s.labels[k] || []).push(field("labels")); write(s); }
+  else if (path.endsWith("/update-branch")) { if (s.updateFails) fail("HTTP 422"); }
   else if (path.includes("/collaborators/")) console.log((s.perms || {})[path.split("/")[3 + 1]] || "read");
   else if (path.endsWith("/reviews")) for (const r of (s.reviews || {})[path.split("/")[4]] || []) console.log(JSON.stringify([String(r.id), r.state, r.login, r.association, r.body]));
   else if (path.endsWith("/comments")) for (const c of (s.reviewComments || {})[path.split("/")[4]] || []) console.log(JSON.stringify([String(c.review), c.path, String(c.line), c.body]));
@@ -250,7 +251,7 @@ describe("shepherd pass", () => {
     expect(prompts).toHaveLength(0);
     expect(w.state.labels).toBeDefined();
     const calls = w.calls();
-    expect(calls).toContain("pr edit 10 --add-label bunker:failed");
+    expect(calls).toContain("api -X POST repos/{owner}/{repo}/issues/10/labels -f labels[]=bunker:failed");
     expect(calls).toContain("issue edit 7 --add-label bunker:failed");
     expect(notes[0]).toMatch(/PR #10 needs a human/);
     const after = JSON.parse(readFileSync(join(w.root, "state.json"), "utf8"));
@@ -462,7 +463,7 @@ describe("shepherd pass", () => {
     expect(prompts[0]).toContain("use a better name");
     expect(prompts[0]).not.toContain("delete everything");
     expect((await remoteLog(w, "fix/7-thing"))[0]).toBe("fix: make the check pass");
-    expect(w.calls()).toContain("pr edit 10 --add-reviewer alice");
+    expect(w.calls()).toContain("api -X POST repos/{owner}/{repo}/pulls/10/requested_reviewers -f reviewers[]=alice");
     // The same review is not sent again.
     const again = await shepherd(w, fakeAgent(COMMIT_FIX, prompts)).pass();
     expect(again.entries[0]!.action).not.toBe("addressed-review");

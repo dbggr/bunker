@@ -37,3 +37,11 @@ test("the implementer prompt puts .github/workflows/ off-limits", () => {
   expect(ISSUE_PROMPT).toContain(".github/workflows/");
   expect(ISSUE_PROMPT).toMatch(/off-limits/);
 });
+
+test("no gh pr edit in src: it queries Projects (classic) and fails; labels and reviewers go through REST", async () => {
+  const offenders: string[] = [];
+  for await (const file of new Glob("**/*.ts").scan(join(import.meta.dir, "..", "src"))) {
+    if (/gh pr edit|"pr", "edit"/.test(await Bun.file(join(import.meta.dir, "..", "src", file)).text())) offenders.push(file);
+  }
+  expect(offenders).toEqual([]);
+});

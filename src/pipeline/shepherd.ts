@@ -13,7 +13,7 @@ import { agentLimits, stepLimits, type Sandbox, type Timeouts } from "../sandbox
 import { isolatedEnv } from "../sandboxes/env.ts";
 import { listBunkerPrs, type BunkerPr } from "../github/prs.ts";
 import { MAINTAINER_ROLES } from "../github/labeler.ts";
-import { ensureLabel, FAILED_LABEL, REVIEW_LABEL } from "../github/labels.ts";
+import { addPrLabel, ensureLabel, FAILED_LABEL, requestReviewer, REVIEW_LABEL } from "../github/labels.ts";
 import { copyIntoWorktree, copyPatterns } from "../worktree/copy.ts";
 import { runSetup, worktreeAdmin } from "../worktree/admin.ts";
 import { isSensitivePath } from "../worktree/steering.ts";
@@ -137,7 +137,7 @@ export function createShepherd(o: ShepherdOptions) {
 
   const giveUp = async (pr: BunkerPr, why: string): Promise<ShepherdEntry> => {
     await ensureLabel(FAILED_LABEL, cwd, env);
-    await gh`gh pr edit ${pr.number} --add-label ${FAILED_LABEL}`;
+    await addPrLabel(pr.number, FAILED_LABEL, cwd, env);
     await gh`gh issue edit ${pr.issue} --add-label ${FAILED_LABEL}`;
     await comment(pr, `${MARK.gaveUp}\n${o.mention ? `${o.mention} ` : ""}bunker could not get this PR merged: ${codeSpan(why)}\n\nFix it by hand, or remove the \`${FAILED_LABEL}\` label to let the shepherd try again.`);
     notify(`bunker: PR #${pr.number} needs a human`, why);
@@ -365,7 +365,7 @@ export function createShepherd(o: ShepherdOptions) {
       "\n\nWhen you are done, commit your changes with git. Uncommitted work is discarded.";
     note(pr, `addressing a review by ${reviews.map((r) => r.login).join(", ")}`);
     const result = await fix(pr, prompt, "addressed-review");
-    if (result.action === "addressed-review") for (const r of reviews) await gh`gh pr edit ${pr.number} --add-reviewer ${r.login}`;
+    if (result.action === "addressed-review") for (const r of reviews) await requestReviewer(pr.number, r.login, cwd, env);
     return result;
   };
 

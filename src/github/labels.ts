@@ -65,3 +65,22 @@ export async function unqueue(issue: number, cwd: string, env: Env, extra: strin
   const remove = labels === undefined || labels.includes(QUEUED_LABEL) ? ["--remove-label", QUEUED_LABEL] : [];
   return $`gh issue edit ${issue} ${remove} ${extra}`.cwd(cwd).env(env).nothrow().quiet();
 }
+
+/** PR number from a PR URL or a plain number. */
+const prNumber = (pr: number | string) => (typeof pr === "number" ? pr : (/\/pull\/(\d+)/.exec(pr)?.[1] ?? String(pr)));
+
+type Outcome = { ok: boolean; error: string };
+const outcome = (r: { exitCode: number; stderr: Buffer }): Outcome => ({ ok: r.exitCode === 0, error: r.stderr.toString().trim() });
+
+/** Labels a PR through REST: the pr-edit subcommand queries Projects (classic), which GitHub is retiring, and fails. */
+export async function addPrLabel(pr: number | string, name: string, cwd: string, env: Env): Promise<Outcome> {
+  return outcome(await $`gh api -X POST repos/{owner}/{repo}/issues/${prNumber(pr)}/labels -f ${`labels[]=${name}`}`.cwd(cwd).env(env).nothrow().quiet());
+}
+
+export async function removePrLabel(pr: number | string, name: string, cwd: string, env: Env): Promise<Outcome> {
+  return outcome(await $`gh api -X DELETE repos/{owner}/{repo}/issues/${prNumber(pr)}/labels/${encodeURIComponent(name)}`.cwd(cwd).env(env).nothrow().quiet());
+}
+
+export async function requestReviewer(pr: number | string, login: string, cwd: string, env: Env): Promise<Outcome> {
+  return outcome(await $`gh api -X POST repos/{owner}/{repo}/pulls/${prNumber(pr)}/requested_reviewers -f ${`reviewers[]=${login}`}`.cwd(cwd).env(env).nothrow().quiet());
+}
