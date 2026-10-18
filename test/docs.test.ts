@@ -43,6 +43,15 @@ describe("docs", () => {
     }
   });
 
+  test("security.md covers the 2026-10-18 security fixes", async () => {
+    const sec = await read("docs/security.md");
+    for (const needle of ["core.hooksPath=/dev/null", "core.fsmonitor=false", "verify_network", "re-add the label", "rulesets", "Administration", "getting-started.md#"]) {
+      expect(sec).toContain(needle);
+    }
+    expect(sec).not.toContain("needs-human-review"); // no longer set; the label is bunker:review
+    expect(sec).toContain("bunker:review");
+  });
+
   test("README has no flag tables and stays short", async () => {
     const readme = await read("README.md");
     expect(readme).not.toMatch(/^\|.*--[a-z]/m);

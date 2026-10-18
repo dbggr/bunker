@@ -48,7 +48,7 @@ In the target repo:
 
   `verify` is read from origin's default branch, so an agent cannot edit it for its own run, and it runs in the sandbox. Copied files are never committed and `.env*` values are redacted from logs; paths outside the repo are rejected. Further keys (`[models]`, `[watch]`, `[merge]`, `[queue]`) are listed in [cli.md](cli.md). The older `.bunker/setup`, `.bunker/verify` and `.bunker/copy` files still work but are deprecated. `bunker doctor` shows the effective value and source of every key.
 - `.bunker/Dockerfile` (optional): adds the repo's toolchain to the agent image. Start with `FROM bunker-claude`. See [concepts.md](concepts.md).
-- On GitHub: enable "Allow auto-merge", and make a CI check required on the default branch. `--merge` hands the merge to GitHub, which merges only when the required checks pass; without auto-merge, or when the repository rulesets (`GET rules/branches/<default>`) show no required status check or cannot be read, bunker refuses (`merge-failed`) rather than merge immediately.
+- On GitHub: enable "Allow auto-merge", and make a CI check required on the default branch. `--merge` hands the merge to GitHub, which merges only when the required checks pass; without auto-merge, or when the repository rulesets (`GET rules/branches/<default>`) show no required status check or cannot be read, bunker refuses (`merge-failed`) rather than merge immediately. Require the check with a repository **ruleset** (Settings → Rules → Rulesets): the fine-grained token can read rulesets but not classic branch protection, which needs Administration (see [security.md](security.md)).
 
 Commit these files; the Dockerfile is read from the agent's worktree.
 
