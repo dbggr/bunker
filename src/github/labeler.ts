@@ -17,7 +17,7 @@ export async function checkLabeler(issue: number, opts: { cwd: string; env: Env;
   const events = await $`gh api repos/{owner}/{repo}/issues/${issue}/events --paginate --jq ${`.[] | select(${QUEUED_EVENT_JQ}) | .actor.login`}`.cwd(cwd).env(env).nothrow().quiet();
   if (events.exitCode !== 0) return { ok: false, denied: false, reason: `could not read the label events of #${issue}: ${events.stderr.toString().trim()}` };
   const adder = events.stdout.toString().split("\n").map((l) => l.trim()).filter(Boolean).pop();
-  if (!adder) return { ok: false, denied: false, reason: `no \`bunker:queued\` label event found on #${issue} (add the label first: --issue checks who labeled it)` };
+  if (!adder) return { ok: false, denied: false, reason: `no \`bunker:queued\` label event found on #${issue} (add the label first: \`bunker issue\` checks who labeled it)` };
   const allowed = (login: string) => opts.allow?.some((a) => a.toLowerCase() === login.toLowerCase()) ?? false;
   if (!allowed(adder)) {
     const denied = await checkPermission(adder, opts);

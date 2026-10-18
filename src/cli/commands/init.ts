@@ -165,7 +165,7 @@ export async function runInit(opts: { cwd: string; env?: Env; yes: boolean; io: 
       else if (toml) await writeFileAsk("config.toml", toml, `${tc.name}: one file for the repo settings; see \`bunker --help\` for more keys`);
       if (failing("dockerfile")) await writeFileAsk("Dockerfile", `FROM bunker-claude\n${tc.dockerfile}`, `adds ${tc.name}, which the base image lacks`);
     }
-    if (failing("verify")) io.say("Without a verify command in .bunker/config.toml, --merge and --watch can't run.");
+    if (failing("verify")) io.say("Without a verify command in .bunker/config.toml, --merge and watch can't run.");
     await ensureIgnored(root, env, io);
   }
 
@@ -214,7 +214,7 @@ export async function runInit(opts: { cwd: string; env?: Env; yes: boolean; io: 
   io.say("\n== Doctor ==");
   const last = await runDoctor({ cwd: opts.cwd, env });
   io.say(formatChecks(last.checks));
-  if (last.code === 0) io.say("\nAll set. Start with:\n  bunker --issue <n> --merge\nor work the labelled queue unattended:\n  bunker --watch");
+  if (last.code === 0) io.say("\nAll set. Start with:\n  bunker issue <n> --merge\nor work the labelled queue unattended:\n  bunker watch");
   else io.say("\nStill missing (see ✗ above). Fix those and re-run `bunker doctor`.");
   return last.code;
 }

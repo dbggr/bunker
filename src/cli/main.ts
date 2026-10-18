@@ -24,7 +24,8 @@ import { join } from "node:path";
 import { redact } from "../core/redact.ts";
 import { createProgress, emit, type BunkerEvent } from "../core/events.ts";
 import { connectHub, hubReachable, readToken, repoId, startHub, viewUrlFor, type Hub, type Publisher } from "../ui/ui.ts";
-import { HELP } from "./commands/help.ts";
+import { COMMAND_HELP, HELP } from "./commands/help.ts";
+import { MODES, resolveMode, type Mode } from "./modes.ts";
 import { options } from "../core/options.ts";
 import { output } from "../core/output.ts";
 import { safePull } from "../github/pull.ts";
@@ -61,11 +62,14 @@ try {
   console.error(`bunker: ${unknown ? `unknown option ${unknown[1]}` : msg.split(". ")[0]}\nsee bunker --help`);
   process.exit(2);
 }
-const { values, positionals } = parsed;
+const { values } = parsed;
+let positionals = parsed.positionals;
+const literal = process.argv.slice(2).includes("--");
 const isTriage = !process.argv.slice(2).includes("--") && positionals.length === 1 && positionals[0] === "triage";
 
 if (values.help) {
-  console.log(HELP);
+  const first = literal ? undefined : positionals[0];
+  console.log((MODES as readonly string[]).includes(first ?? "") ? COMMAND_HELP[first as Mode] : HELP);
   process.exit(0);
 }
 
@@ -93,15 +97,6 @@ if (positionals.length === 1 && positionals[0] === "clean") {
   await cleanCommand(values);
 }
 
-if (values.yes && !isTriage) {
-  console.error("bunker: --yes only applies to init, clean and triage");
-  process.exit(2);
-}
-if (values.logs !== undefined || values.images || values.force) {
-  console.error("bunker: --logs, --images and --force only apply to clean");
-  process.exit(2);
-}
-
 // `bunker ui [--port <n>]`: the shared live view, a long-lived hub every run publishes to.
 if (positionals.length === 1 && positionals[0] === "ui") {
   await uiCommand(values);
@@ -117,14 +112,12 @@ if (!process.argv.slice(2).includes("--") && positionals.length === 1 && positio
   await shepherdCommand(values);
 }
 
+const resolved = guardFlags(() => resolveMode(values, positionals, literal));
+positionals = resolved.positionals;
 const { config: repoCfg, legacy: legacyCfg } = await loadRepoConfigOrExit(process.cwd());
 const prompt = positionals.join(" ");
 const tasks = values.task ?? [];
-// Manual-merge mode: the run ends at an open PR a human merges (`merge = "manual"` in config.toml, or `--watch --no-merge`).
-if (values["no-merge"] && !values.watch) {
-  console.error("bunker: --no-merge only applies to --watch");
-  process.exit(2);
-}
+// Manual-merge mode: the run ends at an open PR a human merges (`merge = "manual"` in config.toml, or `bunker watch --no-merge`).
 const manual = !!values["no-merge"] || (repoCfg.merge.mode === "manual" && (!!values.watch || !!values.queue || values.issue !== undefined));
 if (manual && values.merge) {
   console.error('bunker: --merge conflicts with manual-merge mode (--no-merge or merge = "manual" in .bunker/config.toml)');
@@ -132,10 +125,6 @@ if (manual && values.merge) {
 }
 let watchOpts: { intervalMs: number; maxCostDayUsd?: number; maxCostMonthUsd?: number; forMs?: number; auditEveryDays?: number; triageEveryHours?: number } | undefined;
 if (values.watch) {
-  if (prompt || tasks.length || values.review || values.issue !== undefined || values.queue || values.audit || values.limit !== undefined) {
-    console.error("bunker: --watch can't be combined with a prompt, --task, --review, --issue, --queue, --audit or --limit");
-    process.exit(2);
-  }
   if (values["max-cost"] !== undefined && values["max-cost-day"] !== undefined) {
     console.error("bunker: --max-cost is an alias of --max-cost-day; pass only one");
     process.exit(2);
@@ -151,66 +140,29 @@ if (values.watch) {
     }
   }
   if (!values.verify && !repoCfg.verify && !legacyCfg.verify && !existsSync(join(process.cwd(), ".bunker", "verify"))) {
-    console.error("bunker: --watch needs a verify command: pass --verify \"<cmd>\" or set verify in .bunker/config.toml");
+    console.error('bunker: watch needs a verify command: pass --verify "<cmd>" or set verify in .bunker/config.toml');
     process.exit(2);
   }
   watchOpts = { intervalMs: intervalMin * 60_000, ...(caps.day === undefined ? {} : { maxCostDayUsd: caps.day }), ...(caps.month === undefined ? {} : { maxCostMonthUsd: caps.month }), ...(forMs === undefined ? {} : { forMs }), ...(auditEveryDays === undefined ? {} : { auditEveryDays }), ...(triageEveryHours === undefined ? {} : { triageEveryHours }) };
   values.queue = true;
   values.merge = !manual;
-} else if (values.interval !== undefined || values.for !== undefined || values["max-cost"] !== undefined || values["max-cost-day"] !== undefined || values["max-cost-month"] !== undefined || values["audit-every"] !== undefined || values["triage-every"] !== undefined) {
-  console.error("bunker: --interval, --for, --max-cost, --max-cost-day, --max-cost-month, --audit-every and --triage-every only apply to --watch");
-  process.exit(2);
-}
-if (values.audit) {
-  if (prompt || tasks.length || values.review || values.issue !== undefined || values.queue) {
-    console.error("bunker: --audit can't be combined with a prompt, --task, --review, --issue or --queue");
-    process.exit(2);
-  }
-  if (values.verify !== undefined || values.merge || values["verify-on-host"]) {
-    console.error("bunker: --verify, --verify-on-host and --merge don't apply to --audit");
-    process.exit(2);
-  }
-} else if ((values["max-issues"] !== undefined && !values.watch) || values.focus !== undefined) {
-  console.error("bunker: --max-issues only applies to --audit (or --watch --audit-every) and --focus only to --audit");
-  process.exit(2);
 }
 const maxIssues = values["max-issues"] === undefined ? 5 : Number(values["max-issues"]);
 if (!Number.isInteger(maxIssues) || maxIssues < 1) {
   console.error("bunker: --max-issues must be a positive integer");
   process.exit(2);
 }
-// Whether --merge has a verify command is decided by runIssue, from origin's default branch.
-if (values.audit) {
-  // checked above
-} else if (values.queue) {
-  if (prompt || tasks.length || values.review || values.issue !== undefined) {
-    console.error("bunker: --queue can't be combined with a prompt, --task, --review or --issue");
-    process.exit(2);
-  }
-} else if (values.limit !== undefined) {
-  console.error("bunker: --limit only applies to --queue");
-  process.exit(2);
-} else if (values.issue !== undefined) {
-  if (prompt || tasks.length || values.review) {
-    console.error("bunker: --issue can't be combined with a prompt, --task or --review");
-    process.exit(2);
-  }
-}
-if (!values.audit && values.issue === undefined && !values.queue && (values.verify !== undefined || values.setup !== undefined || values.merge || values["verify-on-host"])) {
-  console.error("bunker: --setup, --verify, --verify-on-host and --merge only apply to --issue or --queue");
-  process.exit(2);
-}
 if (!values.audit && values.issue === undefined && !values.queue && !prompt === !tasks.length) {
   console.error(
     'usage: bunker "<prompt>" [--model <id>] [--image <name>] [--no-sandbox] [--max-iterations <n>]\n' +
-      '       bunker --review "<prompt>" [--max-rounds <n>] [--reviewer-model <id>]   (implement → review → fix)\n' +
-      '       bunker --issue <n> [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--max-rounds <n>] [--reviewer-model <id>]   (issue → reviewed PR)\n' +
-      '       bunker --queue [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--limit <n>] [--parallel <n>]   (work the `bunker:queued` label queue)\n' +
-      '       bunker --watch [--interval <min>] [--for <duration>] [--max-cost-day <usd>] [--max-cost-month <usd>] [--parallel <n>] [--verify "<cmd>"]   (work the queue unattended, auto-merging)\n' +
-      '       bunker --watch --no-merge   (or merge = "manual" in config.toml: PRs wait for you to merge them)\n' +
+      '       bunker review "<prompt>" [--max-rounds <n>] [--reviewer-model <id>]   (implement → review → fix)\n' +
+      '       bunker issue <n> [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--max-rounds <n>] [--reviewer-model <id>]   (issue → reviewed PR)\n' +
+      '       bunker queue [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--limit <n>] [--parallel <n>]   (work the `bunker:queued` label queue)\n' +
+      '       bunker watch [--interval <min>] [--for <duration>] [--max-cost-day <usd>] [--max-cost-month <usd>] [--parallel <n>] [--verify "<cmd>"]   (work the queue unattended, auto-merging)\n' +
+      '       bunker watch --no-merge   (or merge = "manual" in config.toml: PRs wait for you to merge them)\n' +
       '       bunker shepherd   (one pass over the open bunker PRs: CI fixes, branch updates, conflicts)\n' +
-      '       bunker --audit [--max-issues <n>] [--focus "<text>"] [--setup "<cmd>"]   (file improvement ideas as `discovered` issues)\n' +
-      '       bunker --task "<prompt>" --task "<prompt>" ...   (parallel, one worktree each)\n' +
+      '       bunker audit [--max-issues <n>] [--focus "<text>"] [--setup "<cmd>"]   (file improvement ideas as `discovered` issues)\n' +
+      '       bunker task "<prompt>" "<prompt>" ...   (parallel, one worktree each)\n' +
       "run bunker --help for all options",
   );
   process.exit(2);
@@ -218,14 +170,6 @@ if (!values.audit && values.issue === undefined && !values.queue && !prompt === 
 
 if (!values.ui && (values.port !== undefined || values["ui-keep"])) {
   console.error("bunker: --port and --ui-keep only apply to --ui");
-  process.exit(2);
-}
-if (values["allow-labeler"]?.length && values.issue === undefined && !values.queue) {
-  console.error("bunker: --allow-labeler only applies to --issue, --queue or --watch");
-  process.exit(2);
-}
-if (values.ui && values.issue === undefined && !values.queue) {
-  console.error("bunker: --ui only applies to --issue or --queue");
   process.exit(2);
 }
 const uiPort = values.port === undefined ? 4321 : Number(values.port);
@@ -244,10 +188,6 @@ const resume = !values["no-resume"];
 const maxRounds = values["max-rounds"] === undefined ? 2 : Number(values["max-rounds"]);
 if (!Number.isInteger(maxRounds) || maxRounds < 1) {
   console.error("bunker: --max-rounds must be a positive integer");
-  process.exit(2);
-}
-if (values.review && !prompt) {
-  console.error("bunker: --review takes a single prompt, not --task");
   process.exit(2);
 }
 
@@ -300,13 +240,13 @@ if (values.ui || values.audit || values.queue || values.issue !== undefined) {
 }
 const onEvent = publisher ? (e: BunkerEvent) => (progress.onEvent(e), publisher.onEvent(e)) : progress.onEvent;
 clearProgress = progress.clear;
-// Keep the caller's checkout current (lags otherwise: .bunker/verify lookup, docs); --watch pulls on every pass itself.
+// Keep the caller's checkout current (lags otherwise: .bunker/verify lookup, docs); bunker watch pulls on every pass itself.
 const pull = !values["no-pull"] && !watchOpts && (values.audit || values.queue || values.issue !== undefined);
 if (pull) {
   const r = await safePull(process.cwd());
   if (!r.pulled) console.log(r.message);
 }
-// Leftovers of earlier interrupted runs; --watch does the same once it holds its lock.
+// Leftovers of earlier interrupted runs; bunker watch does the same once it holds its lock.
 if (!watchOpts && (values.queue || values.issue !== undefined)) await runClean({ cwd: process.cwd(), yes: true, auto: true, logsDays: repoCfg.clean.logs_days ?? 30 });
 const models = resolveModels(values, process.env, repoCfg.models);
 const agent = claudeCode({ model: models.implementer, json: true });
@@ -366,7 +306,7 @@ if (values.audit) {
   if (result.error) console.log(`  ${result.error.trimEnd().replaceAll("\n", "\n  ")}`);
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
   if (result.status === "paused-usage-limit") {
-    // Nothing resumes a plain --review, so don't leak the kept worktree; the branch keeps the committed work.
+    // Nothing resumes a plain bunker review, so don't leak the kept worktree; the branch keeps the committed work.
     if (result.pause) await worktreeAdmin(process.cwd(), () => $`git -C ${process.cwd()} worktree remove --force ${result.pause!.worktree}`.nothrow().quiet());
     console.log(`bunker: paused on the Claude usage limit; work kept on ${result.branch}; ${rerunHint(result.pause?.resetAt)}`);
     await publisher?.flush();

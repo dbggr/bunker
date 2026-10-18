@@ -16,7 +16,7 @@ export interface CleanOptions {
   logsDays?: number;
   /** Also remove `bunker-repo-*` docker images no running container uses. */
   images?: boolean;
-  /** Go ahead although a `--watch` lock is held by a live process. */
+  /** Go ahead although a `bunker watch` lock is held by a live process. */
   force?: boolean;
   /** Start-up cleanup: worktrees, branches, old logs and closed issues' sessions only, quiet, and a no-op rather than an error when it can't run. */
   auto?: boolean;
@@ -94,7 +94,7 @@ export async function runClean(o: CleanOptions): Promise<CleanResult> {
   if (existsSync(lock) && !o.force) {
     const pid = Number(readFileSync(lock, "utf8").trim());
     if (Number.isInteger(pid) && pid > 0 && pid !== process.pid && alive(pid)) {
-      return stop(`a bunker --watch is running here (pid ${pid}); stop it first, or pass --force to clean anyway`);
+      return stop(`a bunker watch is running here (pid ${pid}); stop it first, or pass --force to clean anyway`);
     }
   }
 
@@ -324,7 +324,7 @@ export async function runClean(o: CleanOptions): Promise<CleanResult> {
 
 /**
  * Crash recovery: removes `bunker:in-progress` from open issues with no live run. Live means a worktree `.worktrees/<n>-*` that a
- * process still uses (a `--watch` takes `watch.lock` first, so none of its own runs exist yet). Labels only display state, so a
+ * process still uses (a `bunker watch` takes `watch.lock` first, so none of its own runs exist yet). Labels only display state, so a
  * failed lookup or edit leaves things as they are. Returns the issues cleared.
  */
 export async function clearStaleInProgress(repo: string, env: Record<string, string>): Promise<number[]> {

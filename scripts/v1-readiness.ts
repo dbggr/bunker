@@ -139,7 +139,7 @@ const totalCost = runs.reduce((a, r) => a + r.costUsd, 0);
 
 const report = {
   repo,
-  window: { from: runs[0]?.startedAt, to: runs.at(-1)?.startedAt, logs: runs.length, note: "run logs exist from the first --issue runs that wrote them; earlier runs are only visible through their PRs" },
+  window: { from: runs[0]?.startedAt, to: runs.at(-1)?.startedAt, logs: runs.length, note: "run logs exist from the first bunker issue runs that wrote them; earlier runs are only visible through their PRs" },
   runs: {
     total: runs.length,
     byStatus: Object.fromEntries([...count(runs, (r) => r.status)].sort((a, b) => b[1] - a[1])),

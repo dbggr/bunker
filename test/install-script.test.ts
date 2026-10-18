@@ -120,7 +120,7 @@ describe("install.sh", () => {
     writeFileSync(join(lock, "watch.lock"), String(process.pid));
     const r = run(["--yes"]);
     expect(r.code).toBe(2);
-    expect(r.err).toContain("--watch");
+    expect(r.err).toContain("bunker watch");
   });
 
   test("--uninstall removes the binary and checkout, not config", () => {

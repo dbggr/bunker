@@ -55,7 +55,7 @@ watch_blocker() {
   [ -f "$lock" ] || return 0
   pid=$(tr -dc '0-9' < "$lock")
   if [ -n "$pid" ] && kill -0 "$pid" 2> /dev/null; then
-    echo "bunker installer: refused: a bunker --watch (pid $pid) is running for $HOME_DIR" >&2
+    echo "bunker installer: refused: a bunker watch (pid $pid) is running for $HOME_DIR" >&2
     exit 2
   fi
 }

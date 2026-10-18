@@ -147,7 +147,7 @@ async function auditRun({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, fo
   const { file, notFiled } = pickFollowUps(fresh, maxIssues);
   result.notFiled = notFiled.map((b) => ({ title: b.title, ...(b.severity ? { severity: b.severity } : {}) }));
   for (const b of file) {
-    const body = `${neutralise(b.body)}\n\nFiled by \`bunker --audit\`.`;
+    const body = `${neutralise(b.body)}\n\nFiled by \`bunker audit\`.`;
     const severity = `severity:${b.severity ?? "medium"}`;
     let created = await $`gh issue create --label discovered --label ${severity} --title ${neutralise(b.title)} --body ${body}`.cwd(repo).env(env).nothrow().quiet();
     // A repo without the severity labels rejects the call; file it without rather than drop it.

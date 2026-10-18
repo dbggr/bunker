@@ -209,7 +209,7 @@ describe("bunker clean", () => {
       await Bun.write(join(repo, ".bunker/watch.lock"), String(sleeper.pid));
       const r = await run(repo, { yes: true });
       expect(r.code).toBe(2);
-      expect(r.out).toContain("--watch");
+      expect(r.out).toContain("bunker watch");
       expect(existsSync(a)).toBe(true);
       const f = await run(repo, { yes: true, force: true });
       expect(f.code).toBe(0);

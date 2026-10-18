@@ -98,13 +98,13 @@ describe("init --yes", () => {
     const w = await bunRepo({ files: { "repo.json": JSON.stringify({ default_branch: "main", allow_auto_merge: false }) } });
     const s = scripted();
     expect(await runInit({ cwd: w.repo, env: w.env, yes: true, io: s.io })).toBe(1);
-    expect(s.text()).not.toContain("bunker --issue");
+    expect(s.text()).not.toContain("bunker issue");
     const w2 = await bunRepo();
     await Bun.write(join(w2.data, "labels.json"), JSON.stringify(["bunker:queued", "bunker:in-progress", "bunker:failed", "bunker:review", "discovered", "bunker-blocked", "priority:high", "priority:medium", "priority:low", "severity:high", "severity:medium"].map((name) => ({ name }))));
     const s2 = scripted();
     expect(await runInit({ cwd: w2.repo, env: w2.env, yes: true, io: s2.io })).toBe(0);
-    expect(s2.text()).toContain("bunker --issue <n> --merge");
-    expect(s2.text()).toContain("bunker --watch");
+    expect(s2.text()).toContain("bunker issue <n> --merge");
+    expect(s2.text()).toContain("bunker watch");
   });
 });
 
