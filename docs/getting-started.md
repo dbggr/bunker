@@ -78,3 +78,29 @@ bunker watch --for 5h --max-cost-day 10
 ```
 
 `bunker watch` implies `bunker queue --merge`, so it needs `verify` in `config.toml`. Watch the run with `bunker ui`. Every flag is in [cli.md](cli.md); if something goes wrong see [troubleshooting.md](troubleshooting.md).
+
+## Optional: a separate GitHub identity
+
+Everything above uses your own PAT, so every PR is authored by you and GitHub won't let you approve it. If you want separate attribution, or "auto-merge, but only after I approve", give bunker its own identity. This is opt-in; with only `BUNKER_GH_TOKEN` set nothing changes, and `bunker init` asks (default no).
+
+> Not yet tested end to end against a real repository; tracked in [#372](https://github.com/dbggr/tool-bunker/issues/372).
+
+**A GitHub App** (preferred). Create a private App with no webhook and the permissions Contents, Pull requests and Issues: Read and write; Metadata, Actions, Checks and Statuses: Read. Don't grant Workflows. Install it on the repo, generate a private key, and set in `~/.config/bunker/.env`:
+
+```sh
+BUNKER_APP_ID=<app id>
+BUNKER_APP_PRIVATE_KEY_PATH=~/.config/bunker/bunker-app.pem   # chmod 600
+```
+
+At run start bunker signs a JWT with the key, finds the repo's installation (`GET /repos/{owner}/{repo}/installation`), mints an installation token (`POST /app/installations/{id}/access_tokens`) and uses it for push, PR, issue, comment and label calls. Tokens last an hour; bunker renews them before they expire. The key and the tokens are never passed into a sandbox, and output is redacted.
+
+**A bot account.** Create a GitHub user for bunker, add it as a collaborator, and set `BUNKER_BOT_GH_TOKEN` to its fine-grained PAT (same permissions as above). It takes the place of `BUNKER_GH_TOKEN`.
+
+If both are configured the App wins. If the App can't mint a token bunker stops; it does not fall back to your PAT. Commits still carry your configured git author. The maintainer gate and trusted-comment rules still key on the human maintainer: comments by the bot never count as trusted. `bunker doctor` shows which identity is in use and whether it can read the repo, issues and PRs.
+
+**Recipe: require your approval before merge.** Because the PR author is now the bot, you can approve it:
+
+1. Settings → Rules → Rulesets (or branch protection) for the default branch: require a pull request with 1 approving review, plus your CI check.
+2. Allow auto-merge in Settings → General.
+3. bunker opens the PR and enables auto-merge; it waits for CI and your approval.
+4. Approve the PR; auto-merge lands it.

@@ -9,13 +9,13 @@ afterEach(cleanup);
 
 const exists = (p: string) => Bun.file(p).exists();
 
-/** An Io that answers from a script: confirm → yes unless listed in `no`; ask/secret from queues. */
-function scripted(o: { no?: RegExp[]; asks?: string[]; secrets?: string[] } = {}) {
+/** An Io that answers from a script: confirm → its default (yes unless listed in `no`; no unless listed in `yes`); ask/secret from queues. */
+function scripted(o: { no?: RegExp[]; yes?: RegExp[]; asks?: string[]; secrets?: string[] } = {}) {
   const said: string[] = [];
   const asked: string[] = [];
   const io: Io = {
     say: (s) => void said.push(s),
-    confirm: async (q) => (asked.push(q), !o.no?.some((r) => r.test(q))),
+    confirm: async (q, def = true) => (asked.push(q), def ? !o.no?.some((r) => r.test(q)) : !!o.yes?.some((r) => r.test(q))),
     ask: async (q, def) => (asked.push(q), o.asks?.shift() ?? def ?? ""),
     secret: async (q) => (asked.push(q), o.secrets?.shift() ?? ""),
   };
@@ -143,6 +143,44 @@ describe("init interactive", () => {
     await runInit({ cwd: w.repo, env, yes: false, io: s.io });
     expect(await exists(join(w.home, ".config/bunker/.env"))).toBe(false);
     expect(s.text()).toContain("GitHub origin");
+  });
+
+  test("the separate identity step is offered, defaults to no, and stores nothing then", async () => {
+    const w = await bunRepo();
+    const s = scripted();
+    await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io });
+    expect(s.asked.some((q) => /separate GitHub identity/.test(q))).toBe(true);
+    expect(await exists(join(w.home, ".config/bunker/.env"))).toBe(false);
+  });
+
+  test("--yes never offers the identity step", async () => {
+    const w = await bunRepo();
+    const s = scripted();
+    await runInit({ cwd: w.repo, env: w.env, yes: true, io: s.io });
+    expect(s.asked.some((q) => /separate GitHub identity/.test(q))).toBe(false);
+  });
+
+  test("opting into an App stores its id and key path 0600, not the key", async () => {
+    const w = await bunRepo();
+    const pem = join(w.home, "bunker-app.pem");
+    await Bun.write(pem, "-----BEGIN PRIVATE KEY-----\nsecretkeybody\n-----END PRIVATE KEY-----\n");
+    const s = scripted({ yes: [/separate GitHub identity/], asks: ["app", "5365669", pem] });
+    await runInit({ cwd: w.repo, env: { ...w.env }, yes: false, io: s.io });
+    const file = join(w.home, ".config/bunker/.env");
+    const body = await Bun.file(file).text();
+    expect(body).toContain("BUNKER_APP_ID=5365669");
+    expect(body).toContain(`BUNKER_APP_PRIVATE_KEY_PATH=${pem}`);
+    expect(body).not.toContain("secretkeybody");
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect((await stat(pem)).mode & 0o777).toBe(0o600);
+  });
+
+  test("opting into a bot account stores its token", async () => {
+    const w = await bunRepo();
+    const s = scripted({ yes: [/separate GitHub identity/], asks: ["bot"], secrets: ["github_pat_bot123456"] });
+    await runInit({ cwd: w.repo, env: { ...w.env }, yes: false, io: s.io });
+    expect(await Bun.file(join(w.home, ".config/bunker/.env")).text()).toContain("BUNKER_BOT_GH_TOKEN=github_pat_bot123456");
+    expect(s.text()).not.toContain("github_pat_bot123456");
   });
 
   test("declining a file writes nothing; models go to the repo's .bunker/.env", async () => {

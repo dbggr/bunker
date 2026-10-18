@@ -1,7 +1,7 @@
 import { CLAUDE_CREDENTIAL_VARS } from "../agents/claude.ts";
 
 /** GitHub credentials bunker itself uses; an agent must never see them. */
-export const GH_TOKEN_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "BUNKER_GH_TOKEN"] as const;
+export const GH_TOKEN_VARS = ["GH_TOKEN", "GITHUB_TOKEN", "BUNKER_GH_TOKEN", "BUNKER_BOT_GH_TOKEN", "BUNKER_APP_ID", "BUNKER_APP_PRIVATE_KEY_PATH"] as const;
 
 export function agentEnv(): Record<string, string | undefined> {
   const env = { ...process.env };

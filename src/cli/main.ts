@@ -22,6 +22,8 @@ import { parseDuration, runWatch } from "./commands/watch.ts";
 import { desktopNotifier, resolveMention } from "../core/notify.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { applyIdentity, identityKind } from "../github/identity.ts";
+import { parseGithubRemote } from "./commands/doctor.ts";
 import { redact } from "../core/redact.ts";
 import { createProgress, emit, type BunkerEvent } from "../core/events.ts";
 import { connectHub, hubReachable, readToken, repoId, startHub, viewUrlFor, type Hub, type Publisher } from "../ui/ui.ts";
@@ -197,6 +199,18 @@ if (!Number.isInteger(limit) || limit < 1) {
 const parallel = guardFlags(() => resolveParallel(values, repoCfg.watch, manual));
 
 await loadBunkerEnv(process.cwd());
+if (identityKind(process.env) !== "pat") {
+  // Opt-in separate GitHub identity: from here on BUNKER_GH_TOKEN is that identity's token.
+  const origin = await $`git remote get-url origin`.quiet().nothrow();
+  const slug = parseGithubRemote(origin.stdout.toString())?.slug;
+  try {
+    if (!slug) throw new Error("a separate GitHub identity needs a GitHub origin remote");
+    await applyIdentity(process.env, slug);
+  } catch (e) {
+    console.error(`bunker: ${redact(e instanceof Error ? e.message : String(e))}`);
+    process.exit(2);
+  }
+}
 if (!values["no-sandbox"] && !hasAuth()) {
   // On the host claude can use your login; in a container it only has what we pass in.
   console.error(AUTH_HINT);

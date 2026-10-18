@@ -1,4 +1,5 @@
 import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { identityKind } from "../../github/identity.ts";
 import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { formatChecks, exec, LABELS, probeGhToken, runDoctor, userEnv, TOKEN_FIX, type Check, type RepoInfo } from "./doctor.ts";
@@ -142,6 +143,29 @@ export async function runInit(opts: { cwd: string; env?: Env; yes: boolean; io: 
         if (probe.missing.length) io.say(`That token can't access: ${probe.missing.join(", ")}. Not saved; fix the permissions and re-run \`bunker init\`.`);
         else await store("BUNKER_GH_TOKEN", t);
       } else if (t) io.say("No GitHub origin detected, so the token can't be validated. Not saved; add a GitHub origin remote and re-run `bunker init`.");
+    }
+  }
+
+  // optional: act as a GitHub App or a bot account instead of the owner's PAT
+  if (!yes && identityKind(env) === "pat") {
+    io.say("\n== Separate GitHub identity (optional) ==");
+    io.say("By default bunker acts with your PAT, so PRs are authored by you. A GitHub App or a bot account gives separate attribution and lets you require your approval before merge (docs/getting-started.md).");
+    if (await io.confirm("Set up a separate GitHub identity?", false)) {
+      const kind = (await io.ask("App or bot account? [app/bot]: ", "app")).trim().toLowerCase();
+      if (kind.startsWith("b")) {
+        const t = (await io.secret("Paste the bot account's fine-grained token (input hidden, blank to skip): ")).trim();
+        if (t) await store("BUNKER_BOT_GH_TOKEN", t);
+      } else {
+        const id = (await io.ask("GitHub App ID (blank to skip): ", "")).trim();
+        const key = (await io.ask("Path to the App's private key (.pem): ", "")).trim();
+        if (!id || !key) io.say("Skipped: the App ID and key path are both needed.");
+        else if (!existsSync(key)) io.say(`No file at ${key}. Not saved; re-run \`bunker init\`.`);
+        else {
+          await chmod(key, 0o600);
+          await store("BUNKER_APP_ID", id);
+          await store("BUNKER_APP_PRIVATE_KEY_PATH", key);
+        }
+      }
     }
   }
 

@@ -12,9 +12,11 @@ const MAYBE_TRUSTED = new Set(["MEMBER", "COLLABORATOR"]);
  * count (a read/triage collaborator does not). Fails closed when the permission lookup fails. The body needs `author`.
  */
 export async function markTrust(info: Pick<IssueInfo, "author" | "comments" | "bodyTrusted">, cwd: string, env: Record<string, string | undefined>): Promise<void> {
+  const isIdentity = (login: string | undefined) => !!login && (login.endsWith("[bot]") || login === env.BUNKER_IDENTITY_LOGIN);
   const cache = new Map<string, Promise<boolean>>();
   const maintainer = (login: string | undefined) => {
-    if (!login) return Promise.resolve(false);
+    // bunker's own identity is never the maintainer, whatever its association or permission
+    if (!login || isIdentity(login)) return Promise.resolve(false);
     let p = cache.get(login);
     if (!p) {
       p = (async () => {
@@ -28,6 +30,6 @@ export async function markTrust(info: Pick<IssueInfo, "author" | "comments" | "b
   info.bodyTrusted = await maintainer(info.author?.login);
   await Promise.all((info.comments ?? []).map(async (c) => {
     const assoc = c.authorAssociation ?? "";
-    c.trusted = assoc === "OWNER" || (MAYBE_TRUSTED.has(assoc) && (await maintainer(c.author?.login)));
+    c.trusted = (assoc === "OWNER" && !isIdentity(c.author?.login)) || (MAYBE_TRUSTED.has(assoc) && (await maintainer(c.author?.login)));
   }));
 }
