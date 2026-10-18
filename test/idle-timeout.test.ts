@@ -4,7 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chmod } from "node:fs/promises";
-import { docker, noSandbox, review, run, runSetup, type Agent } from "../src/index.ts";
+import { docker, noSandbox, review, run, type Agent } from "../src/index.ts";
+import { runSetup } from "../src/worktree/admin.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

@@ -3,7 +3,7 @@ import { $ } from "bun";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { worktreeAdmin, worktreeAdminLockPath } from "../src/index.ts";
+import { worktreeAdmin, worktreeAdminLockPath } from "../src/worktree/admin.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
