@@ -10,7 +10,7 @@ export const VERIFY_TAIL = 2000;
 export const MAX_FOLLOW_UPS = 1;
 
 /** Built-in issue prompt; a repo overrides it with .bunker/prompts/issue.md. */
-export const ISSUE_PROMPT = "{{ISSUE}}{{COMMENTS}}Use Conventional Commits for your commit messages, write tests first, and make the repo's tests pass.\n\n{{CONVENTION}}";
+export const ISSUE_PROMPT = "{{ISSUE}}{{COMMENTS}}Use Conventional Commits for your commit messages, write tests first, and make the repo's tests pass. Do not create or edit anything under .github/workflows/: it is off-limits, and the token cannot push it.\n\n{{CONVENTION}}";
 
 export const ISSUE_CONVENTION =
   "For problems you find outside this task's scope, do not fix them; instead report them. " +

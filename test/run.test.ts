@@ -163,7 +163,7 @@ describe("claudeCode()", () => {
   });
 });
 
-const dockerUp = (await $`docker info`.quiet().nothrow()).exitCode === 0;
+const dockerUp = process.env.BUNKER_TEST_REAL_DOCKER === "1" && (await $`docker info`.quiet().nothrow()).exitCode === 0; // real Docker is opt-in (test/setup.ts)
 const GIT_IMAGE = "bunker-test-git";
 
 describe.skipIf(!dockerUp)("run() with docker", () => {
