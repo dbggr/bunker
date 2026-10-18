@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { redact } from "../../core/redact.ts";
 import { stepLimits, type Sandbox } from "../../sandboxes/exec.ts";
+import type { Services } from "../../sandboxes/services.ts";
+import { startVerifyEnv, VerifyEnvError } from "../../sandboxes/verify-env.ts";
 import { copyIntoWorktree } from "../../worktree/copy.ts";
 import { exec } from "../commands/doctor.ts";
 
@@ -22,7 +24,7 @@ const tailOf = (text: string, n = 15) => redact(text.trimEnd().split("\n").slice
  * Runs `setup` then `verify` once in the sandbox, in a throwaway worktree of HEAD, the way an unattended run does:
  * setup with network (it installs), verify isolated (no network, no credentials) unless `network`.
  */
-export async function sandboxDryRun(o: { root: string; env: Record<string, string | undefined>; sandbox: Sandbox; setup?: string; verify: string; network?: boolean; copy?: string[] }): Promise<DryRunResult> {
+export async function sandboxDryRun(o: { root: string; env: Record<string, string | undefined>; sandbox: Sandbox; setup?: string; verify: string; network?: boolean; copy?: string[]; services?: Services; prepare?: string }): Promise<DryRunResult> {
   const start = Date.now();
   const done = (r: Omit<DryRunResult, "seconds">): DryRunResult => ({ ...r, seconds: Math.round((Date.now() - start) / 1000) });
   const tmp = await mkdtemp(join(tmpdir(), "bunker-init-"));
@@ -48,9 +50,20 @@ export async function sandboxDryRun(o: { root: string; env: Record<string, strin
         const s = await o.sandbox.exec(["sh", "-c", `(${o.setup}) 2>&1`], ctx);
         if (s.code !== 0 || s.timedOut) return done({ ok: false, phase: "setup", tail: tailOf(s.stdout + (s.timedOut ? `\n(timed out: ${s.timedOut})` : "")) });
       }
-      const v = await o.sandbox.exec(["sh", "-c", `(${o.verify}) 2>&1`], { ...ctx, isolate: !o.network });
-      if (v.code !== 0 || v.timedOut) return done({ ok: false, phase: "verify", tail: tailOf(v.stdout + (v.timedOut ? `\n(timed out: ${v.timedOut})` : "")) });
-      return done({ ok: true, tail: tailOf(v.stdout, 5) });
+      let env;
+      try {
+        env = await startVerifyEnv(o.sandbox, { ...(o.services ? { services: o.services } : {}), ...(o.prepare ? { prepare: o.prepare } : {}), verifyNetwork: o.network, worktree, gitCommonDir: ctx.gitCommonDir });
+      } catch (e) {
+        if (e instanceof VerifyEnvError) return done({ ok: false, phase: "verify", tail: tailOf(e.message) });
+        throw e;
+      }
+      try {
+        const v = await o.sandbox.exec(["sh", "-c", `(${o.verify}) 2>&1`], { ...ctx, isolate: !o.network, ...(env.network ? { network: env.network } : {}) });
+        if (v.code !== 0 || v.timedOut) return done({ ok: false, phase: "verify", tail: tailOf(v.stdout + (v.timedOut ? `\n(timed out: ${v.timedOut})` : "")) });
+        return done({ ok: true, tail: tailOf(v.stdout, 5) });
+      } finally {
+        await env.stop();
+      }
     } catch (e) {
       return done({ ok: false, phase: "image", tail: redact(e instanceof Error ? e.message : String(e)) });
     }

@@ -12,6 +12,8 @@ import { extractOutput, verdictOutput } from "../core/structured.ts";
 import { interpret, stdinOf, sumUsage, type Agent, type Usage } from "../agents/agent.ts";
 import { agentLimits, stepLimits, type Sandbox, type Timeouts } from "../sandboxes/exec.ts";
 import { isolatedEnv } from "../sandboxes/env.ts";
+import type { Services } from "../sandboxes/services.ts";
+import { startVerifyEnv, VerifyEnvError, type VerifyEnv } from "../sandboxes/verify-env.ts";
 import { listBunkerPrs, type BunkerPr } from "../github/prs.ts";
 import { MAINTAINER_ROLES } from "../github/labeler.ts";
 import { addPrLabel, ensureLabel, FAILED_LABEL, requestReviewer, REVIEW_LABEL } from "../github/labels.ts";
@@ -223,16 +225,17 @@ export function createShepherd(o: ShepherdOptions) {
   };
 
   /** The verify command of origin's default branch (read from there, so the agent can't weaken it). */
-  const verifyCommand = async (repo: string, baseSha: string): Promise<string | undefined> => {
-    if (o.verify) return o.verify;
+  const verifyConfig = async (repo: string, baseSha: string): Promise<{ verify?: string; services?: Services; prepare?: string }> => {
     const show = async (path: string) => {
       const f = await $`git -C ${repo} show ${`${baseSha}:${path}`}`.nothrow().quiet();
       return f.exitCode === 0 ? f.stdout.toString() : undefined;
     };
     for (const name of REMOVED_FILES) if ((await show(`.bunker/${name}`)) !== undefined) throw new Error(removedFileMessage(name));
     const toml = await show(".bunker/config.toml");
-    const fromToml = toml === undefined ? undefined : parseConfig(toml).config.verify?.trim();
-    return fromToml || undefined;
+    const cfg = toml === undefined ? undefined : parseConfig(toml).config;
+    const verify = o.verify || cfg?.verify?.trim() || undefined;
+    const prepare = cfg?.prepare?.trim() || undefined;
+    return { ...(verify ? { verify } : {}), ...(cfg?.services && Object.keys(cfg.services).length ? { services: cfg.services } : {}), ...(prepare ? { prepare } : {}) };
   };
 
   /**
@@ -305,10 +308,18 @@ export function createShepherd(o: ShepherdOptions) {
     if (prep && (prep.code !== 0 || prep.timedOut)) throw new Refused(`setup failed (exit ${prep.code}):\n${tailLines(prep.stdout)}`);
     return async () => {
       if (!verifyAfter) return;
-      const verify = await verifyCommand(w.repo, w.baseSha);
+      const { verify, services, prepare } = await verifyConfig(w.repo, w.baseSha);
       if (!verify) return;
       let code: number;
       let text: string;
+      let env: VerifyEnv;
+      try {
+        env = await startVerifyEnv(o.sandbox, { ...(services ? { services } : {}), ...(prepare ? { prepare } : {}), verifyOnHost: o.verifyOnHost, verifyNetwork: o.verifyNetwork, worktree: w.worktree, gitCommonDir: w.gitCommonDir, timeouts, onNote: (text) => emit(o.onEvent, { type: "note", text }) });
+      } catch (e) {
+        if (e instanceof VerifyEnvError) throw new Refused(`verify failed on the fix: ${e.message}`);
+        throw e;
+      }
+      try {
       if (o.verifyOnHost) {
         const proc = Bun.spawn(["setsid", "sh", "-c", verify], { cwd: w.worktree, env: isolatedEnv(), stdout: "pipe", stderr: "pipe" });
         const timer = setTimeout(() => { try { process.kill(-proc.pid, "SIGKILL"); } catch { proc.kill("SIGKILL"); } }, stepLimits(timeouts).stepMs);
@@ -320,9 +331,12 @@ export function createShepherd(o: ShepherdOptions) {
           clearTimeout(timer);
         }
       } else {
-        const out = await o.sandbox.exec(["sh", "-c", `(${verify}) 2>&1`], { worktree: w.worktree, gitCommonDir: w.gitCommonDir, limits: stepLimits(timeouts), isolate: !o.verifyNetwork });
+        const out = await o.sandbox.exec(["sh", "-c", `(${verify}) 2>&1`], { worktree: w.worktree, gitCommonDir: w.gitCommonDir, limits: stepLimits(timeouts), isolate: !o.verifyNetwork, ...(env.network ? { network: env.network } : {}) });
         code = out.timedOut ? 1 : out.code;
         text = out.stdout;
+      }
+      } finally {
+        await env.stop();
       }
       if (code !== 0) throw new Refused(`verify failed on the fix (exit ${code}):\n${tailLines(text)}`);
     };

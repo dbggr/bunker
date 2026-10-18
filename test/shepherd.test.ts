@@ -4,7 +4,7 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { noSandbox, type Agent } from "../src/index.ts";
+import { noSandbox, type Agent, type Sandbox } from "../src/index.ts";
 import { attemptsOf, createShepherd, skipReason } from "../src/pipeline/shepherd.ts";
 import { parseBunkerPrs } from "../src/github/prs.ts";
 
@@ -222,6 +222,51 @@ describe("shepherd pass", () => {
     expect(pass.entries[0]).toMatchObject({ action: "failed" });
     expect(pass.entries[0]!.detail).toMatch(/verify failed/);
     expect((await remoteLog(w, "fix/7-thing"))[0]).toBe("feat: fix/7-thing");
+  });
+
+  describe("services and prepare from the base branch's config", () => {
+    const setup = async () => {
+      const w = await world();
+      await Bun.write(join(w.repo, ".bunker/config.toml"), 'prepare = "echo prep"\n\n[services.database]\nimage = "pg"\n');
+      await $`git -C ${w.repo} add . && git -C ${w.repo} commit -q -m "chore: config" && git -C ${w.repo} push -q origin main`;
+      const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+      w.state.prs.push(prJson(10, "fix/7-thing", sha));
+      w.state.checks[10] = RED;
+      w.save();
+      const events: string[] = [];
+      const inner = noSandbox();
+      const sandbox: Sandbox = {
+        ...inner,
+        startServices: async (svcs) => (events.push(`start ${Object.keys(svcs)}`), { network: "net1", stop: async () => void events.push("stop") }),
+        exec: async (cmd, ctx) => {
+          if (/echo prep|exit 1|true/.test(cmd.join(" ")) && !/git|fixed/.test(cmd.join(" "))) events.push(`${cmd[2]} net=${ctx.network}`);
+          return inner.exec(cmd, ctx);
+        },
+      };
+      return { w, events, sandbox };
+    };
+
+    test("starts the services, runs prepare and verify on their network, then removes them", async () => {
+      const { w, events, sandbox } = await setup();
+      const pass = await shepherd(w, fakeAgent(COMMIT_FIX), { sandbox }).pass();
+      expect(pass.entries[0]).toMatchObject({ action: "fixed-ci" });
+      expect(events).toEqual(["start database", "(echo prep) 2>&1 net=net1", "(true) 2>&1 net=net1", "stop"]);
+    });
+
+    test("a failing verify still removes the services", async () => {
+      const { w, events, sandbox } = await setup();
+      const pass = await shepherd(w, fakeAgent(COMMIT_FIX), { sandbox, verify: "exit 1" }).pass();
+      expect(pass.entries[0]).toMatchObject({ action: "failed" });
+      expect(events.at(-1)).toBe("stop");
+    });
+
+    test("services without a service-capable sandbox refuse the fix", async () => {
+      const { w } = await setup();
+      const pass = await shepherd(w, fakeAgent(COMMIT_FIX)).pass();
+      expect(pass.entries[0]).toMatchObject({ action: "failed" });
+      expect(pass.entries[0]!.detail).toMatch(/services need the docker or podman sandbox/);
+      expect((await remoteLog(w, "fix/7-thing"))[0]).toBe("feat: fix/7-thing");
+    });
   });
 
   test("a fix that touches .github/ is not pushed", async () => {
