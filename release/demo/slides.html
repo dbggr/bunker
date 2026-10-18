@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bunker Demo</title>
+<style>
+  :root {
+    --bg: #0d1219; --panel: #151c27; --ink: #edf1f7; --muted: #9aa6b8; --line: #263142;
+    --you: #3cc7b6; --bunker: #8b85ff; --ai: #f2a24a; --github: #a3b1c6; --stop: #fb8a5c; --ok: #4ade80;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #05080c; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; color: var(--ink); overflow: hidden; }
+  /* A fixed 1920×1080 stage, scaled to fit the window when viewed by hand. */
+  .stage { position: absolute; left: 50%; top: 50%; width: 1920px; height: 1080px; transform-origin: center; transform: translate(-50%, -50%) scale(var(--k, 1)); }
+  .slide {
+    position: absolute; inset: 0; display: none; padding: 110px 140px; background:
+      radial-gradient(1200px 700px at 85% 0%, rgba(139,133,255,.13), transparent 60%),
+      radial-gradient(900px 600px at 0% 100%, rgba(60,199,182,.10), transparent 60%), var(--bg);
+  }
+  .slide.on { display: flex; flex-direction: column; }
+  .slide.center { justify-content: center; }
+  .kicker { font-size: 30px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--bunker); margin: 0 0 22px; }
+  h1 { font-size: 92px; line-height: 1.04; letter-spacing: -.02em; margin: 0 0 34px; }
+  h2 { font-size: 74px; line-height: 1.08; letter-spacing: -.015em; margin: 0 0 48px; }
+  .lead { font-size: 40px; line-height: 1.4; color: var(--muted); max-width: 1450px; margin: 0; }
+  .lead b { color: var(--ink); font-weight: 650; }
+  .foot { margin-top: auto; display: flex; justify-content: space-between; color: var(--muted); font-size: 24px; }
+  .brand { display: flex; align-items: center; gap: 14px; font-weight: 700; color: var(--ink); }
+  .logo { width: 42px; height: 42px; border-radius: 11px; background: var(--bunker); display: grid; place-items: center; color: #0d1219; }
+  .logo svg { width: 26px; height: 26px; }
+
+  /* the loop */
+  .flow { display: grid; grid-template-columns: repeat(6, 1fr); gap: 22px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-top: 6px solid var(--c); border-radius: 20px; padding: 28px 24px 30px; position: relative; }
+  .card .n { font-size: 22px; font-weight: 800; letter-spacing: .06em; color: var(--c); text-transform: uppercase; }
+  .card h3 { font-size: 34px; line-height: 1.15; margin: 12px 0 12px; }
+  .card p { font-size: 25px; line-height: 1.4; color: var(--muted); margin: 0; }
+  .card::after { content: "›"; position: absolute; right: -19px; top: 44%; font-size: 44px; color: var(--muted); }
+  .card:last-child::after { content: none; }
+  .you { --c: var(--you); } .bunker { --c: var(--bunker); } .ai { --c: var(--ai); } .github { --c: var(--github); }
+  .aside { margin-top: 36px; display: flex; gap: 22px; }
+  .pill { font-size: 27px; padding: 16px 26px; border-radius: 999px; border: 1px dashed var(--line); color: var(--muted); }
+  .pill b { color: var(--stop); }
+
+  /* lists */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: start; }
+  ul.big { list-style: none; padding: 0; margin: 0; display: grid; gap: 26px; }
+  ul.big li { font-size: 36px; line-height: 1.35; position: relative; padding-left: 38px; }
+  ul.big li::before { content: ""; position: absolute; left: 0; top: 17px; width: 16px; height: 16px; border-radius: 50%; background: var(--c, var(--bunker)); }
+  ul.big li span { color: var(--muted); }
+  .term {
+    background: #0a0e14; border: 1px solid var(--line); border-radius: 18px; padding: 30px 34px;
+    font: 25px/1.6 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; color: #cbd5e1; white-space: pre;
+  }
+  .term .g { color: var(--ok); } .term .p { color: var(--bunker); } .term .d { color: #64748b; }
+
+  /* numbers */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 26px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 34px 32px; }
+  .stat .v { font-size: 92px; font-weight: 800; letter-spacing: -.03em; line-height: 1; color: var(--c, var(--ink)); }
+  .stat .l { font-size: 27px; color: var(--muted); margin-top: 14px; line-height: 1.35; }
+  .note { font-size: 24px; color: var(--muted); margin-top: 34px; }
+
+  /* comparison */
+  table { border-collapse: collapse; width: 100%; font-size: 31px; }
+  th, td { text-align: left; padding: 20px 24px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-size: 24px; letter-spacing: .08em; text-transform: uppercase; font-weight: 700; }
+  td:first-child { color: var(--muted); width: 28%; }
+  .yes { color: var(--ok); font-weight: 700; }
+
+  /* roadmap */
+  .road { display: grid; grid-template-columns: repeat(4, 1fr); gap: 26px; }
+  .step { background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 32px 30px; }
+  .step .s { font-size: 23px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--c); }
+  .step h3 { font-size: 38px; margin: 12px 0 14px; }
+  .step p { font-size: 27px; color: var(--muted); margin: 0; line-height: 1.4; }
+  .done { --c: var(--ok); } .now { --c: var(--ai); } .next { --c: var(--bunker); }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+
+  <!-- 1 -->
+  <section class="slide">
+    <p class="kicker">Bunker</p>
+    <h1>Label an issue.<br>Get back a reviewed, tested,<br>merged pull request.</h1>
+    <p class="lead">A tool that runs AI coding agents in locked-down sandboxes, and only lets their work in when it passes review and your tests.</p>
+    <div class="foot"><span class="brand"><span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg></span>bunker</span><span>github.com/dbggr/tool-bunker</span></div>
+  </section>
+
+  <!-- 2 -->
+  <section class="slide">
+    <p class="kicker">The idea</p>
+    <h2>Your backlog, worked on<br>while you do something else.</h2>
+    <p class="lead">AI agents can write good code, but running them on your own machine, with your passwords, and merging what they write without checks is a risk. <b>Bunker is the harness around the agent:</b> a sandbox to work in, a second AI to review, your tests as the gate, and GitHub's own rules deciding what merges.</p>
+    <div class="foot"><span></span><span>Built with Bun and TypeScript · runs Claude Code in Docker</span></div>
+  </section>
+
+  <!-- 3 -->
+  <section class="slide center">
+    <p class="kicker">How it works</p>
+    <h2>One issue, start to finish</h2>
+    <div class="flow">
+      <div class="card you"><div class="n">1 · You</div><h3>Pick a job</h3><p>Label a GitHub issue for bunker.</p></div>
+      <div class="card bunker"><div class="n">2 · Bunker</div><h3>Check it's you</h3><p>Only maintainers can queue work.</p></div>
+      <div class="card ai"><div class="n">3 · AI</div><h3>Write it</h3><p>In a sandbox, on its own branch.</p></div>
+      <div class="card ai"><div class="n">4 · AI</div><h3>Review it</h3><p>A second agent sends it back if needed.</p></div>
+      <div class="card bunker"><div class="n">5 · Bunker</div><h3>Test it</h3><p>Your tests, with one fix round if red.</p></div>
+      <div class="card github"><div class="n">6 · GitHub</div><h3>Merge it</h3><p>Required checks pass, auto-merge lands it.</p></div>
+    </div>
+    <div class="aside">
+      <span class="pill"><b>Waits for you</b> when it changes its own rules or CI</span>
+      <span class="pill"><b>Flags it</b> with the reason when it can't finish</span>
+    </div>
+  </section>
+
+  <!-- 4 -->
+  <section class="slide center">
+    <p class="kicker">Running unattended</p>
+    <h2>Set it watching, check in when you like</h2>
+    <div class="cols">
+      <ul class="big">
+        <li style="--c:var(--bunker)">Works the queue in priority order<span>&nbsp;· bugs first</span></li>
+        <li style="--c:var(--ai)">Two issues at once, each in its own sandbox</li>
+        <li style="--c:var(--you)">Keeps open PRs green: fixes failed checks, resolves conflicts</li>
+        <li style="--c:var(--stop)">Daily and monthly spend caps</li>
+        <li style="--c:var(--github)">A live view, desktop notifications, and <b>bunker status</b></li>
+      </ul>
+      <div class="term"><span class="d">$</span> bunker status
+<span class="g">watcher: alive</span> · 0.1.0 · up 3h09m
+
+current run:
+  #349 · implement for 10m11s
+
+queue:
+  1. #363 docs: bring every doc in line… <span class="p">(bug)</span>
+  2. #349 chore: remove pre-1.0 shims…
+
+spend: $44.83 in 24 h</div>
+    </div>
+  </section>
+
+  <!-- 5 -->
+  <section class="slide center">
+    <p class="kicker">Safety</p>
+    <h2>Built to be left alone</h2>
+    <div class="cols">
+      <ul class="big">
+        <li style="--c:var(--you)">Only a maintainer's label queues work; edited issues are refused</li>
+        <li style="--c:var(--you)">Comments from strangers never reach the agent</li>
+        <li style="--c:var(--ai)">The agent never sees your GitHub token or SSH keys</li>
+        <li style="--c:var(--ai)">The repo's git internals are read-only inside the sandbox</li>
+      </ul>
+      <ul class="big">
+        <li style="--c:var(--bunker)">Tests run with no network and no credentials</li>
+        <li style="--c:var(--bunker)">Changes to CI, bunker's config or agent instructions wait for a person</li>
+        <li style="--c:var(--github)">Nothing merges without a required check on GitHub</li>
+        <li style="--c:var(--github)">Every safety gate has a test that fails if it breaks</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section class="slide center">
+    <p class="kicker">It built itself</p>
+    <h2>Two days of bunker working on bunker</h2>
+    <div class="stats">
+      <div class="stat" style="--c:var(--bunker)"><div class="v">147</div><div class="l">pull requests written and merged by bunker</div></div>
+      <div class="stat"><div class="v">23</div><div class="l">written by hand: the first spike and the security fixes</div></div>
+      <div class="stat" style="--c:var(--ok)"><div class="v">699</div><div class="l">tests guarding about 8,800 lines of code</div></div>
+      <div class="stat" style="--c:var(--ai)"><div class="v">$1.15</div><div class="l">average agent cost per merged issue</div></div>
+    </div>
+    <p class="note">153 CI runs on main, 3 red (all during one flaky-test window, since fixed), 0 reverts. Numbers from the repo's own run logs and GitHub history on 2026-10-18.</p>
+  </section>
+
+  <!-- 7 -->
+  <section class="slide center">
+    <p class="kicker">Inspired by sandcastle</p>
+    <h2>A toolkit vs. a finished loop</h2>
+    <table>
+      <tr><th></th><th>sandcastle</th><th>bunker</th></tr>
+      <tr><td>What it is</td><td>A library for building agent loops</td><td>One opinionated loop: issue → merged PR</td></tr>
+      <tr><td>Agents and sandboxes</td><td>Claude, Codex, Pi · Docker, Podman, Vercel</td><td>Claude · Docker, Podman</td></tr>
+      <tr><td>Queue, review, merge</td><td>You build it</td><td class="yes">Built in, with priorities and spend caps</td></tr>
+      <tr><td>Unattended safety</td><td>Up to you</td><td class="yes">Label gate, locked git, isolated tests, required checks</td></tr>
+    </table>
+  </section>
+
+  <!-- 8 -->
+  <section class="slide center">
+    <p class="kicker">What's next</p>
+    <h2>The road to 1.0</h2>
+    <div class="road">
+      <div class="step done"><div class="s">Done</div><h3>Contract</h3><p>Subcommands, one config style, a trimmed library API.</p></div>
+      <div class="step done"><div class="s">Done</div><h3>Reliability</h3><p>A fix round after failed tests, a test-hygiene guard, a PR shepherd.</p></div>
+      <div class="step now"><div class="s">Now</div><h3>Soak</h3><p>Two weeks unattended on bunker and another real repo.</p></div>
+      <div class="step next"><div class="s">Then</div><h3>1.0.0</h3><p>Tag it once the reliability bar holds for the whole window.</p></div>
+    </div>
+  </section>
+
+  <!-- 9 -->
+  <section class="slide">
+    <p class="kicker">Bunker</p>
+    <h1>You choose the work.<br>Bunker does it safely.</h1>
+    <p class="lead">Label an issue, and come back to a reviewed, tested, merged pull request, or a clear reason why not.</p>
+    <div class="foot"><span class="brand"><span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg></span>bunker</span><span>github.com/dbggr/tool-bunker</span></div>
+  </section>
+
+</div>
+<script>
+  const slides = [...document.querySelectorAll(".slide")];
+  let i = 0;
+  try { i = Math.max(0, Math.min(slides.length - 1, Number(new URLSearchParams(location.search).get("s") || 1) - 1)); } catch {}
+  const show = () => slides.forEach((s, k) => s.classList.toggle("on", k === i));
+  const fit = () => document.getElementById("stage").style.setProperty("--k", Math.min(innerWidth / 1920, innerHeight / 1080));
+  addEventListener("resize", fit);
+  addEventListener("keydown", (e) => {
+    if (["ArrowRight", " ", "PageDown"].includes(e.key)) i = Math.min(slides.length - 1, i + 1);
+    else if (["ArrowLeft", "PageUp"].includes(e.key)) i = Math.max(0, i - 1);
+    else return;
+    show();
+  });
+  fit(); show();
+</script>
+</body>
+</html>
