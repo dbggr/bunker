@@ -71,6 +71,7 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
     },
     merged(r: Omit<MergedRun, "at">) {
       state.merged.push({ ...r, at: Date.now() });
+      state.failed = state.failed.filter((f) => f.issue !== r.issue);
       save();
     },
     failed(r: Omit<FailedRun, "at">) {
@@ -166,7 +167,9 @@ export async function collectStatus({ repo, caps = {}, queue, alive, now = Date.
         }))
       : null,
     merged: mine?.merged ?? [],
-    failed: (mine?.failed ?? []).map((f) => ({ ...f, retry: retryCommand(f.issue) })),
+    failed: (mine?.failed ?? [])
+      .filter((f) => !(mine?.merged ?? []).some((m) => m.issue === f.issue && m.at >= f.at))
+      .map((f) => ({ ...f, retry: retryCommand(f.issue) })),
     spend: { day: spend(DAY_MS, caps.day), month: spend(MONTH_MS, caps.month) },
   };
 }
