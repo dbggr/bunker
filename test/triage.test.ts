@@ -147,7 +147,7 @@ describe("runTriage()", () => {
   });
 
   test("an issue already labelled bunker is not triaged", async () => {
-    const { repo, writes } = await setup([{ number: 1, title: "A", labels: [{ name: "bunker" }] }]);
+    const { repo, writes } = await setup([{ number: 1, title: "A", labels: [{ name: "bunker:queued" }] }]);
     const seen: { prompt?: string } = {};
     await run(repo, verdicts({ issue: 1, verdict: "fixed", evidence: "x" }), "comment", seen);
     expect(seen.prompt).toBeUndefined();

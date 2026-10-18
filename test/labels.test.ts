@@ -41,13 +41,6 @@ describe("queue gate", () => {
     expect((await checkLabeler(7, { cwd: process.cwd(), env: g.env })).ok).toBe(true);
   });
 
-  test("still accepts the old `bunker` label, gated the same way", async () => {
-    const ok = await fakeGh("mia", { mia: "admin" });
-    expect((await checkLabeler(7, { cwd: process.cwd(), env: ok.env })).ok).toBe(true);
-    // Both names are asked for in the same event query.
-    expect(await ok.log()).toContain('.label.name == "bunker")');
-  });
-
   test("refuses bunker:queued added by a non-maintainer", async () => {
     const g = await fakeGh("eve", { eve: "write" });
     const r = await checkLabeler(7, { cwd: process.cwd(), env: g.env });
@@ -55,34 +48,37 @@ describe("queue gate", () => {
     expect(!r.ok && r.denied).toBe(true);
   });
 
-  test("the event query selects only bunker:queued and bunker, never in-progress, failed or review", async () => {
+  test("the event query selects only bunker:queued, never in-progress, failed or review", async () => {
     const g = await fakeGh("mia", { mia: "admin" });
     await checkLabeler(7, { cwd: process.cwd(), env: g.env });
     const log = await g.log();
     expect(log).toContain('.label.name == "bunker:queued"');
+    expect(log).not.toContain('.label.name == "bunker")');
     for (const other of ["in-progress", "bunker:failed", "bunker:review"]) expect(log).not.toContain(other);
   });
 
   test("only the queueing labels queue", () => {
-    expect(["bunker:queued", "bunker"].every(isQueuedLabel)).toBe(true);
-    expect(["bunker:in-progress", "bunker:failed", "bunker:review", "bunker-failed", "needs-human-review"].some(isQueuedLabel)).toBe(false);
+    expect(isQueuedLabel("bunker:queued")).toBe(true);
+    expect(["bunker:in-progress", "bunker:failed", "bunker:review", "bunker", "bunker-failed", "needs-human-review"].some(isQueuedLabel)).toBe(false);
     expect(hasQueuedLabel([{ name: "bunker:in-progress" }])).toBe(false);
-    expect(hasQueuedLabel([{ name: "bunker:in-progress" }, { name: "bunker" }])).toBe(true);
+    expect(hasQueuedLabel([{ name: "bunker:in-progress" }, { name: "bunker:queued" }])).toBe(true);
+    expect(hasQueuedLabel([{ name: "bunker" }])).toBe(false);
   });
 });
 
 describe("label edits", () => {
-  test("a run start adds in-progress and removes bunker:failed (and the old bunker-failed)", async () => {
+  test("a run start adds in-progress and removes bunker:failed", async () => {
     const g = await fakeGh("mia", {}, ["bunker:queued", "bunker:failed", "bunker-failed"]);
     await markInProgress(7, process.cwd(), g.env);
     const log = await g.log();
     expect(log).toContain("issue edit 7 --add-label bunker:in-progress");
-    expect(log).toContain("issue edit 7 --remove-label bunker:failed --remove-label bunker-failed");
+    expect(log).toContain("issue edit 7 --remove-label bunker:failed");
+    expect(log).not.toContain("bunker-failed");
   });
 
-  test("unqueue removes only the queueing labels the issue has", async () => {
-    const g = await fakeGh("mia", {}, ["bunker"]);
+  test("unqueue removes the queueing label", async () => {
+    const g = await fakeGh("mia", {}, ["bunker:queued"]);
     await unqueue(7, process.cwd(), g.env, ["--add-label", "bunker:failed"]);
-    expect(await g.log()).toContain("issue edit 7 --remove-label bunker --add-label bunker:failed");
+    expect(await g.log()).toContain("issue edit 7 --remove-label bunker:queued --add-label bunker:failed");
   });
 });

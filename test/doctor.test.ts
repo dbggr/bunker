@@ -56,6 +56,18 @@ describe("doctor", () => {
     }
   });
 
+  test("reports old label names still on the repo, with the rename to run", async () => {
+    const w = await fakeWorld({ files: { "labels.json": JSON.stringify([{ name: "bunker" }, { name: "bunker-failed" }, { name: "needs-human-review" }, { name: "bunker:queued" }]) } });
+    const r = await runDoctor({ cwd: w.repo, env: w.env });
+    for (const [old, now] of [["bunker", "bunker:queued"], ["bunker-failed", "bunker:failed"], ["needs-human-review", "bunker:review"]]) {
+      const c = r.checks.find((c) => c.id === `old-label-${old}`);
+      expect(c?.ok).toBe(false);
+      expect(c?.fix).toContain(`gh label edit ${old} --name ${now}`);
+      expect(c?.fix).not.toContain("still works");
+    }
+    expect(r.checks.find((c) => c.id === "label-bunker:failed")?.fix).not.toContain("still works");
+  });
+
   test("names the token permission gaps", async () => {
     const w = await fakeWorld({ files: { "issues.json": "", "pulls.json": "" } });
     const r = await runDoctor({ cwd: w.repo, env: w.env });

@@ -13,7 +13,7 @@ import { agentLimits, stepLimits, type Sandbox, type Timeouts } from "../sandbox
 import { isolatedEnv } from "../sandboxes/env.ts";
 import { listBunkerPrs, type BunkerPr } from "../github/prs.ts";
 import { MAINTAINER_ROLES } from "../github/labeler.ts";
-import { ensureLabel, FAILED_LABEL, LEGACY_FAILED_LABEL, LEGACY_REVIEW_LABEL, REVIEW_LABEL } from "../github/labels.ts";
+import { ensureLabel, FAILED_LABEL, REVIEW_LABEL } from "../github/labels.ts";
 import { copyIntoWorktree, copyPatterns } from "../worktree/copy.ts";
 import { runSetup, worktreeAdmin } from "../worktree/admin.ts";
 import { isSensitivePath } from "../worktree/steering.ts";
@@ -43,8 +43,8 @@ export function attemptsOf(pr: Pick<BunkerPr, "comments">, marker: string): numb
 
 /** Why the shepherd leaves the PR alone, if it does: given up on, waiting for a human, or a draft. */
 export function skipReason(pr: Pick<BunkerPr, "labels" | "isDraft">): string | undefined {
-  if (pr.labels.some((l) => l === FAILED_LABEL || l === LEGACY_FAILED_LABEL)) return "labelled bunker:failed";
-  if (pr.labels.some((l) => l === REVIEW_LABEL || l === LEGACY_REVIEW_LABEL)) return "labelled bunker:review (a human merges it)";
+  if (pr.labels.some((l) => l === FAILED_LABEL)) return "labelled bunker:failed";
+  if (pr.labels.some((l) => l === REVIEW_LABEL)) return "labelled bunker:review (a human merges it)";
   if (pr.isDraft) return "a draft";
   return undefined;
 }

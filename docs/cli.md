@@ -104,7 +104,6 @@ Single prompt and --task:
   notifies you); a branch behind its base is updated; a conflict is resolved by an agent, verified, and reviewed again if the diff changed;
   "changes requested" by a maintainer goes to the agent and the review is re-requested. It never merges: auto-merge plus a required check is the gate
   Failed issues get `bunker:failed` instead of `bunker:queued` and are never retried automatically; a running one shows `bunker:in-progress`.
-  The pre-namespace `bunker` label is still accepted as `bunker:queued` for one release.
 
 --audit:
   --audit                    read-only agent run that files issues

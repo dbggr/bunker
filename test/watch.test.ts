@@ -56,7 +56,7 @@ async function setup(issues: [number, string, string][]) {
   await $`mkdir -p ${bin} ${root}/q`;
   for (const [number, title, createdAt] of issues) {
     await Bun.write(join(root, "q", `${number}.json`), JSON.stringify({ number, title, createdAt }));
-    await Bun.write(join(root, `issue-${number}.json`), JSON.stringify({ number, title, body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, `issue-${number}.json`), JSON.stringify({ number, title, body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker:queued" }] }));
   }
   await Bun.write(
     join(bin, "gh"),
@@ -64,10 +64,9 @@ async function setup(issues: [number, string, string][]) {
 echo "$*" >> "${root}/gh.log"
 if [ "$1" = "api" ]; then case "$*" in *"/rules/branches/"*) echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]'; exit 0;; *graphql*|*renamed*) exit 0;; *created_at*) n=$(echo "$*" | sed 's|.*issues/\\([0-9]*\\)/events.*|\\1|'); if [ -f "${root}/labeled-at-$n" ]; then cat "${root}/labeled-at-$n"; else echo 2020-01-01T00:00:00Z; fi; exit 0;; *"/events"*) [ -f "${root}/events-fail" ] && { echo "api down" >&2; exit 1; }; echo owner; exit 0;; *"/permission"*) if [ -f "${root}/perm" ]; then cat "${root}/perm"; else echo admin; fi; exit 0;; esac; fi
 if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker:in-progress"; then if [ -f "${root}/inprogress.json" ]; then cat "${root}/inprogress.json"; else echo '[]'; fi; exit 0; fi
-if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker:queued"; then echo '[]'; exit 0; fi
 if [ "$1 $2" = "issue list" ]; then
   printf '['; sep=''
-  hide=0; case "$*" in *"--label bunker --state"*) [ -f "${root}/hide-2" ] && hide=$(cat "${root}/hide-2");; esac
+  hide=0; case "$*" in *"--label bunker:queued --state"*) [ -f "${root}/hide-2" ] && hide=$(cat "${root}/hide-2");; esac
   [ "$hide" -gt 0 ] && echo $((hide - 1)) > "${root}/hide-2"
   for f in "${root}"/q/*.json; do [ -f "$f" ] || continue; [ "$hide" -gt 0 ] && [ "$f" = "${root}/q/2.json" ] && continue; printf '%s' "$sep"; cat "$f"; sep=','; done
   printf ']'; exit 0
@@ -273,7 +272,7 @@ describe("runWatch()", () => {
     expect(s.failed).toBe(1);
     const gh = await Bun.file(join(root, "gh.log")).text();
     expect(gh).toContain("label create bunker:failed");
-    expect(gh).toContain("issue edit 1 --remove-label bunker --add-label bunker:failed");
+    expect(gh).toContain("issue edit 1 --remove-label bunker:queued --add-label bunker:failed");
     expect(gh).not.toMatch(/issue edit 2 --remove-label bunker( |:queued)/);
     const comments = await Bun.file(join(root, "comments.log")).text();
     expect(comments).toMatch(/failed/);
@@ -412,7 +411,7 @@ describe("runWatch() next pass", () => {
 
   test("an issue labelled during pass 1 starts right after it, not after --interval", async () => {
     const { repo, root } = await setup(three.slice(0, 1));
-    await Bun.write(join(root, "issue-2.json"), JSON.stringify({ number: 2, title: "Second", body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, "issue-2.json"), JSON.stringify({ number: 2, title: "Second", body: "Do it.", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker:queued" }] }));
     // The list lags: issue 2 only shows up in the end-of-pass re-list (list calls: 2 initial + 1 re-list).
     await Bun.write(join(root, "q", "2.json"), JSON.stringify({ number: 2, title: "Second", createdAt: "2026-02-01T00:00:00Z" }));
     await Bun.write(join(root, "hide-2"), "3");
@@ -448,7 +447,7 @@ describe("runWatch() next pass", () => {
 
   test("a queue holding only blocked issues sleeps and does not spin", async () => {
     const { repo, root } = await setup(three.slice(0, 1));
-    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Blocked by #99", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker" }] }));
+    await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Blocked by #99", author: { login: "owner" }, state: "OPEN", labels: [{ name: "bunker:queued" }] }));
     await Bun.write(join(root, "issue-99.json"), JSON.stringify({ number: 99, title: "Other", body: "", author: { login: "owner" }, state: "OPEN", labels: [] }));
     const prompts: string[] = [];
     const lines: string[] = [];

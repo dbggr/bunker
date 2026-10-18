@@ -196,6 +196,12 @@ export async function runInit(opts: { cwd: string; env?: Env; yes: boolean; io: 
     }
   }
 
+  const oldLabels = first.checks.filter((c) => c.id.startsWith("old-label-") && !c.ok);
+  if (oldLabels.length) {
+    io.say("\n== Old labels (no longer used; rename them to keep them on existing issues and PRs) ==");
+    for (const c of oldLabels) io.say(`  ${c.fix}`);
+  }
+
   // settings: never changed here
   const settings = first.checks.filter((c) => (c.id === "auto-merge" || c.id === "required-check" || c.id === "ci") && !c.ok);
   if (settings.length) {

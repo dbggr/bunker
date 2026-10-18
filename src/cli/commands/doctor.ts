@@ -6,13 +6,13 @@ import { AUTH_VARS, loadBunkerEnv } from "../../core/env.ts";
 import { DEFAULT_MODEL_LABEL, resolveModels } from "../../agents/models.ts";
 import { ConfigError, effectiveSettings, formatValue, loadRepoConfig } from "../../core/config.ts";
 import { redact } from "../../core/redact.ts";
-import { FAILED_LABEL, IN_PROGRESS_LABEL, LEGACY_FAILED_LABEL, LEGACY_QUEUED_LABEL, LEGACY_REVIEW_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
+import { FAILED_LABEL, IN_PROGRESS_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
 import { PRIORITY_LABELS } from "../../core/priority.ts";
 
 type Env = Record<string, string | undefined>;
 
-/** New label -> the pre-namespace name still accepted for one release; renaming it keeps it on existing issues. */
-export const LEGACY_NAMES: Record<string, string> = { [QUEUED_LABEL]: LEGACY_QUEUED_LABEL, [FAILED_LABEL]: LEGACY_FAILED_LABEL, [REVIEW_LABEL]: LEGACY_REVIEW_LABEL };
+/** Pre-1.0 label names bunker no longer reads or writes, with their replacements. */
+export const OLD_LABELS: Record<string, string> = { bunker: QUEUED_LABEL, "bunker-failed": FAILED_LABEL, "needs-human-review": REVIEW_LABEL };
 
 /** Filed on follow-ups and audit findings; filing falls back to no severity label without them, so they are optional. */
 export const SEVERITY_LABELS = ["severity:high", "severity:medium"] as const;
@@ -216,7 +216,11 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
       names = (JSON.parse(labels.out) as { name: string }[]).map((l) => l.name);
     } catch {}
     for (const l of LABELS) {
-      add({ id: `label-${l}`, group: "github", label: `label ${l}`, ok: !!names?.includes(l), required: !(SEVERITY_LABELS as readonly string[]).includes(l), fix: names?.includes(LEGACY_NAMES[l] ?? "") ? `gh label edit ${LEGACY_NAMES[l]} --name ${l} --repo ${repo!.slug} (keeps it on existing issues; the old name still works for one release)` : `gh label create ${l} --repo ${repo!.slug}` });
+      const old = Object.keys(OLD_LABELS).find((o) => OLD_LABELS[o] === l);
+      add({ id: `label-${l}`, group: "github", label: `label ${l}`, ok: !!names?.includes(l), required: !(SEVERITY_LABELS as readonly string[]).includes(l), fix: old && names?.includes(old) ? `gh label edit ${old} --name ${l} --repo ${repo!.slug} (keeps it on existing issues)` : `gh label create ${l} --repo ${repo!.slug}` });
+    }
+    for (const [old, now] of Object.entries(OLD_LABELS)) {
+      if (names?.includes(old)) add({ id: `old-label-${old}`, group: "github", label: `old label ${old} (no longer used)`, ok: false, required: false, fix: `gh label edit ${old} --name ${now} --repo ${repo!.slug}` });
     }
     const branch = defaultBranch ?? "main";
     add({
