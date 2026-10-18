@@ -1,0 +1,19 @@
+name: Feature request
+description: An idea for bunker
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like bunker to do?
+  - type: textarea
+    id: criteria
+    attributes:
+      label: How would we know it's done?
+      description: Acceptance criteria as a checklist, if you can.
