@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeCode, noSandbox, review, type Agent, type BunkerEvent } from "../src/index.ts";
 import { createProgress, findStreamResult, hyperlink, parseClaudeStreamLine } from "../src/core/events.ts";
-import { runIssue } from "../src/issue.ts";
+import { runIssue } from "../src/pipeline/issue.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

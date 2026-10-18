@@ -3,7 +3,10 @@ import { parseArgs } from "node:util";
 import { FlagError, resolveCiTimeout, resolveParallel, resolveTimeouts, resolveWatchSettings } from "./core/settings.ts";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "./core/env.ts";
 import { $ } from "bun";
-import { AgentFailure, UsageLimit, review, run, runAll } from "./index.ts";
+import { hardenHostGit } from "./sandboxes/git-guard.ts";
+import { AgentFailure, UsageLimit } from "./pipeline/errors.ts";
+import { review } from "./pipeline/review.ts";
+import { run, runAll } from "./pipeline/run.ts";
 import { worktreeAdmin } from "./worktree/admin.ts";
 import { docker } from "./sandboxes/container.ts";
 import { noSandbox } from "./sandboxes/no-sandbox.ts";
@@ -13,9 +16,10 @@ import { loadRepoConfigOrExit } from "./core/config.ts";
 import { resolveModels } from "./agents/models.ts";
 import { formatChecks, runDoctor } from "./doctor.ts";
 import { runInit, terminalIo } from "./init.ts";
-import { runAudit } from "./audit.ts";
-import { runTriage, formatTriage } from "./triage.ts";
-import { runIssue, runQueue } from "./issue.ts";
+import { runAudit } from "./pipeline/audit.ts";
+import { runTriage, formatTriage } from "./pipeline/triage.ts";
+import { runIssue } from "./pipeline/issue.ts";
+import { runQueue } from "./pipeline/queue.ts";
 import { loadSpendCaps } from "./core/spend.ts";
 import { configAllowedLabelers, enforceLabeler } from "./github/labeler.ts";
 import { parseDuration, runWatch } from "./watch.ts";
@@ -36,6 +40,9 @@ import { alive } from "./watch.ts";
 import { selfUpdate } from "./self-update.ts";
 import { buildLabel } from "./build-info.ts";
 import pkg from "../package.json" with { type: "json" };
+
+// Every git bunker runs on the host ignores repo hooks and fsmonitor (see git-guard.ts).
+hardenHostGit();
 
 /** When to re-run after a usage-limit pause (exit code 3). */
 function rerunHint(resetAt?: number): string {

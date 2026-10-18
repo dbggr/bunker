@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeCode, noSandbox, type Agent } from "../src/index.ts";
-import { runIssue } from "../src/issue.ts";
+import { runIssue } from "../src/pipeline/issue.ts";
 import { runWatch } from "../src/watch.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts

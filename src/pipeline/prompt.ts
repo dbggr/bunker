@@ -1,5 +1,5 @@
 import { $ } from "bun";
-import { isolatedEnv } from "./sandboxes/env.ts";
+import { isolatedEnv } from "../sandboxes/env.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const TOKEN = /!`([^`]*)`|\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
