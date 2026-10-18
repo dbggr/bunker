@@ -69,3 +69,7 @@ gh label edit bunker-failed --name bunker:failed
 gh label edit needs-human-review --name bunker:review
 gh label create bunker:in-progress
 ```
+
+## Context files
+
+`context = ["docs/spec.md", "docs/architecture.md"]` in `.bunker/config.toml` inlines those files into the implementer and reviewer prompts (the reviewer checks the change against them). A `Spec: <path>` line in an issue body (author with admin/maintain permission) or trusted comment adds a file for that issue. Files are read from origin's default branch with `git show`, never the worktree, and inserted as fenced, labelled values, never template-expanded. Each file and the total are capped at 50 KB; a missing or oversized file fails the run, naming it.

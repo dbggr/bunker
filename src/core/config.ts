@@ -7,6 +7,7 @@ export interface RepoConfig {
   verify?: string;
   verify_network?: boolean;
   copy?: string[];
+  context?: string[];
   models: { implementer?: string; reviewer?: string; auditor?: string; default?: string };
   watch: { interval?: number; parallel?: number; max_cost_day?: number; max_cost_month?: number; audit_every?: number; triage_every?: number };
   merge: { ci_timeout?: number };
@@ -33,6 +34,7 @@ export const CONFIG_KEYS: KeySpec[] = [
   { key: "verify", kind: "string", doc: "command that must pass before anything is pushed (legacy: .bunker/verify)" },
   { key: "verify_network", kind: "boolean", doc: "let sandboxed verify use the network and Claude credentials (off: verify runs agent-written code)", default: false },
   { key: "copy", kind: "strings", doc: "gitignored paths or globs copied into each worktree (legacy: .bunker/copy)", default: [] },
+  { key: "context", kind: "strings", doc: "repo files (read from the default branch) inlined into the implementer and reviewer prompts", default: [] },
   { key: "models.implementer", kind: "string", doc: "model for the implementer role" },
   { key: "models.reviewer", kind: "string", doc: "model for the reviewer role" },
   { key: "models.auditor", kind: "string", doc: "model for the auditor role" },
