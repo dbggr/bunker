@@ -10,7 +10,7 @@ export interface RepoConfig {
   context?: string[];
   models: { implementer?: string; reviewer?: string; auditor?: string; default?: string };
   watch: { interval?: number; parallel?: number; max_cost_day?: number; max_cost_month?: number; audit_every?: number; triage_every?: number };
-  merge: { ci_timeout?: number };
+  merge: { ci_timeout?: number; mode?: "auto" | "manual" };
   notify: { enabled?: boolean; github_user?: string };
   clean: { logs_days?: number };
 }
@@ -45,6 +45,7 @@ export const CONFIG_KEYS: KeySpec[] = [
   { key: "watch.max_cost_month", kind: "number", doc: "USD cap per rolling 30 days for --watch" },
   { key: "watch.audit_every", kind: "number", doc: "days between periodic --audit runs in --watch" },
   { key: "watch.triage_every", kind: "number", doc: "hours between periodic `bunker triage` runs in --watch (comment and close only)" },
+  { key: "merge.mode", kind: "string", doc: '"manual": PRs stay open for a human to merge; bunker keeps them green (also written `merge = "manual"`)', default: "auto" },
   { key: "merge.ci_timeout", kind: "number", doc: "minutes --merge waits for CI", default: 30 },
   { key: "clean.logs_days", kind: "number", doc: "days to keep .bunker/runs logs; --watch / --queue start-up and `bunker clean` prune older ones", default: 30 },
   { key: "notify.enabled", kind: "boolean", doc: "desktop notifications from --watch (notify-send / osascript)", default: true },
@@ -100,6 +101,12 @@ export function parseConfig(text: string, name = ".bunker/config.toml"): { confi
       }
       continue;
     }
+    // `merge = "manual"` is the short form of `[merge] mode = "manual"` (a TOML key can't be both a string and a table).
+    if (k === "merge" && typeof v === "string") {
+      if (v !== "auto" && v !== "manual") throw new ConfigError(`${name}: merge must be "auto" or "manual"`);
+      config.merge.mode = v;
+      continue;
+    }
     if (TABLES.includes(k)) {
       if (!isTable(v)) throw new ConfigError(`${name}: ${k} must be a table`);
       for (const [sub, sv] of Object.entries(v)) {
@@ -107,6 +114,7 @@ export function parseConfig(text: string, name = ".bunker/config.toml"): { confi
         if (!spec) warnings.push(`${name}: unknown key ${k}.${sub}, ignored`);
         else {
           if (!check(spec.kind, sv)) throw new ConfigError(`${name}: ${spec.key} must be ${EXPECTED[spec.kind]}`);
+          if (spec.key === "merge.mode" && sv !== "auto" && sv !== "manual") throw new ConfigError(`${name}: merge.mode must be "auto" or "manual"`);
           (config[k as "models"] as Record<string, unknown>)[sub] = sv;
         }
       }

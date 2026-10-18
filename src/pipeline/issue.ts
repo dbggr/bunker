@@ -31,6 +31,10 @@ export interface IssueOptions extends Timeouts {
   verifyNetwork?: boolean;
   /** After the PR opens, squash-merge it and check the merge landed. Requires `verify`. */
   merge?: boolean;
+  /** Manual-merge mode: end at an open PR labelled `bunker:awaiting-review`, without requesting auto-merge. Excludes `merge`. */
+  manual?: boolean;
+  /** With `merge`: end the run once auto-merge is armed instead of waiting for the merge (a shepherd takes over the PR). */
+  handoff?: boolean;
   /** With `merge`: minutes to wait for GitHub to auto-merge the PR before giving up. Defaults to 30. */
   ciTimeoutMin?: number;
   /** Milliseconds between PR state polls. Defaults to 10000. */
@@ -49,7 +53,7 @@ export interface IssueOptions extends Timeouts {
 }
 
 export interface IssueResult {
-  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked" | "bad-output" | "idle-timeout" | "already-in-progress" | "paused-usage-limit" | "needs-review";
+  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked" | "bad-output" | "idle-timeout" | "already-in-progress" | "paused-usage-limit" | "needs-review" | "awaiting-merge" | "awaiting-review";
   /** With status `paused-usage-limit`: where the run stopped. Re-running the issue (or the next watch pass) resumes it. */
   pause?: { resetAt?: number; sessionId?: string };
   /** With status `blocked`: the `discovered` issue filed for what this one waits on. */

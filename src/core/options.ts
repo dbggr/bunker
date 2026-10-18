@@ -20,6 +20,7 @@ export const options = {
   verify: { type: "string" },
   "verify-on-host": { type: "boolean", default: false },
   merge: { type: "boolean", default: false },
+  "no-merge": { type: "boolean", default: false },
   "ci-timeout": { type: "string" },
   "idle-timeout": { type: "string" },
   "completion-timeout": { type: "string" },

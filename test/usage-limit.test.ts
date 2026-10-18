@@ -111,7 +111,7 @@ function limitedAgent(root: string, resetAt?: number): Agent {
 }
 
 const callsOf = async (root: string) => (await Bun.file(join(root, "calls.log")).text()).trim().split("\n");
-const base = { sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10 };
+const base = { sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10, shepherd: false };
 
 describe("usage limit", () => {
   test("runIssue pauses (keeping work and the label) and a re-run resumes the same session", async () => {

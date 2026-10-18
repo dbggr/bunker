@@ -20,6 +20,8 @@ import { collectStatus, formatStatus } from "./commands/status.ts";
 import { listQueued } from "../github/queue.ts";
 import { alive } from "./commands/watch.ts";
 import { guardFlags, type CliValues } from "./args.ts";
+import { createShepherd } from "../pipeline/shepherd.ts";
+import { rerunHint } from "./pipeline-commands.ts";
 
 export async function doctorOrInitCommand(values: CliValues, positionals: string[]) {
   const cmd = positionals[0];
@@ -135,4 +137,40 @@ export async function triageCommand(values: CliValues) {
   for (const line of formatTriage(result, mode)) console.log(line);
   if (result.usage) console.log(`bunker: cost ${formatUsage(result.usage)}`);
   process.exit(0);
+}
+
+export async function shepherdCommand(values: CliValues) {
+  const allowed = ["setup", "verify", "verify-on-host", "model", "implementer-model", "reviewer-model", "image", "no-sandbox", "idle-timeout", "completion-timeout", "step-timeout", "verbose"];
+  const others = Object.entries(values).filter(([k, v]) => !allowed.includes(k) && v !== false && v !== undefined);
+  if (others.length) {
+    console.error("bunker: shepherd only takes --setup, --verify, --verify-on-host, --model, --implementer-model, --reviewer-model, --image, --no-sandbox and the timeouts");
+    process.exit(2);
+  }
+  const cfg = (await loadRepoConfigOrExit(process.cwd())).config;
+  await loadBunkerEnv(process.cwd());
+  if (!values["no-sandbox"] && !hasAuth()) {
+    console.error(AUTH_HINT);
+    process.exit(2);
+  }
+  const timeouts = guardFlags(() => resolveTimeouts(values));
+  if (values.verbose) output.verbose = true;
+  const models = resolveModels(values, process.env, cfg.models);
+  const agent = claudeCode({ model: models.implementer, json: true });
+  const shepherd = createShepherd({
+    agent, reviewer: models.reviewer === models.implementer ? agent : claudeCode({ model: models.reviewer, json: true }),
+    sandbox: values["no-sandbox"] ? noSandbox() : docker({ image: values.image }),
+    ...(values.setup ? { setup: values.setup } : {}), ...(values.verify ? { verify: values.verify } : {}), verifyOnHost: values["verify-on-host"], verifyNetwork: cfg.verify_network === true,
+    onEvent: createProgress({ write: (s) => output.write(redact(s)), tty: !!process.stdout.isTTY, columns: process.stdout.columns ?? 100 }).onEvent, ...timeouts,
+  });
+  const pass = await shepherd.pass();
+  console.log();
+  if (pass.error) {
+    console.error(`bunker: ${pass.error}`);
+    process.exit(2);
+  }
+  if (!pass.entries.length) console.log("bunker: no open bunker PRs");
+  for (const e of pass.entries) console.log(`#${e.issue} PR #${e.pr} [${e.action}] ${e.url}${e.detail ? `\n  ${e.detail.trimEnd().replaceAll("\n", "\n  ")}` : ""}`);
+  if (pass.paused) console.log(`bunker: paused on the Claude usage limit; ${rerunHint(pass.paused.resetAt)}`);
+  if (pass.usage) console.log(`bunker: cost ${formatUsage(pass.usage)}`);
+  process.exit(pass.paused ? 3 : pass.entries.some((e) => e.action === "gave-up" || e.action === "failed") ? 1 : 0);
 }

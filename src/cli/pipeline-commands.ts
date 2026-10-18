@@ -17,6 +17,8 @@ export function rerunHint(resetAt?: number): string {
 
 /** What the --queue and --issue handlers take from main.ts. */
 export interface PipelineContext {
+  /** Manual-merge mode: runs end at an open PR labelled `bunker:awaiting-review`. */
+  manual: boolean;
   values: CliValues;
   repoCfg: RepoConfig;
   onEvent: (e: BunkerEvent) => void;
@@ -34,11 +36,11 @@ export interface PipelineContext {
   tty: boolean;
 }
 
-export async function queueCommand({ values, repoCfg, onEvent, agent, reviewerAgent, sandbox, maxRounds, resume, limit, ciTimeoutMin, timeouts, parallel, allowLabelers, publisher, tty }: PipelineContext) {
+export async function queueCommand({ manual, values, repoCfg, onEvent, agent, reviewerAgent, sandbox, maxRounds, resume, limit, ciTimeoutMin, timeouts, parallel, allowLabelers, publisher, tty }: PipelineContext) {
   const reviewer = reviewerAgent();
   let results;
   try {
-    results = await runQueue({ onEvent, agent, reviewer, sandbox, maxRounds, resume, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, merge: values.merge, ciTimeoutMin, ...timeouts, parallel, allowLabelers });
+    results = await runQueue({ onEvent, agent, reviewer, sandbox, maxRounds, resume, limit, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, merge: values.merge, manual, ciTimeoutMin, ...timeouts, parallel, allowLabelers });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -57,10 +59,10 @@ export async function queueCommand({ values, repoCfg, onEvent, agent, reviewerAg
   if (pausedRun) {
     console.log(`bunker: paused on the Claude usage limit (#${pausedRun.issue}); ${rerunHint(pausedRun.pause?.resetAt)}`);
     process.exitCode = 3;
-  } else if (results.some((r) => r.status !== "blocked" && r.status !== "already-in-progress" && r.status !== "needs-review" && r.status !== (values.merge ? "merged" : "pr-opened"))) process.exitCode = 1;
+  } else if (results.some((r) => r.status !== "blocked" && r.status !== "already-in-progress" && r.status !== "needs-review" && r.status !== (values.merge ? "merged" : manual ? "awaiting-review" : "pr-opened"))) process.exitCode = 1;
 }
 
-export async function issueCommand({ values, repoCfg, onEvent, agent, reviewerAgent, sandbox, maxRounds, resume, ciTimeoutMin, timeouts, allowLabelers, publisher, tty }: PipelineContext) {
+export async function issueCommand({ manual, values, repoCfg, onEvent, agent, reviewerAgent, sandbox, maxRounds, resume, ciTimeoutMin, timeouts, allowLabelers, publisher, tty }: PipelineContext) {
   const issue = Number(values.issue);
   if (!Number.isInteger(issue) || issue < 1) {
     console.error("bunker: --issue must be a positive integer");
@@ -76,7 +78,7 @@ export async function issueCommand({ values, repoCfg, onEvent, agent, reviewerAg
       await publisher?.flush();
       process.exit(1);
     }
-    result = await runIssue({ onEvent, issue, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, merge: values.merge, ciTimeoutMin, ...timeouts });
+    result = await runIssue({ onEvent, issue, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, merge: values.merge, manual, ciTimeoutMin, ...timeouts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
@@ -93,5 +95,5 @@ export async function issueCommand({ values, repoCfg, onEvent, agent, reviewerAg
   if (result.review?.usage) console.log(`bunker: cost ${formatUsage(result.review.usage)}`);
   if (result.logPath) console.log(`bunker: log ${tty ? hyperlink(result.logPath) : result.logPath}`);
   if (result.status === "paused-usage-limit") process.exitCode = 3;
-  else if (result.status !== (values.merge ? "merged" : "pr-opened") && result.status !== "needs-review") process.exitCode = 1;
+  else if (result.status !== (values.merge ? "merged" : manual ? "awaiting-review" : "pr-opened") && result.status !== "needs-review") process.exitCode = 1;
 }

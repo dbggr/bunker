@@ -96,7 +96,7 @@ const three: [number, string, string][] = [
   [3, "Third", "2026-03-01T00:00:00Z"],
 ];
 
-const base = { sandbox: noSandbox(), verify: "true", intervalMs: 10, listRetryMs: 5, ciPollMs: 10 };
+const base = { sandbox: noSandbox(), verify: "true", intervalMs: 10, listRetryMs: 5, ciPollMs: 10, shepherd: false };
 
 describe("parseDuration()", () => {
   test("parses hours, minutes and combinations", () => {
@@ -442,7 +442,7 @@ describe("runWatch() next pass", () => {
     await Bun.write(join(root, "prlist.json"), JSON.stringify([{ url: "https://github.com/o/r/pull/55" }]));
     const ctl = new AbortController();
     await runWatch({ ...base, cwd: repo, agent: fakeAgent(), signal: ctl.signal, log: (l) => { if (/pass 4 /.test(l)) ctl.abort(); } });
-    const calls = (await Bun.file(join(root, "gh.log")).text()).split("\n").filter((l) => l.startsWith("pr list"));
+    const calls = (await Bun.file(join(root, "gh.log")).text()).split("\n").filter((l) => l.startsWith("pr list --head"));
     expect(calls).toHaveLength(1);
   });
 
@@ -531,6 +531,23 @@ describe("bunker --watch (CLI)", () => {
     expect(r.err).toMatch(/verify/);
   });
 
+  test("--no-merge only applies to --watch, and excludes --merge", async () => {
+    const { repo } = await setup([]);
+    expect(run(repo, "--queue", "--no-sandbox", "--no-merge").err).toMatch(/--no-merge only applies to --watch/);
+    const both = run(repo, "--watch", "--no-sandbox", "--verify", "true", "--no-merge", "--merge");
+    expect(both.code).toBe(2);
+    expect(both.err).toMatch(/--merge conflicts with manual-merge mode/);
+  });
+
+  test("merge = \"manual\" in config.toml also excludes --merge, and --parallel above 1 is allowed there", async () => {
+    const { repo } = await setup([]);
+    await Bun.write(join(repo, ".bunker", "config.toml"), 'merge = "manual"\nverify = "true"\n');
+    const r = run(repo, "--queue", "--no-sandbox", "--merge");
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(/manual-merge mode/);
+    expect(run(repo, "--queue", "--no-sandbox", "--parallel", "2", "--limit", "1").err).not.toMatch(/--parallel/);
+  });
+
   test("invalid --for, --interval, --max-cost exit 2", async () => {
     const { repo } = await setup([]);
     for (const a of [["--for", "5x"], ["--interval", "0"], ["--max-cost", "-1"], ["--max-cost-day", "0"], ["--max-cost-month", "abc"]]) {
@@ -595,6 +612,54 @@ describe("bunker --watch (CLI)", () => {
     p.kill("SIGINT");
     expect(await p.exited).toBe(0);
     expect(existsSync(join(repo, ".bunker", "watch.lock"))).toBe(false);
+  });
+});
+
+describe("runWatch() shepherd stage", () => {
+  const bunkerPr = (issue: number) => ({ number: 40 + issue, url: `https://github.com/o/r/pull/${40 + issue}`, headRefName: `feature/${issue}-x`, headRefOid: "abc", baseRefName: "main", isCrossRepository: false, isDraft: false, body: `Closes #${issue}`, labels: [], mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", reviewDecision: "", autoMergeRequest: null, comments: [] });
+
+  test("with the shepherd a run ends at armed auto-merge: the slot is free, nothing waits for the merge", async () => {
+    const { repo, root } = await setup(three.slice(0, 2));
+    const ctl = new AbortController();
+    const s = await runWatch({ ...base, shepherd: true, cwd: repo, agent: fakeAgent(), signal: ctl.signal, log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); } });
+    const log = await Bun.file(join(root, "gh.log")).text();
+    expect(log.match(/pr merge .* --auto --squash/g)).toHaveLength(2);
+    expect(log).not.toMatch(/^pr view /m);
+    // Merges are the shepherd's to notice, not the run's.
+    expect(s.merged).toBe(0);
+    expect(s.failed).toBe(0);
+  });
+
+  test("manual-merge mode: PRs end labelled bunker:awaiting-review with a notification, nothing is armed or merged", async () => {
+    const { repo, root } = await setup(three.slice(0, 2));
+    const notes: string[] = [];
+    const ctl = new AbortController();
+    const s = await runWatch({ ...base, manual: true, cwd: repo, agent: fakeAgent(), notify: (t: string) => void notes.push(t), signal: ctl.signal, log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); } });
+    const log = await Bun.file(join(root, "gh.log")).text();
+    expect(log).not.toMatch(/pr merge/);
+    expect(log.match(/pr edit .* --add-label bunker:awaiting-review/g)).toHaveLength(2);
+    expect(notes.filter((n) => /awaiting your review/.test(n))).toHaveLength(2);
+    expect(s.failed).toBe(0);
+    expect(log).not.toMatch(/issue edit .*bunker:failed/);
+  });
+
+  test("parallel > 1 in manual-merge mode works the queue without serial merge turns", async () => {
+    const { repo } = await setup(three);
+    const ctl = new AbortController();
+    const prompts: string[] = [];
+    const s = await runWatch({ ...base, manual: true, parallel: 2, cwd: repo, agent: fakeAgent({ prompts }), signal: ctl.signal, log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); } });
+    expect(prompts).toHaveLength(3);
+    expect(s.failed).toBe(0);
+  });
+
+  test("an issue that already has an open bunker PR is not started again", async () => {
+    const { repo, root } = await setup(three.slice(0, 2));
+    await Bun.write(join(root, "prlist.json"), JSON.stringify([bunkerPr(1)]));
+    const prompts: string[] = [];
+    const ctl = new AbortController();
+    await runWatch({ ...base, shepherd: false, cwd: repo, agent: fakeAgent({ prompts }), signal: ctl.signal, log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); } });
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("Title: Second");
   });
 });
 

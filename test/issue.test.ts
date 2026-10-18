@@ -1163,3 +1163,38 @@ describe("runIssue() context files", () => {
     expect(r.error).toMatch(/total/);
   });
 });
+
+describe("runIssue() handoff to the shepherd", () => {
+  test("the run ends once auto-merge is armed: no waiting, no polling, the PR and worktree stay", async () => {
+    const { repo, mergeLog } = await setup(issue(), "never");
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: "true", merge: true, handoff: true, ciPollMs: 10 });
+    expect(r.status).toBe("awaiting-merge");
+    expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
+    expect((await Bun.file(mergeLog).text()).trim()).toBe("|pr merge https://github.com/o/r/pull/99 --auto --squash");
+    expect(await Bun.file(join(dirname(mergeLog), "view.log")).exists()).toBe(false);
+    expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
+  });
+
+  test("an arming failure is still a failure", async () => {
+    const { repo } = await setup(issue(), "fail");
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: "true", merge: true, handoff: true });
+    expect(r.status).toBe("merge-failed");
+  });
+});
+
+describe("runIssue() manual-merge mode", () => {
+  test("ends at an open PR labelled bunker:awaiting-review; auto-merge is never requested", async () => {
+    const { repo, editLog, mergeLog } = await setup(issue(), "ff");
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), manual: true });
+    expect(r.status).toBe("awaiting-review");
+    expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
+    expect(await Bun.file(editLog).text()).toContain("pr edit https://github.com/o/r/pull/99 --add-label bunker:awaiting-review");
+    expect(await Bun.file(mergeLog).exists()).toBe(false);
+  });
+
+  test("can not be combined with merge", async () => {
+    const { repo } = await setup(issue(), "ff");
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: "true", merge: true, manual: true });
+    expect(r.status).toBe("failed");
+  });
+});

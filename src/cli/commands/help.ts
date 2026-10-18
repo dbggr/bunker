@@ -11,6 +11,7 @@ Usage:
   bunker --issue <n>                          GitHub issue -> reviewed PR
   bunker --queue                              work the \`bunker:queued\` label queue
   bunker --watch                              keep working the queue unattended (implies --queue --merge)
+  bunker shepherd                             one pass over the open bunker PRs: fix red CI, update behind branches, resolve conflicts
   bunker status [--json]                      read-only watch summary: watcher, current run, queue, merged/failed with reasons, spend
   bunker ui [--port <n>]                      shared live view: one tab per repo (default port 4321)
   bunker --audit                              file improvement ideas as \`discovered\` issues
@@ -55,7 +56,7 @@ Single prompt and --task:
                              event to check): add the label first. Also: allow-labelers = ["login"] in ~/.config/bunker/config.toml.
                              If the permission lookup fails the issue is skipped (fail closed)
   --limit <n>                (--queue) max issues per run (default 5; blocked issues don't count)
-  --parallel <n>             (--queue --merge, --watch) work up to n issues at once, one worktree + container each (default 1).
+  --parallel <n>             (--queue --merge, --watch, manual-merge mode) work up to n issues at once, one worktree + container each (default 1).
                              Merges stay serial, in queue order: each PR's branch is first updated to the latest default
                              branch and re-verified; a conflict or failure then gets one fresh attempt from the new main.
                              Trade-off: more concurrent spend, and rework when issues touch the same files; 2 is a good choice
@@ -63,7 +64,7 @@ Single prompt and --task:
   --verify "<cmd>"           run after approval; a failure stops before pushing (default: verify in config.toml, else .bunker/verify)
   --verify-on-host           run --verify on the host instead of in the sandbox
   --merge                    auto-merge the PR once checks pass (requires --verify or verify in config.toml)
-  --ci-timeout <min>         (--merge) minutes to wait for the merge (default 30)
+  --ci-timeout <min>         (--merge) minutes to wait for the merge (default 30); under --watch the shepherd waits, not the run
   --idle-timeout <min>       kill an agent or reviewer that prints nothing for this long; the step fails as
                              idle-timeout, worktree and branch kept (default 10)
   --completion-timeout <s>   seconds an agent may linger after its final result event or closing signal before it is
@@ -90,6 +91,15 @@ Single prompt and --task:
   --max-cost-month <usd>     same for a rolling 30 days (default: no cap; config.toml: max-cost-month)
   --audit-every <days>       also run --audit at most once per this many days, kept in .bunker/watch-state.json (default off; 30 is a good value)
   --triage-every <hours>     also run triage at most once per this many hours, comment and close only (default off)
+  --no-merge                 manual-merge mode (also \`merge = "manual"\` in config.toml): a run ends at an open PR labelled
+                             \`bunker:awaiting-review\` and a notification; auto-merge is never requested and bunker never merges.
+                             Issues with an open bunker PR are not started again
+  Under --watch a run ends once its PR is open and auto-merge is armed, which frees the --parallel slot. The shepherd (the same
+  stage as \`bunker shepherd\`) then owns every open bunker PR (same-repo branch {feature|fix}/<n>-*, body "Closes #<n>") on each pass.
+  It keeps no state: it reads GitHub, so it carries on after a restart. A red required check goes, with its failed log, to a fix agent on the
+  PR branch (3 attempts, then \`bunker:failed\` on the PR and a notification; reading logs needs Actions: read on BUNKER_GH_TOKEN, else it
+  notifies you); a branch behind its base is updated; a conflict is resolved by an agent, verified, and reviewed again if the diff changed;
+  "changes requested" by a maintainer goes to the agent and the review is re-requested. It never merges: auto-merge plus a required check is the gate
   Failed issues get \`bunker:failed\` instead of \`bunker:queued\` and are never retried automatically; a running one shows \`bunker:in-progress\`.
   The pre-namespace \`bunker\` label is still accepted as \`bunker:queued\` for one release.
 

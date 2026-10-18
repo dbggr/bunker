@@ -6,6 +6,9 @@ import { dirname, join } from "node:path";
 /** Paths (at any depth) that steer an agent: `.claude/` (skills, settings, hooks, commands), `CLAUDE.md`, `CLAUDE.local.md` and `AGENTS.md`. */
 export const STEERING = /(^|\/)(\.claude\/|CLAUDE(\.local)?\.md$|AGENTS\.md$)/;
 
+/** Paths only a human may merge changes to: `.bunker/` feeds the host, `.github/` is CI, and the steering files steer agents. */
+export const isSensitivePath = (f: string) => /^\.(bunker|github)\//.test(f) || STEERING.test(f);
+
 const listed = async (cmd: Promise<{ stdout: Buffer }>) => (await cmd).stdout.toString().split("\0").filter((f) => f && STEERING.test(f));
 
 const prune = async (worktree: string, f: string) => {

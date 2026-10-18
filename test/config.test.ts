@@ -36,6 +36,14 @@ github_user = "carol"
 `;
 
 describe("parseConfig", () => {
+  test("merge = \"manual\" and [merge] mode = \"manual\" both set the merge mode; other values are refused", () => {
+    expect(parseConfig('merge = "manual"').config.merge).toEqual({ mode: "manual" });
+    expect(parseConfig('[merge]\nmode = "manual"\nci_timeout = 5').config.merge).toEqual({ mode: "manual", ci_timeout: 5 });
+    expect(parseConfig('merge = "auto"').config.merge).toEqual({ mode: "auto" });
+    expect(() => parseConfig('merge = "yolo"')).toThrow('merge must be "auto" or "manual"');
+    expect(() => parseConfig('[merge]\nmode = "yolo"')).toThrow("merge.mode");
+  });
+
   test("reads every key", () => {
     const { config, warnings } = parseConfig(FULL);
     expect(warnings).toEqual([]);

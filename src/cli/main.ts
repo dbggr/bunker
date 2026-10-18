@@ -33,7 +33,7 @@ import { selfUpdate } from "./commands/self-update.ts";
 import { buildLabel } from "../build-info.ts";
 import pkg from "../../package.json" with { type: "json" };
 import { guardFlags } from "./args.ts";
-import { cleanCommand, doctorOrInitCommand, statusCommand, triageCommand, uiCommand } from "./subcommands.ts";
+import { cleanCommand, doctorOrInitCommand, shepherdCommand, statusCommand, triageCommand, uiCommand } from "./subcommands.ts";
 import { issueCommand, queueCommand, rerunHint } from "./pipeline-commands.ts";
 
 // Every git bunker runs on the host ignores repo hooks and fsmonitor (see git-guard.ts).
@@ -112,9 +112,24 @@ if (isTriage) {
   await triageCommand(values);
 }
 
+// `bunker shepherd`: one pass of the PR shepherd over the open bunker PRs.
+if (!process.argv.slice(2).includes("--") && positionals.length === 1 && positionals[0] === "shepherd") {
+  await shepherdCommand(values);
+}
+
 const { config: repoCfg, legacy: legacyCfg } = await loadRepoConfigOrExit(process.cwd());
 const prompt = positionals.join(" ");
 const tasks = values.task ?? [];
+// Manual-merge mode: the run ends at an open PR a human merges (`merge = "manual"` in config.toml, or `--watch --no-merge`).
+if (values["no-merge"] && !values.watch) {
+  console.error("bunker: --no-merge only applies to --watch");
+  process.exit(2);
+}
+const manual = !!values["no-merge"] || (repoCfg.merge.mode === "manual" && (!!values.watch || !!values.queue || values.issue !== undefined));
+if (manual && values.merge) {
+  console.error('bunker: --merge conflicts with manual-merge mode (--no-merge or merge = "manual" in .bunker/config.toml)');
+  process.exit(2);
+}
 let watchOpts: { intervalMs: number; maxCostDayUsd?: number; maxCostMonthUsd?: number; forMs?: number; auditEveryDays?: number; triageEveryHours?: number } | undefined;
 if (values.watch) {
   if (prompt || tasks.length || values.review || values.issue !== undefined || values.queue || values.audit || values.limit !== undefined) {
@@ -141,7 +156,7 @@ if (values.watch) {
   }
   watchOpts = { intervalMs: intervalMin * 60_000, ...(caps.day === undefined ? {} : { maxCostDayUsd: caps.day }), ...(caps.month === undefined ? {} : { maxCostMonthUsd: caps.month }), ...(forMs === undefined ? {} : { forMs }), ...(auditEveryDays === undefined ? {} : { auditEveryDays }), ...(triageEveryHours === undefined ? {} : { triageEveryHours }) };
   values.queue = true;
-  values.merge = true;
+  values.merge = !manual;
 } else if (values.interval !== undefined || values.for !== undefined || values["max-cost"] !== undefined || values["max-cost-day"] !== undefined || values["max-cost-month"] !== undefined || values["audit-every"] !== undefined || values["triage-every"] !== undefined) {
   console.error("bunker: --interval, --for, --max-cost, --max-cost-day, --max-cost-month, --audit-every and --triage-every only apply to --watch");
   process.exit(2);
@@ -192,6 +207,8 @@ if (!values.audit && values.issue === undefined && !values.queue && !prompt === 
       '       bunker --issue <n> [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--max-rounds <n>] [--reviewer-model <id>]   (issue → reviewed PR)\n' +
       '       bunker --queue [--setup "<cmd>"] [--verify "<cmd>" [--verify-on-host] [--merge [--ci-timeout <min>]]] [--limit <n>] [--parallel <n>]   (work the `bunker:queued` label queue)\n' +
       '       bunker --watch [--interval <min>] [--for <duration>] [--max-cost-day <usd>] [--max-cost-month <usd>] [--parallel <n>] [--verify "<cmd>"]   (work the queue unattended, auto-merging)\n' +
+      '       bunker --watch --no-merge   (or merge = "manual" in config.toml: PRs wait for you to merge them)\n' +
+      '       bunker shepherd   (one pass over the open bunker PRs: CI fixes, branch updates, conflicts)\n' +
       '       bunker --audit [--max-issues <n>] [--focus "<text>"] [--setup "<cmd>"]   (file improvement ideas as `discovered` issues)\n' +
       '       bunker --task "<prompt>" --task "<prompt>" ...   (parallel, one worktree each)\n' +
       "run bunker --help for all options",
@@ -240,7 +257,7 @@ if (!Number.isInteger(limit) || limit < 1) {
   process.exit(2);
 }
 
-const parallel = guardFlags(() => resolveParallel(values, repoCfg.watch));
+const parallel = guardFlags(() => resolveParallel(values, repoCfg.watch, manual));
 
 await loadBunkerEnv(process.cwd());
 if (!values["no-sandbox"] && !hasAuth()) {
@@ -327,16 +344,16 @@ if (values.audit) {
   const ghToken = process.env.BUNKER_GH_TOKEN;
   const mention = await resolveMention(process.cwd(), (ghToken ? { ...process.env, GH_TOKEN: ghToken } : process.env) as Record<string, string>, repoCfg.notify.github_user);
   try {
-    await runWatch({ notify, mention, onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, logsDays: repoCfg.clean.logs_days ?? 30, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
+    await runWatch({ notify, mention, onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, manual, ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, logsDays: repoCfg.clean.logs_days ?? 30, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
     process.exit(2);
   }
 } else if (values.queue) {
-  await queueCommand({ values, repoCfg, onEvent, agent, reviewerAgent, sandbox, maxRounds, resume, limit, ciTimeoutMin, timeouts, parallel, allowLabelers, publisher, tty });
+  await queueCommand({ manual, values, repoCfg, onEvent, agent, reviewerAgent, sandbox, maxRounds, resume, limit, ciTimeoutMin, timeouts, parallel, allowLabelers, publisher, tty });
 } else if (values.issue !== undefined) {
-  await issueCommand({ values, repoCfg, onEvent, agent, reviewerAgent, sandbox, maxRounds, resume, limit, ciTimeoutMin, timeouts, parallel, allowLabelers, publisher, tty });
+  await issueCommand({ manual, values, repoCfg, onEvent, agent, reviewerAgent, sandbox, maxRounds, resume, limit, ciTimeoutMin, timeouts, parallel, allowLabelers, publisher, tty });
 } else if (values.review) {
   const reviewer = reviewerAgent();
   const result = await review({ onEvent, prompt, agent, reviewer, sandbox, maxRounds, resume, ...timeouts });

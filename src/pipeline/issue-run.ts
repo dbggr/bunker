@@ -22,7 +22,7 @@ import { fileFollowUps } from "./steps/follow-ups.ts";
 import { runVerify } from "./steps/verify.ts";
 import { publishIssue } from "./steps/pr.ts";
 
-export async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyOnHost, verifyNetwork, merge, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, mention, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
+export async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyOnHost, verifyNetwork, merge, manual, handoff, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, mention, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -54,7 +54,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   const fail = (status: IssueResult["status"], extra: Partial<IssueResult> = {}): IssueResult => {
     log(`final status: ${status}`, [extra.error, extra.prUrl].filter(Boolean).join("\n"));
     if (status === "merged") emitStage({ onEvent }, "merged");
-    else if (status !== "pr-opened" && status !== "needs-review") {
+    else if (!["pr-opened", "needs-review", "awaiting-merge", "awaiting-review"].includes(status)) {
       const reason = failureReason(status, logPath, { ...(extra.error ? { error: extra.error } : {}), ...(extra.verifyOutput ? { verifyOutput: extra.verifyOutput } : {}) });
       emit(onEvent, { type: "stage", name: "failed", text: status, reason });
     }
@@ -127,6 +127,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
       verifySource = ".bunker/verify";
     }
   }
+  if (merge && manual) return fail("failed", { error: "merge and manual-merge mode exclude each other" });
   if (merge && !verify) return fail("failed", { error: "merge requires --verify, verify in .bunker/config.toml or a .bunker/verify file" });
   if (verifyOnHost && !verify) return fail("failed", { error: "--verify-on-host requires --verify, verify in .bunker/config.toml or a .bunker/verify file" });
   let patterns: string[];
@@ -182,5 +183,5 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   const failedVerify = await verifyStep();
   if (failedVerify) return failedVerify;
 
-  return publishIssue(ctx, { agent, reviewer, verify, verifySource, merge, mergeTurn, ciTimeoutMin, ciPollMs, result, notFiled, remoteSha, baseSha, runVerify: verifyStep });
+  return publishIssue(ctx, { agent, reviewer, verify, verifySource, merge, manual, handoff, mergeTurn, ciTimeoutMin, ciPollMs, result, notFiled, remoteSha, baseSha, runVerify: verifyStep });
 }
