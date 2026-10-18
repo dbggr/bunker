@@ -71,7 +71,7 @@ export const STEPS: StepGuide[] = [
     why: "bunker only merges what a required CI check has passed; that rule must live on GitHub, not in the agent.",
     details: [
       "CI: a workflow with a job named `test` that runs your tests. bunker can write one for the detected toolchain as a commit on a branch with a pull request, never straight to your default branch.",
-      "Ruleset (GitHub's newer branch protection): a rule that requires the `test` check before merging. Classic branch protection (Settings -> Branches) does NOT count: bunker's scoped token can't read it, so it can't see that merging is safe.",
+      "Ruleset (GitHub's newer branch protection): a rule that requires the `test` check before merging. A required check in classic branch protection (Settings -> Branches) counts too, but bunker --merge can only read it if its token has Administration: read.",
       "bunker creates the ruleset through your own `gh` login, or prints the exact clicks (Settings -> Rules -> Rulesets -> New branch ruleset -> Require status checks to pass -> add `test`).",
       "If the repo's settings are managed by IaC (terraform, probot settings), change them there; a UI edit would be reverted.",
     ],

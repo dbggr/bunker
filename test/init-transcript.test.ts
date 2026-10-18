@@ -305,7 +305,7 @@ describe("--explain", () => {
     const w = await repoWith({});
     const p = Bun.spawnSync(["bun", join(import.meta.dir, "../src/cli.ts"), "init", "--explain", "merge"], { cwd: w.repo, env: w.env });
     expect(p.exitCode).toBe(0);
-    expect(p.stdout.toString()).toContain("Classic");
+    expect(p.stdout.toString()).toContain("classic branch protection");
   });
 });
 
@@ -400,12 +400,12 @@ describe("step 6: merge safety", () => {
     expect(s.text()).toContain("hasn't reported");
     expect(s.text()).toMatch(/Still to do:[\s\S]*no ruleset/);
   });
-  test("classic branch protection already requires a check: no ruleset, and it says which", async () => {
+  test("classic branch protection already requires a check: no ruleset", async () => {
     const w = await existingCi({ "protection.json": JSON.stringify({ strict: false, contexts: ["phpunit"], checks: [{ context: "phpunit" }] }) });
     const s = scripted();
     await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io, sandbox: fakeSandbox().sandbox });
     expect(await w.log()).not.toContain("rulesets --method POST");
-    expect(s.text()).toContain("already requires `phpunit`");
+    expect(s.text()).toContain("requires a status check (ruleset or branch protection)");
     expect(s.asked.some((q) => /ruleset/i.test(q))).toBe(false);
   });
   test("--yes with an already-required ruleset check is unaffected", async () => {
