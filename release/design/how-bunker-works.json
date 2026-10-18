@@ -1,0 +1,51 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "How bunker turns a to-do into finished work",
+    "locale": "en",
+    "output": "release/design/how-bunker-works.html",
+    "quality_profile": "showcase",
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "frontend": { "label": "You" },
+        "backend": { "label": "Bunker" },
+        "security": { "label": "Safety check" },
+        "cloud": { "label": "AI" },
+        "external": { "label": "GitHub" },
+        "messagebus": { "label": "Stopped" }
+      }
+    }
+  },
+  "lanes": [
+    { "id": "job", "label": "The job" },
+    { "id": "aside", "label": "When it stops", "variant": "exception" }
+  ],
+  "mainPath": ["pick", "check", "write", "review", "test", "merged"],
+  "nodes": [
+    { "id": "pick", "lane": "job", "col": 0, "type": "frontend", "label": "Pick a job", "sublabel": "tag an issue" },
+    { "id": "check", "lane": "job", "col": 1, "type": "security", "label": "Is it you?", "sublabel": "only you assign" },
+    { "id": "write", "lane": "job", "col": 2, "type": "cloud", "label": "Write it", "sublabel": "in a locked room" },
+    { "id": "review", "lane": "job", "col": 3, "type": "cloud", "label": "Second opinion", "sublabel": "another AI checks" },
+    { "id": "test", "lane": "job", "col": 4, "type": "backend", "label": "Test it", "sublabel": "one more go if red" },
+    { "id": "merged", "lane": "job", "col": 5, "type": "external", "label": "Merged", "sublabel": "you get a note" },
+    { "id": "stuck", "lane": "aside", "col": 2, "type": "messagebus", "label": "Couldn't do it", "sublabel": "flagged with why" },
+    { "id": "needs_you", "lane": "aside", "col": 5, "type": "frontend", "label": "Needs you", "sublabel": "rule changes wait" }
+  ],
+  "edges": [
+    { "from": "pick", "to": "check", "role": "main" },
+    { "from": "check", "to": "write", "role": "main" },
+    { "from": "write", "to": "review", "role": "main" },
+    { "from": "review", "to": "write", "label": "fix it", "role": "return", "variant": "dashed" },
+    { "from": "review", "to": "test", "role": "main" },
+    { "from": "test", "to": "merged", "label": "GitHub checks pass", "role": "main", "variant": "emphasis" },
+    { "from": "test", "to": "needs_you", "label": "touches its rules", "role": "branch", "variant": "security" },
+    { "from": "test", "to": "stuck", "label": "still failing", "role": "error", "variant": "security" },
+    { "from": "stuck", "to": "pick", "label": "send it back", "role": "return", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Why it's safe", "items": ["Nothing merges unless the tests pass", "The AI never sees your passwords or your computer", "Only you decide what it works on"] },
+    { "dot": "amber", "title": "When it needs you", "items": ["Changes to its own settings or rules wait for a person", "Jobs it can't finish are flagged with the reason", "Edited jobs are refused until you check them again"] }
+  ]
+}
