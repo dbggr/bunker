@@ -72,3 +72,8 @@ delete process.env.BUNKER_IN_SANDBOX;
 const configHome = mkdtempSync(join(tmpdir(), "bunker-test-config-"));
 process.env.XDG_CONFIG_HOME = configHome;
 process.on("exit", () => rmSync(configHome, { recursive: true, force: true }));
+
+// `bunker watch` in a test subprocess publishes to any hub reachable on the default port, which is a developer's live
+// `bunker ui` (phantom bunker-watch-*/origin tabs). Point the default at a port nothing listens on (dynamic range,
+// picked per run). test/hygiene.test.ts checks this.
+process.env.BUNKER_HUB_PORT = String(40000 + (process.pid % 20000));

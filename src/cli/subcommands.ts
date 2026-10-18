@@ -15,7 +15,7 @@ import { runTriage, formatTriage } from "../pipeline/triage.ts";
 import { loadSpendCaps } from "../core/spend.ts";
 import { redact } from "../core/redact.ts";
 import { createProgress } from "../core/events.ts";
-import { hubReachable, readToken, startHub, viewUrlFor } from "../ui/ui.ts";
+import { defaultHubPort, hubReachable, readToken, startHub, viewUrlFor } from "../ui/ui.ts";
 import { output } from "../core/output.ts";
 import { runClean } from "./commands/clean.ts";
 import { collectStatus, formatStatus } from "./commands/status.ts";
@@ -90,7 +90,7 @@ export async function uiCommand(values: CliValues) {
     console.error("bunker: ui only takes --port");
     process.exit(2);
   }
-  const port = values.port === undefined ? 4321 : Number(values.port);
+  const port = values.port === undefined ? defaultHubPort() : Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     console.error("bunker: --port must be an integer between 0 and 65535");
     process.exit(2);
