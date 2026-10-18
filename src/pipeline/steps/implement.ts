@@ -28,15 +28,16 @@ export interface ImplementInput {
   baseSha: string;
   fetchedSha: string;
   spent: { usage?: Usage };
+  check: string | undefined;
 }
 
 /**
  * Implement + agent review: renders the issue prompt and runs review() in the worktree. `done` when the run ends here
  * (prompt failed, or paused on the usage limit); otherwise the approved-or-not review result.
  */
-export async function implementIssue(ctx: IssueRunContext, input: ImplementInput): Promise<{ done: IssueResult } | { result: ReviewResult }> {
+export async function implementIssue(ctx: IssueRunContext, input: ImplementInput): Promise<{ done: IssueResult } | { result: ReviewResult; prompt: string }> {
   const { number, issue, repo, branch, worktree, logPath, defaultBranch, onEvent, timeouts, log, fail, finish } = ctx;
-  const { agent, reviewer, sandbox, maxRounds, resume, setup, patterns, paused, pausedFile, baseSha, spent } = input;
+  const { agent, reviewer, sandbox, maxRounds, resume, setup, patterns, paused, pausedFile, baseSha, spent, check } = input;
   // Issue text goes in as {{ISSUE}}/{{COMMENTS}} values, so it is never expanded; `!\`cmd\`` only runs from the template.
   let prompt: string;
   try {
@@ -58,7 +59,7 @@ export async function implementIssue(ctx: IssueRunContext, input: ImplementInput
   }
   log("models", `implementer: ${modelLabel(agent)}\nreviewer: ${modelLabel(reviewer ?? agent)}`);
   log("raw agent events (stream-json lines follow, interleaved with the sections below)");
-  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...timeouts, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), ...(paused ? { resumeFrom: paused } : {}), setup, copyToWorktree: patterns, reviewerInstruction: REVIEWER_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
+  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...timeouts, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), ...(paused ? { resumeFrom: paused } : {}), setup, ...(check ? { check } : {}), copyToWorktree: patterns, reviewerInstruction: REVIEWER_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
   spent.usage = result.usage;
   if (result.status === "paused-usage-limit" && result.pause) {
     // Keep everything and remember where to pick up; the issue keeps its `bunker` label.
@@ -78,5 +79,5 @@ export async function implementIssue(ctx: IssueRunContext, input: ImplementInput
     log(`round ${i + 1}: reviewer output (${r.approved ? "approved" : "changes requested"})`, r.feedback);
   }
   if (result.error) log("review error", result.error);
-  return { result };
+  return { result, prompt };
 }

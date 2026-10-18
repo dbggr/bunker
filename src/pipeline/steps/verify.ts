@@ -1,3 +1,4 @@
+import { redact } from "../../core/redact.ts";
 import { emit, emitStage } from "../../core/events.ts";
 import { tailLines, testCounts } from "../../core/output.ts";
 import { runSetup } from "../../worktree/admin.ts";
@@ -15,14 +16,35 @@ export interface VerifyInput {
   sandbox: Sandbox;
   setup: string | undefined;
   result: ReviewResult;
+  /** Fix rounds allowed after a failed verify (0: none). */
+  retries?: number;
+  /** Hands a verify failure to the implementer and has the reviewer re-review the fix; a failed run when that round can't finish. */
+  fixRound?: (failure: string) => Promise<IssueResult | undefined>;
 }
 
 /** Setup + verify in the worktree; a failed result, or undefined when verify passed (or there is none). */
 export async function runVerify(ctx: IssueRunContext, input: VerifyInput, extra: Partial<IssueResult> = {}): Promise<IssueResult | undefined> {
+  if (!input.verify) return undefined;
+  const retries = input.fixRound ? input.retries ?? 0 : 0;
+  for (let attempt = 1; ; attempt++) {
+    const failure = await verifyOnce(ctx, input, extra, attempt, retries + 1);
+    if (failure.kind !== "retry") return failure.kind === "failed" ? failure.result : undefined;
+    const stopped = await input.fixRound!(failure.text);
+    if (stopped) return stopped;
+  }
+}
+
+type Attempt = { kind: "passed" } | { kind: "failed"; result: IssueResult } | { kind: "retry"; text: string };
+
+/** One setup + verify run; `retry` carries the failure text when a fix round is still allowed. */
+async function verifyOnce(ctx: IssueRunContext, input: VerifyInput, extra: Partial<IssueResult>, attempt: number, attempts: number): Promise<Attempt> {
   const { worktree, gitCommonDir, onEvent, timeouts, log, fail, failNote } = ctx;
-  const { verify, verifyOnHost, verifyNetwork, sandbox, setup, result } = input;
-  if (!verify) return undefined;
-  emitStage({ onEvent }, "verify");
+  const { verifyOnHost, verifyNetwork, sandbox, setup, result } = input;
+  const verify = input.verify!;
+  const done = (r: IssueResult): Attempt => ({ kind: "failed", result: r });
+  const label = `attempt ${attempt}/${attempts}`;
+  emitStage({ onEvent }, "verify", label);
+  log(`verify ${label}`);
   // The issue worktree is a fresh checkout too (the agent ran in review()'s own), so it needs setup as well.
   const prep = await runSetup(sandbox, { worktree, gitCommonDir }, setup, timeouts);
   if (prep) {
@@ -30,11 +52,11 @@ export async function runVerify(ctx: IssueRunContext, input: VerifyInput, extra:
     if (prep.timedOut) {
       const error = timeoutMessage("setup", prep.timedOut, timeouts);
       failNote(error, prep.stdout);
-      return fail("idle-timeout", { review: result, ...extra, error });
+      return done(fail("idle-timeout", { review: result, ...extra, error }));
     }
     if (prep.code !== 0) {
       failNote(`setup failed (exit ${prep.code})`, prep.stdout);
-      return fail("failed", { review: result, ...extra, error: `setup failed (exit ${prep.code}):\n${tailLines(prep.stdout).slice(-VERIFY_TAIL)}` });
+      return done(fail("failed", { review: result, ...extra, error: `setup failed (exit ${prep.code}):\n${tailLines(prep.stdout).slice(-VERIFY_TAIL)}` }));
     }
   }
   let code: number;
@@ -64,17 +86,19 @@ export async function runVerify(ctx: IssueRunContext, input: VerifyInput, extra:
     code = out.code;
     text = out.stdout;
   }
-  log(`verify (exit ${code})`, text);
+  log(`verify ${label} (exit ${code})`, text);
   if (timedOut) {
     const error = timeoutMessage("verify", timedOut, timeouts);
     failNote(error, text);
-    return fail("idle-timeout", { review: result, ...extra, error, verifyOutput: tailLines(text).slice(-VERIFY_TAIL) });
+    return done(fail("idle-timeout", { review: result, ...extra, error, verifyOutput: tailLines(text).slice(-VERIFY_TAIL) }));
   }
   if (code !== 0) {
     failNote(`verify failed (exit ${code})`, text);
-    return fail("verify-failed", { review: result, ...extra, verifyOutput: tailLines(text).slice(-VERIFY_TAIL) });
+    const verifyOutput = tailLines(text).slice(-VERIFY_TAIL);
+    if (attempt < attempts) return { kind: "retry", text: redact(`verify failed (exit ${code}):\n${verifyOutput}`) };
+    return done(fail("verify-failed", { review: result, ...extra, verifyOutput }));
   }
   const counts = testCounts(text);
   emit(onEvent, { type: "note", text: `verify passed (${[counts, `${((Date.now() - verifyStart) / 1000).toFixed(1)}s`].filter(Boolean).join(", ")})` });
-  return undefined;
+  return { kind: "passed" };
 }

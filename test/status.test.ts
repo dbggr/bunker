@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { reasonFromLog, failureReason } from "../src/core/reason.ts";
@@ -133,4 +133,13 @@ describe("collectStatus()", () => {
     rec.event({ type: "stage", name: "failed", issue: 2, at: 2 });
     return collectStatus({ repo: r, alive: () => true }).then((s) => expect(s.current).toEqual([]));
   });
+});
+
+test("the status recorder shows which verify attempt a run is on", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bunker-status-"));
+  const rec = createStatusRecorder(dir, { pid: 1, version: "0.1.0" });
+  rec.event({ type: "stage", name: "verify", text: "attempt 1/2", issue: 7, at: 1 });
+  rec.event({ type: "stage", name: "verify", text: "attempt 2/2", issue: 7, at: 2 });
+  expect(JSON.parse(readFileSync(join(dir, "watch-status.json"), "utf8")).current[0].stage).toBe("verify (attempt 2/2)");
+  rmSync(dir, { recursive: true, force: true });
 });

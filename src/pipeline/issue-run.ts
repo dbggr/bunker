@@ -10,19 +10,22 @@ import { parseConfig } from "../core/config.ts";
 import { copyIntoWorktree, copyPatterns } from "../worktree/copy.ts";
 import { emit, emitStage, hyperlink, type OnEvent } from "../core/events.ts";
 import { tailLines } from "../core/output.ts";
+import { sumUsage } from "../agents/agent.ts";
+import { review } from "./review.ts";
 import { failureReason } from "../core/reason.ts";
 import type { Pause } from "./errors.ts";
 import { worktreeAdmin } from "../worktree/admin.ts";
 import type { Usage } from "../agents/agent.ts";
 import type { IssueOptions, IssueResult } from "./issue.ts";
 import { reclaimLeftover, track } from "./issue-cleanup.ts";
+import { REVIEWER_CONVENTION } from "./issue-prompt.ts";
 import type { IssueRunContext } from "./steps/context.ts";
 import { implementIssue } from "./steps/implement.ts";
 import { fileFollowUps } from "./steps/follow-ups.ts";
 import { runVerify } from "./steps/verify.ts";
 import { publishIssue } from "./steps/pr.ts";
 
-export async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyOnHost, verifyNetwork, merge, manual, handoff, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, mention, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
+export async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyRetries, check, verifyOnHost, verifyNetwork, merge, manual, handoff, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, mention, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -106,18 +109,22 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   let remoteSha: string | undefined;
   // Default verify: the base branch's .bunker/verify, read now so the agent can't weaken it in its worktree.
   let verifySource = "--verify";
+  // Read from the base branch, so the agent can't weaken them in its worktree.
+  const show = async (path: string) => {
+    const f = await $`git -C ${repo} show ${`${baseSha}:${path}`}`.nothrow().quiet();
+    return f.exitCode === 0 ? f.stdout.toString() : undefined;
+  };
+  let fromToml: string | undefined;
+  try {
+    const toml = await show(".bunker/config.toml");
+    const cfg = toml === undefined ? undefined : parseConfig(toml).config;
+    fromToml = cfg?.verify;
+    verifyRetries ??= cfg?.verify_retries;
+    check ??= cfg?.check?.trim() || undefined;
+  } catch (e) {
+    return fail("failed", { error: e instanceof Error ? e.message : String(e) });
+  }
   if (!verify) {
-    const show = async (path: string) => {
-      const f = await $`git -C ${repo} show ${`${baseSha}:${path}`}`.nothrow().quiet();
-      return f.exitCode === 0 ? f.stdout.toString() : undefined;
-    };
-    let fromToml: string | undefined;
-    try {
-      const toml = await show(".bunker/config.toml");
-      fromToml = toml === undefined ? undefined : parseConfig(toml).config.verify;
-    } catch (e) {
-      return fail("failed", { error: e instanceof Error ? e.message : String(e) });
-    }
     const legacy = (await show(".bunker/verify"))?.trim();
     if (fromToml?.trim()) {
       verify = fromToml.trim();
@@ -171,7 +178,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   }
 
   const ctx: IssueRunContext = { number, cwd, issue, repo, branch, worktree, logPath, token, env, gitCfg, remote, defaultBranch, gitCommonDir, onEvent, timeouts, log, fail, finish, failNote, fetchDefault };
-  const implemented = await implementIssue(ctx, { agent, reviewer, sandbox, maxRounds, resume, setup, patterns, paused, pausedFile, baseSha, fetchedSha: fetched.sha, spent });
+  const implemented = await implementIssue(ctx, { agent, reviewer, sandbox, maxRounds, resume, setup, patterns, paused, pausedFile, baseSha, fetchedSha: fetched.sha, spent, check });
   if ("done" in implemented) return implemented.done;
   const { result } = implemented;
 
@@ -179,7 +186,28 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   if ("done" in followUps) return followUps.done;
   const { notFiled } = followUps;
 
-  const verifyStep = (extra?: Partial<IssueResult>) => runVerify(ctx, { verify, verifyOnHost, verifyNetwork, sandbox, setup, result }, extra);
+  /** A verify failure goes back to the implementer (same session) as one more round, which the reviewer re-reviews. */
+  const fixRound = async (failure: string): Promise<IssueResult | undefined> => {
+    const fix = await review({
+      cwd: worktree, prompt: implemented.prompt, agent, reviewer, sandbox, maxRounds, ...timeouts, ...(resume !== undefined ? { resume } : {}),
+      sessionsDir: join(repo, ".bunker", "sessions", String(number), `verify-${result.rounds.length}`),
+      setup, ...(check ? { check } : {}), copyToWorktree: patterns, reviewerInstruction: REVIEWER_CONVENTION, onEvent,
+      onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)),
+      fix: { prompt: `Your change was approved, but the repo's verify command failed on it. Fix the problem so verify passes, and commit.\n\n${failure}`, ...(result.implSession ? { session: result.implSession } : {}) },
+    });
+    for (const [i, r] of fix.rounds.entries()) {
+      log(`verify fix round ${i + 1}: agent output`, r.output);
+      log(`verify fix round ${i + 1}: reviewer output (${r.approved ? "approved" : "changes requested"})`, r.feedback);
+    }
+    if (fix.error) log("verify fix round error", fix.error);
+    const usage = sumUsage([result.usage, fix.usage]);
+    Object.assign(result, { rounds: [...result.rounds, ...fix.rounds], commits: [...result.commits, ...fix.commits], ...(usage ? { usage } : {}), ...(fix.implSession ? { implSession: fix.implSession } : {}) });
+    spent.usage = result.usage;
+    if (fix.status === "approved") return undefined;
+    const error = fix.status === "paused-usage-limit" ? `paused on the Claude usage limit during the verify fix round: ${fix.error ?? ""}` : fix.error;
+    return fail(fix.status === "paused-usage-limit" ? "failed" : fix.status, { review: result, ...(error ? { error } : {}) });
+  };
+  const verifyStep = (extra?: Partial<IssueResult>) => runVerify(ctx, { verify, verifyOnHost, verifyNetwork, sandbox, setup, result, retries: extra ? 0 : verifyRetries ?? 1, fixRound }, extra);
   const failedVerify = await verifyStep();
   if (failedVerify) return failedVerify;
 

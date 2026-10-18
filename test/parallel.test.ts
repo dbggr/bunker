@@ -160,7 +160,7 @@ exec "${git}" "$@"
     // Each passes alone; together they fail.
     const verify = "! (test -f a.txt && test -f b.txt)";
     const agent = fakeAgent(root, (n) => (n === 1 ? "echo a > a.txt" : "echo b > b.txt"), { 1: [2] });
-    const rs = await queue(repo, agent, { parallel: 2, verify });
+    const rs = await queue(repo, agent, { parallel: 2, verify, verifyRetries: 0 });
     expect(rs.map((r) => [r.issue, r.status])).toEqual([[1, "merged"], [2, "verify-failed"]]);
     expect(await show(origin, "b.txt")).toBe("");
   });
@@ -169,7 +169,7 @@ exec "${git}" "$@"
     const { repo, root } = await setup([1, 2]);
     let runs = 0;
     const agent = fakeAgent(root, (n) => (runs++, `echo ${n} > file${n}.txt`));
-    const rs = await queue(repo, agent, { parallel: 2, verify: "false", keepGoing: true });
+    const rs = await queue(repo, agent, { parallel: 2, verify: "false", keepGoing: true, verifyRetries: 0 });
     expect(rs.map((r) => r.status)).toEqual(["verify-failed", "verify-failed"]);
     expect(runs).toBe(2);
   });
