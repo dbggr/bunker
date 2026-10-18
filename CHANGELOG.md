@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.9.0 - 2026-10-18
+
+- fix(init): php preset finds composer.json in subdirs, matches PHP version and extensions, flags DB-backed tests (#409) (#410)
+- feat: multi-select toolchain presets in bunker init, pointing at .bunker/config.toml (#404) (#408)
+- docs(site): 'brought to you by a [true.engineer]' footer tagline (#406) (#407)
+- docs: record the secret scan, refresh 'built itself' stats, slides as HTML on the home page (#403) (#405)
+- feat: block only when undeliverable, reuse existing open issues as blockers, list blocked in status (#391) (#402)
+- test: isolate the user config dir so tests never read the real ~/.config/bunker (#394) (#400)
+- fix: mark --no-sandbox agents with BUNKER_IN_SANDBOX so they can't run a nested bunker (#390) (#399)
+- feat: a guided, polished bunker init (first-run UX good enough to open-source) (#398)
+- docs(site): TL;DR (why use bunker, who it's not for) and slides on the home page (#396) (#397)
+- chore: point every reference at dbggr/bunker after the repo rename (#392) (#395)
+- fix: refuse to run bunker inside a sandbox; kill agent containers when the CLI exits (#393)
+- feat: optional separate GitHub identity (App or bot account); the owner's PAT stays the default (#389)
+- fix: status keeps finished runs as current; closed issues keep bunker:queued (#386)
+- docs: open-source readiness: README for strangers, CONTRIBUTING, SECURITY, CoC, templates (#374) (#377)
+- feat: close an issue with an explained comment when there is nothing to change (#376) (#383)
+- fix: gh pr edit fails (Projects classic GraphQL deprecation), so PRs never get bunker:review / bunker:awaiting-review / bunker:failed (#382)
+- docs: VitePress docs site for bunker.true.engineer, built from docs/*.md (#380) (#381)
+- chore: remove pre-1.0 compatibility shims (#370)
+
 ## v0.2.0 - 2026-10-18
 
 - test: stop spend-cap watch tests on the cap, not a wall-clock window (#366) (#367)
