@@ -1,0 +1,18 @@
+/* bunker's palette (same as the demo and the "how it works" page). */
+:root {
+  --vp-c-brand-1: #4f46e5;
+  --vp-c-brand-2: #4338ca;
+  --vp-c-brand-3: #4f46e5;
+  --vp-c-brand-soft: rgba(79, 70, 229, 0.12);
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(120deg, #4f46e5 20%, #3cc7b6);
+  --vp-home-hero-image-background-image: linear-gradient(-45deg, rgba(79, 70, 229, 0.35) 50%, rgba(60, 199, 182, 0.35) 50%);
+  --vp-home-hero-image-filter: blur(56px);
+}
+.dark {
+  --vp-c-brand-1: #8b85ff;
+  --vp-c-brand-2: #a5a0ff;
+  --vp-c-brand-3: #6d66f5;
+  --vp-c-brand-soft: rgba(139, 133, 255, 0.16);
+}
+.VPHero .image-src { max-width: 220px; border-radius: 48px; }

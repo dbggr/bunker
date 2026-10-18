@@ -1,0 +1,14 @@
+{
+  "name": "bunker-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare-docs": "bun scripts/prepare-docs.ts",
+    "dev": "bun run prepare-docs && vitepress dev",
+    "build": "bun run prepare-docs && vitepress build",
+    "preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4"
+  }
+}
