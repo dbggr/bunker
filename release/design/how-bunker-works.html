@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How Bunker Works</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --card: #ffffff; --ink: #1d2433; --muted: #5b6475; --line: #d9dee7;
+    --you: #0e8a7d; --you-soft: #e2f4f1;
+    --bunker: #4f46e5; --bunker-soft: #ebeafd;
+    --ai: #c2620a; --ai-soft: #fdf0e1;
+    --github: #475569; --github-soft: #eceff3;
+    --stop: #c2410c; --wait: #0e7490;
+    --shadow: 0 1px 2px rgba(16,24,40,.06), 0 4px 16px rgba(16,24,40,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f141c; --card: #171e29; --ink: #e8ecf3; --muted: #9aa5b7; --line: #2a3443;
+      --you: #3cc7b6; --you-soft: #12302d;
+      --bunker: #8b85ff; --bunker-soft: #23224a;
+      --ai: #f2a24a; --ai-soft: #3a2a17;
+      --github: #a3b1c6; --github-soft: #232c39;
+      --stop: #fb8a5c; --wait: #4cc3dc;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f141c; --card: #171e29; --ink: #e8ecf3; --muted: #9aa5b7; --line: #2a3443;
+    --you: #3cc7b6; --you-soft: #12302d;
+    --bunker: #8b85ff; --bunker-soft: #23224a;
+    --ai: #f2a24a; --ai-soft: #3a2a17;
+    --github: #a3b1c6; --github-soft: #232c39;
+    --stop: #fb8a5c; --wait: #4cc3dc;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  main { max-width: 1240px; margin: 0 auto; padding: 40px 24px 48px; }
+  h1 { font-size: clamp(1.7rem, 3vw, 2.4rem); line-height: 1.2; margin: 0 0 8px; letter-spacing: -.01em; }
+  .lede { color: var(--muted); font-size: 1.1rem; margin: 0 0 20px; max-width: 46rem; }
+
+  .who { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 0 0 28px; padding: 0; list-style: none; color: var(--muted); font-size: .95rem; }
+  .who li { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; }
+  .dot svg { width: 15px; height: 15px; }
+
+  .steps { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; margin: 0; padding: 0; list-style: none; counter-reset: step; }
+  .step {
+    position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 16px 16px 18px; box-shadow: var(--shadow); border-top: 4px solid var(--c);
+  }
+  .step::after { /* arrow to the next step */
+    content: ""; position: absolute; top: 46px; right: -12px; width: 10px; height: 10px;
+    border-top: 2px solid var(--muted); border-right: 2px solid var(--muted); transform: rotate(45deg); opacity: .6;
+  }
+  .step:last-child::after { display: none; }
+  .head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .icon { width: 38px; height: 38px; flex: none; border-radius: 10px; display: grid; place-items: center; background: var(--soft); color: var(--c); }
+  .icon svg { width: 22px; height: 22px; }
+  .num { font-size: .74rem; font-weight: 700; color: var(--c); text-transform: uppercase; letter-spacing: .02em; white-space: nowrap; }
+  .step h2 { font-size: 1.08rem; line-height: 1.25; margin: 0 0 6px; }
+  .step p { margin: 0; color: var(--muted); font-size: .95rem; }
+  .loop {
+    display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; padding: 3px 9px;
+    border-radius: 999px; font-size: .82rem; font-weight: 600; color: var(--c); background: var(--soft);
+  }
+  .loop svg { width: 14px; height: 14px; }
+  .you    { --c: var(--you);    --soft: var(--you-soft); }
+  .bunker { --c: var(--bunker); --soft: var(--bunker-soft); }
+  .ai     { --c: var(--ai);     --soft: var(--ai-soft); }
+  .github { --c: var(--github); --soft: var(--github-soft); }
+
+  .stops { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 26px 0 0; }
+  .stop {
+    background: var(--card); border: 1px dashed var(--line); border-left: 4px solid var(--c);
+    border-radius: 12px; padding: 14px 16px; display: flex; gap: 12px; align-items: flex-start;
+  }
+  .stop .icon { width: 34px; height: 34px; background: transparent; border: 1px solid var(--line); }
+  .stop h3 { margin: 0 0 4px; font-size: 1rem; }
+  .stop p { margin: 0; color: var(--muted); font-size: .95rem; }
+  .stop .when { font-size: .8rem; font-weight: 600; color: var(--c); text-transform: uppercase; letter-spacing: .05em; }
+  .needs { --c: var(--wait); }
+  .stuck { --c: var(--stop); }
+
+  .safe { margin: 30px 0 0; padding: 18px 20px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); }
+  .safe h3 { margin: 0 0 10px; font-size: 1.05rem; }
+  .safe ul { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 20px; }
+  .safe li { display: flex; gap: 10px; align-items: flex-start; color: var(--muted); }
+  .safe li svg { width: 20px; height: 20px; flex: none; color: var(--you); margin-top: 2px; }
+  .safe strong { color: var(--ink); font-weight: 600; }
+
+  @media (max-width: 1080px) {
+    .steps { grid-template-columns: repeat(3, 1fr); }
+    .step:nth-child(3)::after { display: none; }
+  }
+  @media (max-width: 720px) {
+    main { padding: 28px 16px 36px; }
+    .steps { grid-template-columns: 1fr; gap: 18px; }
+    .step::after { top: auto; bottom: -15px; right: auto; left: 34px; transform: rotate(135deg); }
+    .step:nth-child(3)::after { display: block; }
+    .step:last-child::after { display: none; }
+    .stops, .safe ul { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>How bunker turns a to-do into finished work</h1>
+  <p class="lede">You choose a job on GitHub. Bunker gets an AI to do it safely, has another AI check it, tests it, and only then adds it to your project. If anything needs a person, it stops and tells you.</p>
+
+  <ul class="who" aria-label="Who does what">
+    <li class="you"><span class="dot" style="background:var(--soft);color:var(--c)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></span>You</li>
+    <li class="bunker"><span class="dot" style="background:var(--soft);color:var(--c)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg></span>Bunker</li>
+    <li class="ai"><span class="dot" style="background:var(--soft);color:var(--c)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18"/></svg></span>AI helpers</li>
+    <li class="github"><span class="dot" style="background:var(--soft);color:var(--c)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="9" r="2.5"/><path d="M6 8.5v7M18 11.5c0 3-3 4-9 5"/></svg></span>GitHub</li>
+  </ul>
+
+  <ol class="steps">
+    <li class="step you">
+      <div class="head"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg></span><span class="num">Step 1 · You</span></div>
+      <h2>Pick a job</h2>
+      <p>Tag a to-do on GitHub so bunker knows it's ready to start.</p>
+    </li>
+    <li class="step bunker">
+      <div class="head"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></span><span class="num">Step 2 · Bunker</span></div>
+      <h2>Checks it's really you</h2>
+      <p>Only people you trust can hand it work, and it won't touch a job someone changed after it was tagged.</p>
+    </li>
+    <li class="step ai">
+      <div class="head"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span><span class="num">Step 3 · AI</span></div>
+      <h2>Does the work in a locked room</h2>
+      <p>The AI makes the change in a sealed space with no access to your passwords or your computer.</p>
+    </li>
+    <li class="step ai">
+      <div class="head"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></span><span class="num">Step 4 · AI</span></div>
+      <h2>Gets a second opinion</h2>
+      <p>A different AI reviews the change and sends it back if something isn't right.</p>
+      <span class="loop"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>back to step 3 if needed</span>
+    </li>
+    <li class="step bunker">
+      <div class="head"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3"/><path d="M7.5 15h9"/></svg></span><span class="num">Step 5 · Bunker</span></div>
+      <h2>Tests that it works</h2>
+      <p>Automatic tests prove the change works. If they fail, the AI gets one more go to fix it.</p>
+    </li>
+    <li class="step github">
+      <div class="head"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l3 3 5-6"/></svg></span><span class="num">Step 6 · GitHub</span></div>
+      <h2>Added to your project</h2>
+      <p>GitHub runs its own checks, then the change goes in, the job is closed and you get a note.</p>
+    </li>
+  </ol>
+
+  <div class="stops">
+    <div class="stop needs">
+      <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg></span>
+      <div><div class="when">Sometimes · after step 5</div><h3>Waits for you</h3><p>If the change touches bunker's own rules or settings, it isn't added until a person approves it.</p></div>
+    </div>
+    <div class="stop stuck">
+      <span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg></span>
+      <div><div class="when">Sometimes · at any step</div><h3>Couldn't do it</h3><p>Bunker flags the job with the reason it stopped. When you're ready, tag it again and it starts over.</p></div>
+    </div>
+  </div>
+
+  <section class="safe" aria-labelledby="safe-h">
+    <h3 id="safe-h">Why it's safe</h3>
+    <ul>
+      <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span><strong>Nothing goes in untested.</strong> The tests and GitHub's checks must pass first.</span></li>
+      <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span><strong>The AI never sees your keys.</strong> It works in a locked room, away from your passwords.</span></li>
+      <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span><strong>You stay in charge.</strong> It only works on jobs you pick, and asks before changing its own rules.</span></li>
+    </ul>
+  </section>
+</main>
+<script>
+  // ?theme=light|dark forces a theme (for screenshots); otherwise the system setting wins.
+  try {
+    const t = new URLSearchParams(location.search).get("theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch {}
+</script>
+</body>
+</html>
