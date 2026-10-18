@@ -1,3 +1,4 @@
+import { liveGhEnv } from "../github/identity.ts";
 import { hasQueuedLabel } from "../github/labels.ts";
 import { enforceLabeler } from "../github/labeler.ts";
 import { blockerRefs, isDone, isLiveShape, resumeBlocked, type IssueInfo } from "../github/issues.ts";
@@ -52,8 +53,7 @@ export interface QueueEntry extends IssueResult {
  */
 export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shouldStop, skip, onResult, parallel = 1, relist, allowLabelers, onRefused, ...opts }: QueueOptions): Promise<QueueEntry[]> {
   const cwd = opts.cwd ?? process.cwd();
-  const token = process.env.BUNKER_GH_TOKEN;
-  const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
+  const env = liveGhEnv();
   const listIssues = () => listQueued(cwd, env);
   // `gh issue list` lags the label swap, so the issues just relabelled go straight into the queue.
   const resumedNow = new Map<number, Queued>();

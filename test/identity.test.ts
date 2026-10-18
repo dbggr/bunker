@@ -3,7 +3,7 @@ import { createVerify, generateKeyPairSync } from "node:crypto";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyIdentity, identityKind, mintAppToken } from "../src/github/identity.ts";
+import { applyIdentity, identityKind, liveGhEnv, mintAppToken } from "../src/github/identity.ts";
 import { agentEnv } from "../src/sandboxes/env.ts";
 import { markTrust } from "../src/github/trust.ts";
 import { redact } from "../src/core/redact.ts";
@@ -32,6 +32,7 @@ function fakeGithub(expiresIn = 3600) {
   const fetch = (async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     calls.push({ url: String(url), method, auth: String((init?.headers as Record<string, string>).authorization) });
+    if (String(url).endsWith("/user")) return Response.json({ login: "mybot" });
     if (String(url).endsWith("/installation")) return Response.json({ id: 77 });
     if (String(url).endsWith("/app/installations/77/access_tokens")) return Response.json({ token: `ghs_install${++n}`, expires_at: new Date(Date.now() + expiresIn * 1000).toISOString() });
     return new Response("nope", { status: 404 });
@@ -94,6 +95,40 @@ describe("identity", () => {
     expect(identityKind(env)).toBe("bot");
     await applyIdentity(env, "o/r", { fetch: fakeGithub().fetch });
     expect(env.BUNKER_GH_TOKEN).toBe("github_pat_bot");
+  });
+
+  test("bot account: an unresolvable login fails closed and leaves the PAT in place", async () => {
+    const env: Record<string, string | undefined> = { BUNKER_GH_TOKEN: "github_pat_owner", BUNKER_BOT_GH_TOKEN: "github_pat_bot" };
+    const fetch = (async () => new Response("no", { status: 403 })) as unknown as typeof globalThis.fetch;
+    await expect(applyIdentity(env, "o/r", { fetch })).rejects.toThrow(/bot account/);
+    expect(env.BUNKER_IDENTITY_LOGIN).toBeUndefined();
+    expect(env.BUNKER_GH_TOKEN).toBe("github_pat_owner");
+  });
+
+  test("bot account: the resolved login is recorded", async () => {
+    const env: Record<string, string | undefined> = { BUNKER_BOT_GH_TOKEN: "github_pat_bot" };
+    await applyIdentity(env, "o/r", { fetch: fakeGithub().fetch });
+    expect(env.BUNKER_IDENTITY_LOGIN).toBe("mybot");
+  });
+
+  test("liveGhEnv follows a refreshed token for every later gh call", async () => {
+    const env: Record<string, string | undefined> = { BUNKER_GH_TOKEN: "ghs_old", PATH: process.env.PATH };
+    const live = liveGhEnv(env);
+    expect(live.GH_TOKEN).toBe("ghs_old");
+    env.BUNKER_GH_TOKEN = "ghs_new";
+    expect(live.GH_TOKEN).toBe("ghs_new");
+    expect(live.BUNKER_GH_TOKEN).toBe("ghs_new");
+    const out = await Bun.$`sh -c 'echo $GH_TOKEN'`.env(live).text();
+    expect(out.trim()).toBe("ghs_new");
+    expect(liveGhEnv({ PATH: "x" }).GH_TOKEN).toBeUndefined();
+  });
+
+  test("runQueue and runIssueInner build their env with liveGhEnv, not a snapshot", async () => {
+    for (const f of ["src/pipeline/queue.ts", "src/pipeline/issue-run.ts"]) {
+      const src = await Bun.file(join(import.meta.dir, "..", f)).text();
+      expect(src).toContain("liveGhEnv()");
+      expect(src).not.toMatch(/\.\.\.process\.env, GH_TOKEN/);
+    }
   });
 
   test("the key and bot token never reach a sandbox, and are redacted", () => {

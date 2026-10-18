@@ -50,11 +50,10 @@ export async function applyIdentity(env: Env, repo: string, opts: { fetch?: Fetc
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
   if (kind === "bot") {
+    const me = await call(opts.fetch ?? globalThis.fetch, "reading the bot account", `${API}/user`, `Bearer ${env.BUNKER_BOT_GH_TOKEN}`);
+    if (!me.login) throw new Error("GitHub bot account: could not resolve its login");
+    env.BUNKER_IDENTITY_LOGIN = String(me.login);
     env.BUNKER_GH_TOKEN = env.BUNKER_BOT_GH_TOKEN;
-    try {
-      const me = await call(opts.fetch ?? globalThis.fetch, "reading the bot account", `${API}/user`, `Bearer ${env.BUNKER_BOT_GH_TOKEN}`);
-      if (me.login) env.BUNKER_IDENTITY_LOGIN = String(me.login);
-    } catch {}
   } else if (kind === "app") {
     const margin = opts.refreshMarginMs ?? REFRESH_MARGIN_MS;
     const mint = async () => {
@@ -77,4 +76,17 @@ export async function applyIdentity(env: Env, repo: string, opts: { fetch?: Fetc
     schedule(await mint());
   }
   return { kind, stop: () => { stopped = true; if (timer) clearTimeout(timer); } };
+}
+
+/**
+ * process.env with GH_TOKEN and BUNKER_GH_TOKEN read live at each use, so a refreshed App token reaches runs that outlive
+ * the first one. Same as plain process.env when no BUNKER_GH_TOKEN is set.
+ */
+export function liveGhEnv(env: Env = process.env): Record<string, string> {
+  const out = { ...env } as Record<string, string>;
+  if (!env.BUNKER_GH_TOKEN) return out;
+  const live = { get: () => env.BUNKER_GH_TOKEN, enumerable: true, configurable: true };
+  Object.defineProperty(out, "GH_TOKEN", live);
+  Object.defineProperty(out, "BUNKER_GH_TOKEN", live);
+  return out;
 }

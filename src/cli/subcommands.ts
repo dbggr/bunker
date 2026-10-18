@@ -1,3 +1,4 @@
+import { liveGhEnv } from "../github/identity.ts";
 import { $ } from "bun";
 import { resolveTimeouts } from "../core/settings.ts";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "../core/env.ts";
@@ -58,8 +59,7 @@ export async function statusCommand(values: CliValues) {
   const cfg = (await loadRepoConfigOrExit(repo)).config;
   const fileCaps = await loadSpendCaps().catch(() => ({}));
   const caps = { ...(cfg.watch.max_cost_day === undefined ? {} : { day: cfg.watch.max_cost_day }), ...(cfg.watch.max_cost_month === undefined ? {} : { month: cfg.watch.max_cost_month }), ...fileCaps };
-  const token = process.env.BUNKER_GH_TOKEN;
-  const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
+  const env = liveGhEnv();
   const report = await collectStatus({ repo, caps, alive, queue: () => listQueued(repo, env) });
   console.log(values.json ? JSON.stringify(report, null, 2) : formatStatus(report));
   process.exit(0);

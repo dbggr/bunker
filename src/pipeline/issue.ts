@@ -1,3 +1,4 @@
+import { liveGhEnv } from "../github/identity.ts";
 import type { OnEvent } from "../core/events.ts";
 import { AgentFailure } from "./errors.ts";
 import type { NoChange } from "../core/structured.ts";
@@ -93,8 +94,7 @@ export async function runIssue(opts: IssueOptions): Promise<IssueResult> {
   let untrack = () => {};
   // The label only displays the run: it is shown on start and cleared on any end, and nothing reads it back.
   const cwd = opts.cwd ?? process.cwd();
-  const token = process.env.BUNKER_GH_TOKEN;
-  const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
+  const env = liveGhEnv();
   await markInProgress(opts.issue, cwd, env);
   let other = false; // another run holds this issue and owns its label
   try {

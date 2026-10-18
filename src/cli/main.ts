@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { liveGhEnv } from "../github/identity.ts";
 import { parseArgs } from "node:util";
 import { resolveCiTimeout, resolveParallel, resolveTimeouts, resolveWatchSettings } from "../core/settings.ts";
 import { AUTH_HINT, hasAuth, loadBunkerEnv } from "../core/env.ts";
@@ -297,8 +298,7 @@ if (values.audit) {
     });
   }
   const notify = desktopNotifier({ enabled: !values["no-notify"] && repoCfg.notify.enabled !== false && !process.env.BUNKER_TEST_NO_NOTIFY });
-  const ghToken = process.env.BUNKER_GH_TOKEN;
-  const mention = await resolveMention(process.cwd(), (ghToken ? { ...process.env, GH_TOKEN: ghToken } : process.env) as Record<string, string>, repoCfg.notify.github_user);
+    const mention = await resolveMention(process.cwd(), liveGhEnv(), repoCfg.notify.github_user);
   try {
     await runWatch({ notify, mention, onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, manual, ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, logsDays: repoCfg.clean.logs_days ?? 30, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
   } catch (e) {

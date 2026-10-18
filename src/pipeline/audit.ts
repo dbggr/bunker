@@ -1,3 +1,4 @@
+import { liveGhEnv } from "../github/identity.ts";
 import { $ } from "bun";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -94,7 +95,7 @@ export async function runAudit(opts: AuditOptions): Promise<AuditResult> {
 
 async function auditRun({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, focus, setup, maxRetries = 2, onEvent, ...timeouts }: AuditOptions): Promise<AuditResult> {
   const token = process.env.BUNKER_GH_TOKEN;
-  const env = (token ? { ...process.env, GH_TOKEN: token } : process.env) as Record<string, string>;
+  const env = liveGhEnv();
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
 
