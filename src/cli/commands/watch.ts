@@ -17,7 +17,7 @@ import { cleanMerged, createShepherd } from "../../pipeline/shepherd.ts";
 import { runQueue, type QueueEntry, type QueueOptions } from "../../pipeline/queue.ts";
 import { countWaiting } from "../../github/queue.ts";
 import { latestBunkerLabeledAt } from "../../github/labeler.ts";
-import { ensureLabel, FAILED_LABEL, unqueue } from "../../github/labels.ts";
+import { clearLanded, ensureLabel, FAILED_LABEL, unqueue } from "../../github/labels.ts";
 import { noNotify, type Notify } from "../../core/notify.ts";
 
 export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult" | "onRefused" | "handoff"> {
@@ -274,6 +274,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       landed++;
       summary.merged++;
       status.merged({ issue: m.issue, prUrl: m.url });
+      await clearLanded(m.issue, cwd, env);
       await cleanMerged(cwd, env, m.branch);
     }
     if (p.paused) log(`bunker: shepherd: paused on the Claude usage limit${p.paused.resetAt ? ` until ${new Date(p.paused.resetAt).toISOString()}` : ""}`);

@@ -80,16 +80,19 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
       save();
     },
     merged(r: Omit<MergedRun, "at">) {
+      state.current = state.current.filter((c) => c.issue !== r.issue);
       state.merged.push({ ...r, at: Date.now() });
       state.failed = state.failed.filter((f) => f.issue !== r.issue);
       save();
     },
     noChange(r: Omit<NoChangeRun, "at">) {
+      state.current = state.current.filter((c) => c.issue !== r.issue);
       state.noChange.push({ ...r, at: Date.now() });
       state.failed = state.failed.filter((f) => f.issue !== r.issue);
       save();
     },
     failed(r: Omit<FailedRun, "at">) {
+      state.current = state.current.filter((c) => c.issue !== r.issue);
       state.failed = state.failed.filter((f) => f.issue !== r.issue);
       state.failed.push({ ...r, at: Date.now() });
       save();

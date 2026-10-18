@@ -84,3 +84,9 @@ export async function removePrLabel(pr: number | string, name: string, cwd: stri
 export async function requestReviewer(pr: number | string, login: string, cwd: string, env: Env): Promise<Outcome> {
   return outcome(await $`gh api -X POST repos/{owner}/{repo}/pulls/${prNumber(pr)}/requested_reviewers -f ${`reviewers[]=${login}`}`.cwd(cwd).env(env).nothrow().quiet());
 }
+
+/** An issue whose PR landed: drops `bunker:queued` and `bunker:in-progress`, which the closed issue would otherwise keep. Best effort. */
+export async function clearLanded(issue: number, cwd: string, env: Env): Promise<void> {
+  await unqueue(issue, cwd, env);
+  await clearInProgress(issue, cwd, env);
+}

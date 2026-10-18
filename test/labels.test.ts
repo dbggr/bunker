@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkLabeler } from "../src/github/labeler.ts";
-import { hasQueuedLabel, isQueuedLabel, markInProgress, unqueue } from "../src/github/labels.ts";
+import { hasQueuedLabel, isQueuedLabel, markInProgress, unqueue, clearLanded } from "../src/github/labels.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -80,5 +80,15 @@ describe("label edits", () => {
     const g = await fakeGh("mia", {}, ["bunker:queued"]);
     await unqueue(7, process.cwd(), g.env, ["--add-label", "bunker:failed"]);
     expect(await g.log()).toContain("issue edit 7 --remove-label bunker:queued --add-label bunker:failed");
+  });
+});
+
+describe("clearLanded", () => {
+  test("drops bunker:queued and bunker:in-progress from a landed issue", async () => {
+    const g = await fakeGh("mia", {}, ["bunker:queued"]);
+    await clearLanded(5, process.cwd(), g.env);
+    const log = await g.log();
+    expect(log).toContain("issue edit 5 --remove-label bunker:queued");
+    expect(log).toContain("issue edit 5 --remove-label bunker:in-progress");
   });
 });
