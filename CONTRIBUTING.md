@@ -5,7 +5,7 @@ Thanks for helping. bunker is small and opinionated, so open an issue to talk ab
 ## Development setup
 
 ```sh
-git clone https://github.com/dbggr/tool-bunker && cd tool-bunker
+git clone https://github.com/dbggr/bunker && cd bunker
 bun install
 bun test               # the whole suite; tests that need Docker skip themselves when Docker isn't running
 bun run typecheck

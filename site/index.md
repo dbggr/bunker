@@ -17,7 +17,7 @@ hero:
       link: /guide/security
     - theme: alt
       text: GitHub
-      link: https://github.com/dbggr/tool-bunker
+      link: https://github.com/dbggr/bunker
 
 features:
   - icon: 🏷️
@@ -43,7 +43,7 @@ features:
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dbggr/tool-bunker/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dbggr/bunker/main/install.sh | sh
 ```
 
 The installer checks git, Bun, Docker, the GitHub CLI and Claude Code first, and never installs them for you; it links each missing one's install page.
@@ -60,7 +60,7 @@ bunker watch         # then work everything labelled bunker:queued, unattended
 
 ## Built with bunker
 
-In its first two days bunker wrote and merged **147 of its own pull requests** (23 more were written by hand), with about 700 tests and no reverts on main, at roughly **$1.15 of agent time per merged issue**. The numbers and the failures are in the [v1.0 readiness review](https://github.com/dbggr/tool-bunker/blob/main/release/v1-readiness.md).
+In its first two days bunker wrote and merged **147 of its own pull requests** (23 more were written by hand), with about 700 tests and no reverts on main, at roughly **$1.15 of agent time per merged issue**. The numbers and the failures are in the [v1.0 readiness review](https://github.com/dbggr/bunker/blob/main/release/v1-readiness.md).
 
 ::: tip Pre-1.0
 bunker works its own repository every day, but flags, config keys and labels can still change before 1.0.

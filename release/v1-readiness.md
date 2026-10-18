@@ -82,7 +82,7 @@ Bug issues filed against code that had already merged through bunker (from the i
 
 ## 4. Reliability bar for 1.0
 
-Thresholds over a **14-day `--watch` soak** on tool-bunker plus at least one repo bunker wasn't built on (core or tool-content-pipeline), measured by `scripts/v1-readiness.ts --since <soak start>`:
+Thresholds over a **14-day `--watch` soak** on bunker itself plus at least one repo bunker wasn't built on (core or tool-content-pipeline), measured by `scripts/v1-readiness.ts --since <soak start>`:
 
 | Metric | Bar | Measured (recent window) | Met? |
 |---|---|---|---|

@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 declare const BUNKER_BUILD_LABEL: string | undefined;
 declare const BUNKER_BUILD_HOME: string | undefined;
 
-/** The tool-bunker checkout: BUNKER_HOME, else the repo the binary was built from. */
+/** The bunker checkout: BUNKER_HOME, else the repo the binary was built from. */
 export const bunkerHome = (): string =>
   process.env.BUNKER_HOME || (typeof BUNKER_BUILD_HOME === "string" ? BUNKER_BUILD_HOME : join(dirname(import.meta.dir), "")) ;
 

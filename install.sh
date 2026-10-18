@@ -9,7 +9,7 @@
 # Env: BUNKER_HOME (checkout), BUNKER_BIN_DIR (binary dir), BUNKER_REPO (clone URL).
 set -eu
 
-REPO=${BUNKER_REPO:-https://github.com/dbggr/tool-bunker.git}
+REPO=${BUNKER_REPO:-https://github.com/dbggr/bunker.git}
 HOME_DIR=${BUNKER_HOME:-$HOME/.local/share/bunker}
 BIN_DIR=${BUNKER_BIN_DIR:-$HOME/.local/bin}
 BIN=$BIN_DIR/bunker
@@ -121,7 +121,7 @@ fi
 
 # ---- plan ----
 echo
-echo "this will put a checkout of tool-bunker (${ref:-latest release tag}) in $HOME_DIR and a compiled binary at $BIN."
+echo "this will put a checkout of bunker (${ref:-latest release tag}) in $HOME_DIR and a compiled binary at $BIN."
 echo "it creates those directories if needed, and does not edit your shell rc files."
 confirm "continue?" || { echo "aborted."; exit 1; }
 
