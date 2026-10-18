@@ -2,6 +2,16 @@
 
 bunker turns GitHub issues into reviewed, verified, merged PRs. Each issue is worked by a coding agent in its own git worktree and docker sandbox, then reviewed by a second agent. bunker pushes and merges only after your checks pass.
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dbggr/tool-bunker/main/install.sh | sh
+# while the repo is private:
+gh api repos/dbggr/tool-bunker/contents/install.sh -H 'Accept: application/vnd.github.raw' | sh
+```
+
+It checks prerequisites first (git and bun to build; docker, gh logged in, and claude to run) and never installs them; it links to each missing one's install page. Then it says what it will do and asks `[y/N]` (`--yes` skips; `--check` only checks; `--skip-runtime-check`, `--ref`, `--uninstall`). It puts a checkout at the latest `vX.Y.Z` tag in `~/.local/share/bunker` (`BUNKER_HOME`) and the binary at `~/.local/bin/bunker` (`BUNKER_BIN_DIR`), and does not edit shell rc files. Re-run it to upgrade; `--uninstall` never touches `~/.config/bunker`.
+
 ## Quickstart
 
 ```sh
