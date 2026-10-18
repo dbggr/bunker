@@ -51,7 +51,7 @@ if (cmd === "pr list") {
   if (flag("--add-label")) (s.labels[n] = s.labels[n] || []).push(flag("--add-label"));
   write(s);
 } else if (cmd === "pr view") {
-  console.log(JSON.stringify({ state: (s.states || {})[n] || "OPEN" }));
+  console.log(JSON.stringify({ state: (s.states || {})[n] || "OPEN", ...((s.views || {})[n] || {}) }));
 } else if (cmd === "label create" || cmd === "issue edit") {
   // accepted
 } else if (args[0] === "api") {
@@ -374,10 +374,59 @@ describe("shepherd pass", () => {
     expect((await s.pass()).merged).toEqual([]);
     w.state.prs = [];
     w.state.states[10] = "MERGED";
+    w.state.views = { 10: { mergeCommit: { oid: sha }, headRefOid: sha, baseRefName: "main", files: [{ path: "f.txt" }] } };
     w.save();
     const second = await s.pass();
     expect(second.merged).toEqual([{ pr: 10, url: "https://github.com/o/r/pull/10", issue: 7, branch: "fix/7-thing" }]);
     expect((await s.pass()).merged).toEqual([]);
+  });
+
+  describe("landing check of a merged PR", () => {
+    /** Merges `sha` the way GitHub's squash does (its tree on main in one commit), optionally dropping `drop` from the result. */
+    const land = async (w: World, sha: string, drop?: string) => {
+      await $`git -C ${w.repo} checkout -q main`;
+      await $`git -C ${w.repo} merge -q --squash ${sha}`;
+      if (drop) await $`git -C ${w.repo} rm -q -f ${drop}`;
+      await $`git -C ${w.repo} commit -q -m squash`;
+      await $`git -C ${w.repo} push -q origin main`;
+      const merge = (await $`git -C ${w.repo} rev-parse HEAD`.text()).trim();
+      // Main moves on, as a later merge would: the check must not compare against the current tip.
+      await Bun.write(join(w.repo, "later.txt"), "later\n");
+      await $`git -C ${w.repo} add . && git -C ${w.repo} commit -q -m later && git -C ${w.repo} push -q origin main`;
+      return merge;
+    };
+    const merge = async (w: World, files: Record<string, string>, drop?: string, view: object = {}) => {
+      const sha = await w.branch("fix/7-thing", files);
+      w.state.prs.push(prJson(10, "fix/7-thing", sha));
+      w.state.checks[10] = PENDING;
+      w.save();
+      const s = shepherd(w, fakeAgent(COMMIT_FIX));
+      await s.pass();
+      const mergeCommit = await land(w, sha, drop);
+      w.state.prs = [];
+      w.state.states[10] = "MERGED";
+      w.state.views = { 10: { mergeCommit: { oid: mergeCommit }, headRefOid: sha, baseRefName: "main", files: Object.keys(files).map((path) => ({ path })), ...view } };
+      w.save();
+      return (await s.pass()).merged;
+    };
+
+    test("a squash that kept the PR's files is verified, even though main has moved on", async () => {
+      const w = await world();
+      expect(await merge(w, { "f.txt": "x\n", "g.txt": "y\n" })).toEqual([{ pr: 10, url: "https://github.com/o/r/pull/10", issue: 7, branch: "fix/7-thing" }]);
+    });
+
+    test("a squash that dropped a file of the PR is reported unverified, naming the file", async () => {
+      const w = await world();
+      const [m] = await merge(w, { "f.txt": "x\n", "g.txt": "y\n" }, "g.txt");
+      expect(m?.unverified).toContain("g.txt");
+      expect(m?.unverified).not.toContain("f.txt");
+    });
+
+    test("no merge commit recorded → unverified rather than silently trusted", async () => {
+      const w = await world();
+      const [m] = await merge(w, { "f.txt": "x\n" }, undefined, { mergeCommit: null });
+      expect(m?.unverified).toBeTruthy();
+    });
   });
 
   test("a PR closed without merging is not reported merged", async () => {
