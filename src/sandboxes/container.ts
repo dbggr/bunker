@@ -98,7 +98,7 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
     exec(cmd, ctx) {
       // Arrow function: `this.projectsDir` below still means this sandbox.
       return guardGit(ctx.worktree, ctx.gitCommonDir, async () => {
-      const { worktree, gitCommonDir, prefix, onLine, limits, isolate } = ctx;
+      const { worktree, gitCommonDir, prefix, onLine, limits, isolate, stdin } = ctx;
       const [entrypoint, ...args] = cmd;
       if (!entrypoint) throw new Error("empty agent command");
       if (!images.has(gitCommonDir)) images.set(gitCommonDir, resolveImage(bin, opts, worktree, gitCommonDir));
@@ -114,7 +114,7 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
       }).flatMap(([k, v]) => (v ? ["-e", `${k}=${v}`] : []));
       const cname = `bunker-${crypto.randomUUID().slice(0, 12)}`;
       const argv = [
-        bin, "run", "--rm", "--name", cname,
+        bin, "run", "--rm", ...(stdin === undefined ? [] : ["-i"]), "--name", cname,
         ...userArgs,
         "-e", "HOME=/tmp",
         // Verify runs code the agent wrote: no network to send anything out, and no credentials to send.
@@ -129,7 +129,7 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
         image,
         ...args,
       ];
-      const proc = Bun.spawn(argv, { env: process.env, stdio: ["ignore", "pipe", "inherit"], detached: true });
+      const proc = Bun.spawn(argv, { env: process.env, stdio: [stdin === undefined ? "ignore" : new Blob([stdin]), "pipe", "inherit"], detached: true });
       // Killing the CLI client would leave the container running; stop the container itself too.
       const kill = () => {
         Bun.spawn([bin, "kill", cname], { stdio: ["ignore", "ignore", "ignore"] });

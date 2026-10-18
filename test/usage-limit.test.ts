@@ -233,7 +233,8 @@ describe("bunker --issue CLI", () => {
     await Bun.write(
       join(bin, "claude"),
       `#!/bin/sh
-case "$2" in "You are reviewing"*) echo '${out({ result: VERDICT, session_id: "rev" })}'; exit 0;; esac
+in=$(cat)
+case "$in" in "You are reviewing"*) echo '${out({ result: VERDICT, session_id: "rev" })}'; exit 0;; esac
 resume=none; for a in "$@"; do [ "$prev" = "--resume" ] && resume=$a; prev=$a; done
 echo "write resume=$resume" >> "${root}/calls.log"
 P=$HOME/.claude/projects/$(pwd | tr -c 'a-zA-Z0-9\\n' -)

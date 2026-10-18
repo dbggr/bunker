@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { emitStage, lineHook, type OnEvent } from "../core/events.ts";
 import { runSetup } from "../worktree/admin.ts";
 import { IdleTimeout, agentLimits, timeoutMessage, type Timeouts, type Sandbox } from "../sandboxes/exec.ts";
-import { sumUsage, type Agent, type Usage } from "../agents/agent.ts";
+import { stdinOf, sumUsage, type Agent, type Usage } from "../agents/agent.ts";
 import { modelLabel } from "../agents/models.ts";
 import { neutralise } from "../core/redact.ts";
 import { SEVERITY_HELP, auditOutput, extractOutput, pickFollowUps, type FollowUp } from "../core/structured.ts";
@@ -120,7 +120,7 @@ async function auditRun({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, fo
     const usages: (Usage | undefined)[] = [];
     let prompt = base;
     for (let k = 0; ; k++) {
-      const res = await sandbox.exec(agent.command(prompt, "review"), { ...ctx, ...(hook ? { onLine: hook } : {}), limits: agentLimits(timeouts) });
+      const res = await sandbox.exec(agent.command(prompt, "review"), { ...ctx, ...stdinOf(agent, prompt, "review"), ...(hook ? { onLine: hook } : {}), limits: agentLimits(timeouts) });
       if (res.timedOut) throw new IdleTimeout(timeoutMessage("audit agent", res.timedOut, timeouts));
       if (res.code !== 0) throw new Error(`agent exited with ${res.code}`);
       const parsed = agent.parse?.(res.stdout);

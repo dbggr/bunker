@@ -144,7 +144,7 @@ describe("claudeCode()", () => {
     expect(cmd[0]).toBe("claude");
     expect(cmd).toContain("-p");
     expect(cmd).toContain("--dangerously-skip-permissions");
-    expect(cmd.some((a) => a.includes("fix the bug"))).toBe(true);
+    expect(claudeCode().input?.("fix the bug")).toContain("fix the bug");
   });
 
   test("passes a model through", () => {

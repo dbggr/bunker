@@ -91,10 +91,16 @@ export const VERDICT_FORMAT =
 
 class BadOutput extends Error {}
 
-function reviewerPrompt(task: string, diff: string, extra?: string): string {
+/** Above this many bytes the diff is not inlined in the reviewer's prompt. */
+export const MAX_INLINE_DIFF = 60_000;
+
+function reviewerPrompt(task: string, diff: string, base: string, stat: string, extra?: string): string {
+  const shown = Buffer.byteLength(diff) <= MAX_INLINE_DIFF
+    ? `Here is the full diff of the change:\n\n${diff}\n\n`
+    : `The diff is too large to include (${Buffer.byteLength(diff)} bytes). Files changed:\n\n${stat}\n\nRead the diff yourself in your worktree with \`git diff ${base}..HEAD\` (or per file: \`git diff ${base}..HEAD -- <path>\`).\n\n`;
   return (
     `You are reviewing a change made for this task:\n\n${task}\n\n` +
-    `Here is the full diff of the change:\n\n${diff}\n\n` +
+    shown +
     "Do not modify any files and do not commit anything. " +
     `Review it, then ${VERDICT_FORMAT}` +
     (extra ? `\n\n${extra}` : "")
@@ -214,7 +220,8 @@ export async function review({
       undoSteering = await restoreSteering(wt.path, base);
       // Reviewers never resume: each review is independent.
       const fixNote = fixing ? `This is a fix round: the diff above covers only the fix, made after verify failed. The implementer was told:\n${fixing.prompt}` : undefined;
-      const revPrompt = reviewerPrompt(prompt, diff, [reviewerInstruction, fixNote, checkText].filter(Boolean).join("\n\n") || undefined);
+      const stat = Buffer.byteLength(diff) > MAX_INLINE_DIFF ? (await $`git -C ${wt.path} diff --stat=120 ${base}..HEAD`.text()).slice(0, 20_000) : "";
+      const revPrompt = reviewerPrompt(prompt, diff, base, stat, [reviewerInstruction, fixNote, checkText].filter(Boolean).join("\n\n") || undefined);
       const revResumed = resuming?.role === "reviewer" ? savedSession : undefined;
       resuming = undefined;
       let rev = await agentStep({

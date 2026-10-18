@@ -8,7 +8,7 @@ import { tailLines } from "../core/output.ts";
 import { parseConfig } from "../core/config.ts";
 import { noNotify, type Notify } from "../core/notify.ts";
 import { extractOutput, verdictOutput } from "../core/structured.ts";
-import { interpret, sumUsage, type Agent, type Usage } from "../agents/agent.ts";
+import { interpret, stdinOf, sumUsage, type Agent, type Usage } from "../agents/agent.ts";
 import { agentLimits, stepLimits, type Sandbox, type Timeouts } from "../sandboxes/exec.ts";
 import { isolatedEnv } from "../sandboxes/env.ts";
 import { listBunkerPrs, type BunkerPr } from "../github/prs.ts";
@@ -288,7 +288,7 @@ export function createShepherd(o: ShepherdOptions) {
 
   /** Runs `agent` in the worktree with `prompt`; false when it failed. A usage limit propagates. */
   const runAgent = async (agent: Agent, mode: "write" | "review", prompt: string, w: { worktree: string; gitCommonDir: string }): Promise<string> => {
-    const r = await o.sandbox.exec(agent.command(prompt, mode), { ...w, limits: agentLimits(timeouts) });
+    const r = await o.sandbox.exec(agent.command(prompt, mode), { ...w, ...stdinOf(agent, prompt, mode), limits: agentLimits(timeouts) });
     const limit = agent.usageLimit?.(r.stdout);
     if (limit) throw new UsageLimit(limit.resetAt, undefined);
     const { text, usage } = interpret(agent, r.stdout);

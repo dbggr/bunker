@@ -47,10 +47,10 @@ function fakeAgent(reviewer: (n: number) => string, prompts: { write: string[]; 
 describe("claudeCode() modes", () => {
   test("commit instruction only in write mode", () => {
     const write = claudeCode().command("x");
-    expect(write[2]).toContain("commit your changes");
-    expect(claudeCode().command("x", "write")[2]).toContain("commit your changes");
+    expect(claudeCode().input?.("x", "write")).toContain("commit your changes");
+    
     const rev = claudeCode().command("x", "review");
-    expect(rev[2]).toBe("x");
+    expect(claudeCode().input?.("x", "review")).toBe("x");
     expect(rev.slice(0, 2)).toEqual(["claude", "-p"]);
     expect(rev).toContain("--dangerously-skip-permissions");
   });

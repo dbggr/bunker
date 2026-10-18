@@ -46,7 +46,7 @@ export function noSandbox(): Sandbox {
       tempHome();
       return storeDir;
     },
-    exec: async (cmd, { worktree, gitCommonDir, prefix, onLine, limits, isolate }) => {
+    exec: async (cmd, { worktree, gitCommonDir, prefix, onLine, limits, isolate, stdin }) => {
       const dir = tempHome();
       // The real ~/.gitconfig isn't visible any more, so carry the commit identity over.
       const name = (await $`git -C ${worktree} config user.name`.nothrow().quiet().text()).trim();
@@ -61,7 +61,7 @@ export function noSandbox(): Sandbox {
         // detached: own process group, so a terminal Ctrl-C reaches only bunker, which lets the step finish.
         // Explicit env: Bun.spawn otherwise passes the startup environment, dropping
         // anything set at runtime (e.g. the token loaded from .bunker/.env).
-        teeStdout(Bun.spawn(cmd, { cwd: worktree, env, stdio: ["ignore", "pipe", "inherit"], detached: true }), prefix, onLine, limits),
+        teeStdout(Bun.spawn(cmd, { cwd: worktree, env, stdio: [stdin === undefined ? "ignore" : new Blob([stdin]), "pipe", "inherit"], detached: true }), prefix, onLine, limits),
       );
     },
   };
