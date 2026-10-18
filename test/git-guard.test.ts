@@ -4,7 +4,8 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { docker, hardenHostGit, noSandbox } from "../src/index.ts";
+import { docker, noSandbox } from "../src/index.ts";
+import { hardenHostGit } from "../src/sandboxes/git-guard.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 

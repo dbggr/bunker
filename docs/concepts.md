@@ -91,3 +91,15 @@ gh label create bunker:in-progress
 ## Context files
 
 `context = ["docs/spec.md", "docs/architecture.md"]` in `.bunker/config.toml` inlines those files into the implementer and reviewer prompts (the reviewer checks the change against them). A `Spec: <path>` line in an issue body (author with admin/maintain permission) or trusted comment adds a file for that issue. Files are read from origin's default branch with `git show`, never the worktree, and inserted as fenced, labelled values, never template-expanded. Each file and the total are capped at 50 KB; a missing or oversized file fails the run, naming it.
+
+## Library API
+
+Embedders import from `src/index.ts`. This is the stable surface for 1.0; everything else is internal and may change without notice.
+
+- Pipelines: `run`, `runAll`, `review`, with their option and result types (`RunOptions`, `RunAllOptions`, `RunResult`, `TaskResult`, `Iteration`, `ReviewOptions`, `ReviewResult`, `ReviewRound`, `Commit`)
+- Agents: `claudeCode`, and the `Agent`, `AgentMode` and `Usage` types
+- Sandboxes: `docker`, `podman`, `noSandbox`, and the `Sandbox`, `DockerOptions`, `ExecContext`, `ExecLimits`, `ExecResult` and `Timeouts` types
+- Events: the `BunkerEvent`, `EventTarget` and `OnEvent` types
+- Errors: `AgentFailure`, `UsageLimit`, and the `Pause` type
+
+The export list is pinned by `test/public-api.test.ts`.
