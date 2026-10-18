@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DAY_MS, MONTH_MS, addSpend, capLiftsAt, exceededCaps, formatSpend, loadSpendCaps, spentWithin } from "../src/core/spend.ts";
@@ -62,9 +62,16 @@ describe("spend caps config", () => {
     const home = tmp();
     expect(await loadSpendCaps({ XDG_CONFIG_HOME: home })).toEqual({});
     require("node:fs").mkdirSync(join(home, "bunker"));
-    writeFileSync(join(home, "bunker", "config.toml"), 'max-cost-day = 5\nmax-cost-month = 80.5\n');
+    writeFileSync(join(home, "bunker", "config.toml"), 'max_cost_day = 5\nmax_cost_month = 80.5\n');
     expect(await loadSpendCaps({ XDG_CONFIG_HOME: home })).toEqual({ day: 5, month: 80.5 });
-    writeFileSync(join(home, "bunker", "config.toml"), 'max-cost-day = "x"\n');
-    await expect(loadSpendCaps({ XDG_CONFIG_HOME: home })).rejects.toThrow(/max-cost-day/);
+    writeFileSync(join(home, "bunker", "config.toml"), 'max_cost_day = "x"\n');
+    await expect(loadSpendCaps({ XDG_CONFIG_HOME: home })).rejects.toThrow(/max_cost_day/);
   });
+});
+
+test("kebab-case spend caps (deprecated) are still read", async () => {
+  const home = tmp();
+  mkdirSync(join(home, "bunker"));
+  writeFileSync(join(home, "bunker", "config.toml"), "max-cost-day = 5\n");
+  expect(await loadSpendCaps({ XDG_CONFIG_HOME: home })).toEqual({ day: 5 });
 });

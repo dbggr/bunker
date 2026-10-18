@@ -123,6 +123,21 @@ describe("doctor spend", () => {
   });
 });
 
+describe("doctor deprecated user config keys", () => {
+  test("flags kebab-case keys with the snake_case fix; clean config has no such check", async () => {
+    const w = await fakeWorld();
+    const xdg = join(w.repo, "xdg");
+    const env = { ...w.env, XDG_CONFIG_HOME: xdg };
+    expect((await runDoctor({ cwd: w.repo, env })).checks.find((c) => c.id === "config-deprecated")).toBeUndefined();
+    await Bun.write(join(xdg, "bunker", "config.toml"), "max-cost-day = 5\n");
+    const c = (await runDoctor({ cwd: w.repo, env })).checks.find((c) => c.id === "config-deprecated");
+    expect(c?.ok).toBe(false);
+    expect(c?.required).toBe(false);
+    expect(c?.detail).toContain("max-cost-day");
+    expect(c?.fix).toContain("max_cost_day");
+  });
+});
+
 describe("doctor storage", () => {
   test("reports the size of runs/ and sessions/", async () => {
     const w = await fakeWorld();
