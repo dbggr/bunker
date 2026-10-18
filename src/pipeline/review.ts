@@ -12,6 +12,7 @@ import { IdleTimeout, timeoutMessage, type Sandbox, type Timeouts } from "../san
 import { type Commit, commitsBetween, mergeBack } from "../worktree/merge.ts";
 import { addWorktree, repoInfo, runSetup, tmpWorktrees, worktreeAdmin, type Worktree } from "../worktree/admin.ts";
 import { sessionStore, type Session } from "../worktree/session.ts";
+import { restoreSteering } from "../worktree/steering.ts";
 import { agentStep } from "./agent-step.ts";
 import { UsageLimit, type Pause } from "./errors.ts";
 
@@ -193,6 +194,8 @@ export async function review({
       const revTarget = { onEvent, onRaw, round: i + 1, role: "reviewer" as const };
       emitStage(revTarget, "review", undefined, modelLabel(reviewer));
       const revHook = lineHook(reviewer, revTarget);
+      // The reviewer reads the default branch's .claude/, CLAUDE.md and AGENTS.md, never the agent's (reset away below).
+      await restoreSteering(wt.path, base);
       // Reviewers never resume: each review is independent.
       const revPrompt = reviewerPrompt(prompt, diff, reviewerInstruction);
       const revResumed = resuming?.role === "reviewer" ? savedSession : undefined;

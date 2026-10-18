@@ -1,3 +1,4 @@
+import { STEERING } from "../../worktree/steering.ts";
 import { $ } from "bun";
 import { waitForMerge } from "../../github/branches.ts";
 import { neutralise } from "../../core/redact.ts";
@@ -72,11 +73,11 @@ export function publishIssue(ctx: IssueRunContext, input: PublishInput): Promise
     const opened = { review: result, ...(prUrl ? { prUrl } : {}) };
     if (!merge || !prUrl) return fail("pr-opened", opened);
 
-    // .bunker/ feeds the host (docker build, copy globs) and .github/ is CI: only a human may merge changes to them.
+    // .bunker/ feeds the host (docker build, copy globs), .github/ is CI and .claude/, CLAUDE.md, AGENTS.md steer agents: only a human may merge changes to them.
     // Fails closed: if the diff can't be read, a human reviews. --no-renames lists the old path of a moved file too;
     // -z keeps paths raw (plain output quotes non-ASCII, quote and tab characters, which would dodge the match).
     const diff = await $`git -C ${worktree} diff -z --name-only --no-renames ${baseSha} HEAD`.nothrow().quiet();
-    const sensitive = diff.exitCode === 0 ? diff.stdout.toString().split("\0").filter((f) => /^\.(bunker|github)\//.test(f)) : [`(could not list the changed files: ${diff.stderr.toString().trim()})`];
+    const sensitive = diff.exitCode === 0 ? diff.stdout.toString().split("\0").filter((f) => /^\.(bunker|github)\//.test(f) || STEERING.test(f)) : [`(could not list the changed files: ${diff.stderr.toString().trim()})`];
     if (sensitive.length) {
       await $`gh label create needs-human-review --color D93F0B --description "bunker will not auto-merge this PR" --force`.cwd(worktree).env(env).nothrow().quiet();
       const labelled = await $`gh pr edit ${prUrl} --add-label needs-human-review`.cwd(worktree).env(env).nothrow().quiet();
