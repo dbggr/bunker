@@ -51,6 +51,7 @@ export async function queueCommand({ manual, values, repoCfg, onEvent, agent, re
   for (const r of results) {
     console.log(`#${r.issue} [${r.status}] ${r.prUrl ?? "-"}`);
     if (r.error) console.log(`  ${r.error.trimEnd().replaceAll("\n", "\n  ")}`);
+    if (r.noChange) console.log(`  no change needed (${r.noChange.verdict}): ${r.noChange.reason}`);
     if (r.logPath) console.log(`  log: ${tty ? hyperlink(r.logPath) : r.logPath}`);
     if (r.review?.usage) console.log(`  cost ${formatUsage(r.review.usage)}`);
     for (const f of r.filed) console.log(`  filed #${f.number}: ${f.title}`);
@@ -59,7 +60,7 @@ export async function queueCommand({ manual, values, repoCfg, onEvent, agent, re
   if (pausedRun) {
     console.log(`bunker: paused on the Claude usage limit (#${pausedRun.issue}); ${rerunHint(pausedRun.pause?.resetAt)}`);
     process.exitCode = 3;
-  } else if (results.some((r) => r.status !== "blocked" && r.status !== "already-in-progress" && r.status !== "needs-review" && r.status !== (values.merge ? "merged" : manual ? "awaiting-review" : "pr-opened"))) process.exitCode = 1;
+  } else if (results.some((r) => r.status !== "blocked" && r.status !== "already-in-progress" && r.status !== "needs-review" && r.status !== "no-change" && r.status !== (values.merge ? "merged" : manual ? "awaiting-review" : "pr-opened"))) process.exitCode = 1;
 }
 
 export async function issueCommand({ manual, values, repoCfg, onEvent, agent, reviewerAgent, sandbox, maxRounds, resume, ciTimeoutMin, timeouts, allowLabelers, publisher, tty }: PipelineContext) {
@@ -91,9 +92,10 @@ export async function issueCommand({ manual, values, repoCfg, onEvent, agent, re
   console.log(`bunker: [${result.status}] ${result.branch} (worktree ${result.worktree})`);
   if (result.status === "paused-usage-limit") console.log(`bunker: paused on the Claude usage limit; ${rerunHint(result.pause?.resetAt)}`);
   if (result.error) console.log(`  ${result.error.trimEnd().replaceAll("\n", "\n  ")}`);
+  if (result.noChange) console.log(`bunker: closed #${issue}, no change needed (${result.noChange.verdict}): ${result.noChange.reason}`);
   if (result.prUrl) console.log(result.prUrl);
   if (result.review?.usage) console.log(`bunker: cost ${formatUsage(result.review.usage)}`);
   if (result.logPath) console.log(`bunker: log ${tty ? hyperlink(result.logPath) : result.logPath}`);
   if (result.status === "paused-usage-limit") process.exitCode = 3;
-  else if (result.status !== (values.merge ? "merged" : manual ? "awaiting-review" : "pr-opened") && result.status !== "needs-review") process.exitCode = 1;
+  else if (result.status !== (values.merge ? "merged" : manual ? "awaiting-review" : "pr-opened") && result.status !== "needs-review" && result.status !== "no-change") process.exitCode = 1;
 }

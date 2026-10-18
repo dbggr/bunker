@@ -1,5 +1,6 @@
 import type { OnEvent } from "../core/events.ts";
 import { AgentFailure } from "./errors.ts";
+import type { NoChange } from "../core/structured.ts";
 import type { ReviewResult } from "./review.ts";
 import type { Timeouts, Sandbox } from "../sandboxes/exec.ts";
 import type { Agent, Usage } from "../agents/agent.ts";
@@ -57,9 +58,11 @@ export interface IssueOptions extends Timeouts {
 }
 
 export interface IssueResult {
-  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked" | "bad-output" | "idle-timeout" | "already-in-progress" | "paused-usage-limit" | "needs-review" | "awaiting-merge" | "awaiting-review";
+  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked" | "bad-output" | "idle-timeout" | "already-in-progress" | "paused-usage-limit" | "needs-review" | "awaiting-merge" | "awaiting-review" | "no-change";
   /** With status `paused-usage-limit`: where the run stopped. Re-running the issue (or the next watch pass) resumes it. */
   pause?: { resetAt?: number; sessionId?: string };
+  /** With status `no-change`: the verdict the reviewer agreed with, and for which bunker closed the issue. */
+  noChange?: NoChange;
   /** With status `blocked`: the `discovered` issue filed for what this one waits on. */
   blockedBy?: { number: number; title: string };
   branch: string;

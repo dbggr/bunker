@@ -24,6 +24,7 @@ import { implementIssue } from "./steps/implement.ts";
 import { fileFollowUps } from "./steps/follow-ups.ts";
 import { runVerify } from "./steps/verify.ts";
 import { publishIssue } from "./steps/pr.ts";
+import { closeNoChange } from "./steps/close.ts";
 
 export async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyRetries, check, verifyOnHost, verifyNetwork, merge, manual, handoff, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, mention, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
@@ -57,7 +58,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   const fail = (status: IssueResult["status"], extra: Partial<IssueResult> = {}): IssueResult => {
     log(`final status: ${status}`, [extra.error, extra.prUrl].filter(Boolean).join("\n"));
     if (status === "merged") emitStage({ onEvent }, "merged");
-    else if (!["pr-opened", "needs-review", "awaiting-merge", "awaiting-review"].includes(status)) {
+    else if (!["pr-opened", "needs-review", "awaiting-merge", "awaiting-review", "no-change"].includes(status)) {
       const reason = failureReason(status, logPath, { ...(extra.error ? { error: extra.error } : {}), ...(extra.verifyOutput ? { verifyOutput: extra.verifyOutput } : {}) });
       emit(onEvent, { type: "stage", name: "failed", text: status, reason });
     }
@@ -182,6 +183,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   const followUps = await fileFollowUps(ctx, result, filed, mention);
   if ("done" in followUps) return followUps.done;
   const { notFiled } = followUps;
+  if (result.noChange) return closeNoChange(ctx, result, baseSha);
 
   /** A verify failure goes back to the implementer (same session) as one more round, which the reviewer re-reviews. */
   const fixRound = async (failure: string): Promise<IssueResult | undefined> => {

@@ -73,6 +73,19 @@ describe("collectStatus()", () => {
     expect(s.failed).toEqual([]);
   });
 
+  test("a no-change run is listed with its reason, and is not a failure", async () => {
+    const r = repo();
+    const dir = join(r, ".bunker");
+    const rec = createStatusRecorder(dir, { pid: 1, version: "x" });
+    rec.failed({ issue: 9, status: "failed", reason: "empty change" });
+    rec.noChange({ issue: 9, verdict: "fixed", reason: "already fixed in #12" });
+    const s = await collectStatus({ repo: r, alive: () => false });
+    expect(s.failed).toEqual([]);
+    expect(s.merged).toEqual([]);
+    expect(s.noChange).toEqual([{ issue: 9, verdict: "fixed", reason: "already fixed in #12", at: expect.any(Number) }]);
+    expect(formatStatus(s)).toContain("#9 no-change (fixed): already fixed in #12");
+  });
+
   test("JSON shape with a live watcher", async () => {
     const r = repo();
     const dir = join(r, ".bunker");
@@ -101,6 +114,7 @@ describe("collectStatus()", () => {
         { number: 11, title: "low one", priority: "low", bug: false },
       ],
       merged: [{ issue: 3, prUrl: "https://github.com/o/r/pull/9", at: expect.any(Number) }],
+      noChange: [],
       failed: [{ issue: 5, status: "verify-failed", reason: "src/a.ts(1,1): error TS1: x", logPath: "/l/5.log", at: expect.any(Number), retry: "gh issue edit 5 --remove-label bunker:failed --add-label bunker:queued" }],
       spend: { day: { spentUsd: 2.5, capUsd: 10 }, month: { spentUsd: 2.5 } },
     });

@@ -13,6 +13,7 @@ import type { Pause } from "../errors.ts";
 import { review, type ReviewResult } from "../review.ts";
 import type { IssueResult } from "../issue.ts";
 import { ISSUE_CONVENTION, ISSUE_PROMPT, REVIEWER_CONVENTION, commentsSection, issueSection } from "../issue-prompt.ts";
+import { checkEvidence, priorVerdictSection, priorVerdicts } from "../no-change.ts";
 import type { IssueRunContext } from "./context.ts";
 
 export interface ImplementInput {
@@ -54,12 +55,13 @@ export async function implementIssue(ctx: IssueRunContext, input: ImplementInput
     const toml = await $`git -C ${repo} show ${`${input.fetchedSha}:.bunker/config.toml`}`.nothrow().quiet();
     const configured = toml.exitCode === 0 ? parseConfig(toml.stdout.toString()).config.context ?? [] : [];
     prompt += contextSection(await loadContextFiles(repo, input.fetchedSha, [...configured, ...specRefs(issue)]));
+    prompt += priorVerdictSection(issue.comments);
   } catch (e) {
     return { done: fail("failed", { error: e instanceof Error ? e.message : String(e) }) };
   }
   log("models", `implementer: ${modelLabel(agent)}\nreviewer: ${modelLabel(reviewer ?? agent)}`);
   log("raw agent events (stream-json lines follow, interleaved with the sections below)");
-  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...timeouts, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), ...(paused ? { resumeFrom: paused } : {}), setup, ...(check ? { check } : {}), copyToWorktree: patterns, reviewerInstruction: REVIEWER_CONVENTION, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
+  const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...timeouts, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), ...(paused ? { resumeFrom: paused } : {}), setup, ...(check ? { check } : {}), copyToWorktree: patterns, reviewerInstruction: REVIEWER_CONVENTION, noChange: { check: (v) => checkEvidence(v, { repo, baseSha, env: ctx.env, cwd: ctx.cwd, issue: number, prior: priorVerdicts(issue.comments) }) }, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
   spent.usage = result.usage;
   if (result.status === "paused-usage-limit" && result.pause) {
     // Keep everything and remember where to pick up; the issue keeps its `bunker` label.
