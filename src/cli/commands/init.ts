@@ -369,6 +369,7 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
   if (dockerOk && cmds.verify) {
     const sandbox = opts.sandbox ?? docker({ env: [] });
     let attempt = 0;
+    let regenerated = false;
     for (;;) {
       attempt++;
       if (!yes && attempt === 1 && !(await io.confirm("Build the sandbox image and run setup and verify once inside it now? (a few minutes the first time)", true))) {
@@ -385,6 +386,22 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
       if (yes || attempt >= 5) {
         todo.push({ what: `${r.phase} fails in the sandbox`, fix: "fix the commands in .bunker/config.toml or add what's missing to .bunker/Dockerfile (e.g. `RUN apt-get install -y make`), then re-run `bunker init`" });
         break;
+      }
+      if (r.phase !== "image" && !regenerated && (!failing("setup") || !failing("verify"))) {
+        // setup/verify came from the config of an earlier run, so init never proposed them this time.
+        regenerated = true;
+        const tc = await chooseToolchain();
+        if (tc?.verify && (tc.setup !== cmds.setup || tc.verify !== cmds.verify) && (await io.confirm(`Replace them with the detected ${tc.name} defaults (setup: ${tc.setup || "none"}, verify: ${tc.verify})?`, true))) {
+          cmds.setup = tc.setup || undefined;
+          cmds.verify = tc.verify;
+          const configPath = join(root, ".bunker", "config.toml");
+          let text = await readText(configPath);
+          text = cmds.setup ? setTomlKey(text, "setup", cmds.setup) : text;
+          await atomicWrite(configPath, setTomlKey(text, "verify", cmds.verify));
+          say("  updated .bunker/config.toml");
+          if (!wrote.includes(".bunker/config.toml")) wrote.push(".bunker/config.toml");
+          continue;
+        }
       }
       if (r.phase !== "image" && (await io.confirm("Edit the commands and retry?", true))) {
         const setup = (await io.ask("setup: ", cmds.setup ?? "")).trim();
