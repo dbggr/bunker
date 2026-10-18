@@ -257,7 +257,7 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
 
   // 4. toolchain
   step(3);
-  let cfg: { setup?: string; verify?: string; verify_network?: boolean; copy?: string[]; services?: Services } = {};
+  let cfg: { setup?: string; prepare?: string; verify?: string; verify_network?: boolean; copy?: string[]; services?: Services } = {};
   try {
     cfg = (await loadRepoConfig(root)).config;
   } catch {}
@@ -384,7 +384,7 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
         break;
       }
       say(`  Building the image and running ${cmds.setup ? "setup, then " : ""}verify (isolated, no network)...`);
-      const r = await sandboxDryRun({ root, env, sandbox, ...(cmds.setup ? { setup: cmds.setup } : {}), verify: cmds.verify, network: cfg.verify_network === true, ...(cmds.copy?.length ? { copy: cmds.copy } : {}) });
+      const r = await sandboxDryRun({ root, env, sandbox, ...(cmds.setup ? { setup: cmds.setup } : {}), verify: cmds.verify, network: cfg.verify_network === true, ...(cfg.services && Object.keys(cfg.services).length ? { services: cfg.services } : {}), ...(cfg.prepare?.trim() ? { prepare: cfg.prepare.trim() } : {}), ...(cmds.copy?.length ? { copy: cmds.copy } : {}) });
       if (r.ok) {
         say(`  ✓ setup and verify pass in the sandbox (${r.seconds}s)${r.tail ? `\n${r.tail.replace(/^/gm, "    | ")}` : ""}`);
         break;
