@@ -1,11 +1,8 @@
 import { $ } from "bun";
-import { loadRepoConfig } from "./core/config.ts";
-import { existsSync, rmSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { redact } from "./core/redact.ts";
-import { committedCopies, copyIntoWorktree, copyPatterns, copyRejection } from "./copy.ts";
+import { committedCopies, copyIntoWorktree, copyPatterns, copyRejection } from "./worktree/copy.ts";
 import { SEVERITY_HELP, extractOutput, reportOutput, verdictOutput, type Report, type Verdict } from "./core/structured.ts";
 import { tailLines } from "./core/output.ts";
 import { emit, type OnEvent, type Stage } from "./core/events.ts";
@@ -13,7 +10,10 @@ export type { BunkerEvent, OnEvent } from "./core/events.ts";
 import { modelLabel } from "./agents/models.ts";
 import { formatDuration, interpret, sumUsage, type Agent, type AgentMode, type Usage } from "./agents/agent.ts";
 import { hardenHostGit } from "./sandboxes/git-guard.ts";
-import { DEFAULT_COMPLETION_MS, IdleTimeout, agentLimits, stepLimits, timeoutMessage, type ExecContext, type Sandbox, type Timeouts } from "./sandboxes/exec.ts";
+import { DEFAULT_COMPLETION_MS, IdleTimeout, agentLimits, timeoutMessage, type ExecContext, type Sandbox, type Timeouts } from "./sandboxes/exec.ts";
+import { type Commit, commitsBetween, mergeBack } from "./worktree/merge.ts";
+import { addWorktree, copyInto, repoInfo, runSetup, tmpWorktrees, worktreeAdmin, type Worktree } from "./worktree/admin.ts";
+import { captureSession, restoreSession, sessionStore, type Session } from "./worktree/session.ts";
 
 export { hardenHostGit } from "./sandboxes/git-guard.ts";
 export type { Agent, AgentMode, Usage } from "./agents/agent.ts";
@@ -25,14 +25,11 @@ export { GH_TOKEN_VARS, isolatedEnv } from "./sandboxes/env.ts";
 export { noSandbox } from "./sandboxes/no-sandbox.ts";
 export type { DockerOptions } from "./sandboxes/container.ts";
 export { buildBaseImage, docker, podman } from "./sandboxes/container.ts";
+export type { Commit } from "./worktree/merge.ts";
+export { runSetup, worktreeAdmin, worktreeAdminLockPath } from "./worktree/admin.ts";
 
 // Every git bunker runs on the host ignores repo hooks and fsmonitor (see git-guard.ts).
 hardenHostGit();
-
-export interface Commit {
-  sha: string;
-  subject: string;
-}
 
 export interface RunOptions extends Timeouts {
   prompt: string;
@@ -75,143 +72,6 @@ export interface RunResult {
 }
 
 const DEFAULT_SIGNAL = "<promise>COMPLETE</promise>";
-
-async function commitsBetween(cwd: string, base: string, branch: string): Promise<Commit[]> {
-  const out = await $`git -C ${cwd} log --reverse --format=%H%x09%s ${base}..${branch}`.text();
-  return out
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      const [sha = "", subject = ""] = line.split("\t");
-      return { sha, subject };
-    });
-}
-
-interface Worktree {
-  branch: string;
-  path: string;
-}
-
-async function repoInfo(cwd: string) {
-  const base = (await $`git -C ${cwd} rev-parse HEAD`.text()).trim();
-  const gitCommonDir = (await $`git -C ${cwd} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
-  return { base, gitCommonDir };
-}
-
-/**
- * Runs the setup step in `worktree`, inside `sandbox`: `setup` if given, else the repo's
- * `.bunker/setup` script if present. Returns undefined when there is no setup, else the command result.
- * Rejects with ConfigError if `.bunker/config.toml` is invalid.
- */
-export async function runSetup(
-  sandbox: Sandbox,
-  ctx: { worktree: string; gitCommonDir: string },
-  setup?: string,
-  timeouts: Timeouts = {},
-): Promise<{ cmd: string; code: number; stdout: string; timedOut?: "idle" | "step" } | undefined> {
-  const cmd = setup ?? (await loadRepoConfig(ctx.worktree).then((c) => c.config.setup ?? c.legacy.setup));
-  if (!cmd) return undefined;
-  const out = await sandbox.exec(["sh", "-c", `(${cmd}) 2>&1`], { ...ctx, limits: stepLimits(timeouts) });
-  return { cmd, ...out };
-}
-
-let worktreeAdminTail: Promise<unknown> = Promise.resolve();
-
-/** Path of the lock file that serializes worktree admin commands across bunker processes on `repo`. */
-export async function worktreeAdminLockPath(repo: string): Promise<string> {
-  const common = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
-  return join(common, "bunker-worktree-admin.lock");
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-async function acquireWorktreeLock(lock: string): Promise<void> {
-  for (;;) {
-    try {
-      writeFileSync(lock, String(process.pid), { flag: "wx" });
-      return;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-    }
-    const pid = Number.parseInt(await Bun.file(lock).text().catch(() => ""), 10);
-    // An unreadable or half-written lock is left alone; only a dead owner's lock is taken over.
-    if (Number.isInteger(pid) && pid !== process.pid && !pidAlive(pid)) rmSync(lock, { force: true });
-    else await Bun.sleep(50);
-  }
-}
-
-/**
- * Runs `fn` (git worktree add/remove, branch -D) after earlier such commands on `repo`, in this process and in any other
- * bunker process (a lock file under the git common dir). They read every worktree's admin dir under .git/worktrees, so
- * one running beside a `worktree add` can read it half-written and fail ("failed to read .../commondir").
- */
-export function worktreeAdmin<T>(repo: string, fn: () => Promise<T>): Promise<T> {
-  const run = worktreeAdminTail.then(async () => {
-    const lock = await worktreeAdminLockPath(repo);
-    await acquireWorktreeLock(lock);
-    try {
-      return await fn();
-    } finally {
-      rmSync(lock, { force: true });
-    }
-  });
-  worktreeAdminTail = run.catch(() => {});
-  return run;
-}
-
-/** This process's `/tmp/bunker-*` worktrees that are still live, by path. */
-const tmpWorktrees = new Map<string, { repo: string; base: string; branch: string }>();
-let tmpHooked = false;
-
-/** Remove each live /tmp worktree and its branch if it has no commits and no changes. Synchronous: runs in exit and signal handlers. */
-function cleanupTmpWorktrees(): void {
-  for (const [path, w] of tmpWorktrees) {
-    const commits = Bun.spawnSync(["git", "-C", w.repo, "rev-list", "--count", `${w.base}..${w.branch}`]);
-    if (commits.exitCode !== 0 || commits.stdout.toString().trim() !== "0") continue;
-    if (existsSync(path)) {
-      const dirty = Bun.spawnSync(["git", "-C", path, "status", "--porcelain"]);
-      if (dirty.exitCode !== 0 || dirty.stdout.toString().trim()) continue;
-      Bun.spawnSync(["git", "-C", w.repo, "worktree", "remove", "--force", path]);
-    }
-    Bun.spawnSync(["git", "-C", w.repo, "worktree", "prune"]);
-    Bun.spawnSync(["git", "-C", w.repo, "branch", "-D", w.branch]);
-    tmpWorktrees.delete(path);
-  }
-}
-
-async function addWorktree(cwd: string, base: string): Promise<Worktree> {
-  const id = crypto.randomUUID().slice(0, 8);
-  const wt = { branch: `bunker/${id}`, path: join(tmpdir(), `bunker-${id}`) };
-  await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree add -q -b ${wt.branch} ${wt.path} ${base}`);
-  tmpWorktrees.set(wt.path, { repo: cwd, base, branch: wt.branch });
-  if (!tmpHooked) {
-    tmpHooked = true;
-    process.on("exit", cleanupTmpWorktrees);
-    for (const sig of ["SIGINT", "SIGTERM"] as const) {
-      // The watch CLI installs its own handler (which exits through the "exit" hook above).
-      if (process.listenerCount(sig) === 0) process.on(sig, () => process.exit(130));
-    }
-  }
-  return wt;
-}
-
-/** Copies the patterns (default: .bunker/copy) into the fresh worktree; on failure removes the worktree and branch. */
-async function copyInto(cwd: string, wt: Worktree, patterns: string[]): Promise<string[]> {
-  try {
-    return await copyIntoWorktree(cwd, wt.path, patterns);
-  } catch (e) {
-    await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree remove --force ${wt.path}`.nothrow().quiet());
-    await worktreeAdmin(cwd, () => $`git -C ${cwd} branch -D ${wt.branch}`.nothrow().quiet());
-    throw e;
-  }
-}
 
 /** Where an agent run's events are labelled from, and where raw stdout lines go. */
 export interface EventTarget {
@@ -274,42 +134,6 @@ export class AgentFailure extends Error {
   }
 }
 
-interface Session {
-  id: string;
-  /** Saved copy on the host. */
-  file: string;
-}
-
-/** Saves session `id` from the sandbox's store to `dest`, plus a redacted copy next to it. */
-async function captureSession(sandbox: Sandbox, id: string, dest: string): Promise<Session | undefined> {
-  const root = sandbox.projectsDir;
-  if (!root) return undefined;
-  try {
-    for (const dir of await readdir(root)) {
-      const file = Bun.file(join(root, dir, `${id}.jsonl`));
-      if (!(await file.exists())) continue;
-      const text = await file.text();
-      await mkdir(dirname(dest), { recursive: true, mode: 0o700 });
-      // Transcripts can hold secrets the agent saw: owner-only.
-      await writeFile(dest, text, { mode: 0o600 });
-      await writeFile(dest.replace(/\.jsonl$/, ".redacted.jsonl"), redact(text), { mode: 0o600 });
-      return { id, file: dest };
-    }
-  } catch {}
-  return undefined;
-}
-
-/** Puts a saved session back where claude (running in `worktree`) looks for it. */
-async function restoreSession(sandbox: Sandbox, worktree: string, session: Session): Promise<void> {
-  const root = sandbox.projectsDir;
-  if (!root) throw new Error("sandbox has no session store");
-  const dir = join(root, worktree.replace(/[^a-zA-Z0-9]/g, "-"));
-  const target = join(dir, `${session.id}.jsonl`);
-  if (await Bun.file(target).exists()) return;
-  await mkdir(dir, { recursive: true });
-  await Bun.write(target, Bun.file(session.file));
-}
-
 /**
  * Runs one agent command. With `prev`, first restores that session and resumes it with `resumePrompt`;
  * if that can't be done or the resumed run fails, says so and runs `prompt` in a fresh session instead.
@@ -361,13 +185,6 @@ async function agentStep(o: {
   const limit = o.agent.usageLimit?.(res.stdout);
   if (limit) throw new UsageLimit(limit.resetAt, session ?? (id ? { id, file: "" } : undefined));
   return { ...res, ...(session ? { session } : {}) };
-}
-
-/** Keeps sessions in `dir`, or in a temp dir that `done()` removes. */
-async function sessionStore(dir?: string): Promise<{ dir: string; done: () => Promise<void> }> {
-  if (dir) return { dir, done: async () => {} };
-  const tmp = await mkdtemp(join(tmpdir(), "bunker-sessions-"));
-  return { dir: tmp, done: () => rm(tmp, { recursive: true, force: true }) };
 }
 
 interface AgentOutcome {
@@ -431,18 +248,6 @@ async function runAgent(
 function totalUsage(iterations: Iteration[]): { usage?: Usage } {
   const usage = sumUsage(iterations.map((i) => i.usage));
   return usage ? { usage } : {};
-}
-
-/** Merges the branch into the caller's checkout and deletes it. On conflict: aborts, keeps the branch, returns the error. */
-async function mergeBack(cwd: string, branch: string, commits: Commit[]): Promise<string | undefined> {
-  if (commits.length > 0) {
-    const merge = await $`git -C ${cwd} merge -q --no-edit ${branch}`.nothrow().quiet();
-    if (merge.exitCode !== 0) {
-      await $`git -C ${cwd} merge --abort`.nothrow().quiet();
-      return redact(`merge conflict on ${branch}; branch kept:\n${merge.stdout}${merge.stderr}`);
-    }
-  }
-  await $`git -C ${cwd} branch -q -D ${branch}`;
 }
 
 /**

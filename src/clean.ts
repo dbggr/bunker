@@ -5,7 +5,7 @@ import { basename, dirname, join, sep } from "node:path";
 import { alive } from "./watch.ts";
 import { defaultBranchOf } from "./pull.ts";
 import { stamp } from "./issue.ts";
-import { worktreeAdmin } from "./index.ts";
+import { worktreeAdmin } from "./worktree/admin.ts";
 
 export interface CleanOptions {
   cwd: string;
