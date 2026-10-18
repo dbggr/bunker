@@ -40,6 +40,25 @@ features:
     details: bunker watch works the queue unattended, two at a time, with spend caps, a PR shepherd that keeps PRs green, and bunker status to check in.
 ---
 
+## TL;DR: why use bunker?
+
+- **Your backlog moves while you do something else.** Label the small, well-defined issues you never get to; come back to reviewed, tested pull requests that are already merged, or a clear reason why one couldn't be done.
+- **You get AI-written code without handing over the keys.** The agent works in a sandbox with no access to your tokens or SSH keys, a second agent reviews it, and your tests and GitHub's required checks decide what merges.
+- **You stay in charge.** Only you can queue work, changes to CI or bunker's own rules always wait for a person, and everything arrives as a normal PR you can read.
+- **It's cheap and measurable.** About $1.15 of agent time per merged issue on bunker's own repo, with daily and monthly spend caps, and `bunker status` shows what it did and why.
+
+**Not for you if:** your repo has no tests or CI to gate on, the work is a big redesign rather than issues you could describe in a few lines, or you don't want to read the PRs it opens.
+
+## See it
+
+![How it works: you label an issue, bunker checks it's you, an AI writes it in a sandbox, a second AI reviews it, your tests run, and GitHub's required checks merge it](/slides/how-it-works.webp)
+
+![Running unattended: priority queue with bugs first, two issues at once, a PR shepherd, spend caps, and bunker status](/slides/unattended.webp)
+
+![Safety: the label gate, untrusted comments filtered, no credentials in the sandbox, read-only git internals, isolated tests, and human review for CI and config changes](/slides/safety.webp)
+
+![It built itself: 147 pull requests written and merged by bunker, 699 tests, about $1.15 per merged issue](/slides/built-itself.webp)
+
 ## Install
 
 ```sh
