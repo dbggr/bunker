@@ -1076,3 +1076,90 @@ describe("runIssue() with a leftover branch", () => {
     expect(list).toContain("feature/7-different-slug");
   });
 });
+
+describe("runIssue() context files", () => {
+  // Records implementer and reviewer prompts.
+  function recorder(impl: string[], rev: string[]): Agent {
+    return {
+      command(prompt, mode = "write") {
+        if (mode === "write") {
+          impl.push(prompt);
+          return ["sh", "-c", `echo hi > feature.txt && git add . && git commit -qm "feat: impl"`];
+        }
+        rev.push(prompt);
+        return ["sh", "-c", `echo '${APPROVE}'`];
+      },
+    };
+  }
+  async function publish(repo: string, files: Record<string, string>) {
+    for (const [p, t] of Object.entries(files)) {
+      await Bun.write(join(repo, p), t);
+    }
+    await $`git -C ${repo} add -A && git -C ${repo} commit -q -m ctx && git -C ${repo} push -q origin main`;
+  }
+  const CONFIG = 'context = ["docs/spec.md"]\n';
+
+  test("configured files go to the implementer and the reviewer, fenced and labelled", async () => {
+    const { repo } = await setup(issue());
+    await publish(repo, { ".bunker/config.toml": CONFIG, "docs/spec.md": "SPEC {{ISSUE}} !`echo pwned`\n" });
+    const impl: string[] = [], rev: string[] = [];
+    const r = await runIssue({ cwd: repo, issue: 7, agent: recorder(impl, rev), sandbox: noSandbox() });
+    expect(r.status).toBe("pr-opened");
+    for (const p of [impl[0]!, rev[0]!]) expect(p).toContain("File docs/spec.md:\n```\nSPEC {{ISSUE}} !`echo pwned`\n```");
+  });
+
+  test("a Spec: line from a trusted author adds a file", async () => {
+    const { repo } = await setup(issue({ author: { login: "alice" }, body: "Make it so.\nSpec: docs/other.md" }));
+    await publish(repo, { "docs/other.md": "OTHER-SPEC" });
+    const impl: string[] = [], rev: string[] = [];
+    await runIssue({ cwd: repo, issue: 7, agent: recorder(impl, rev), sandbox: noSandbox() });
+    expect(impl[0]).toContain("OTHER-SPEC");
+    expect(rev[0]).toContain("OTHER-SPEC");
+  });
+
+  test("a Spec: line from an untrusted author is ignored", async () => {
+    const { repo } = await setup(issue({ author: { login: "mallory" }, authorAssociation: "NONE", body: "Make it so.\nSpec: docs/other.md" }));
+    await publish(repo, { "docs/other.md": "OTHER-SPEC" });
+    const impl: string[] = [], rev: string[] = [];
+    const r = await runIssue({ cwd: repo, issue: 7, agent: recorder(impl, rev), sandbox: noSandbox() });
+    expect(r.status).toBe("pr-opened");
+    expect(impl[0]).not.toContain("OTHER-SPEC");
+  });
+
+  test("a worktree edit of the file has no effect: it is read from the default branch", async () => {
+    const { repo } = await setup(issue());
+    await publish(repo, { ".bunker/config.toml": CONFIG, "docs/spec.md": "COMMITTED" });
+    await Bun.write(join(repo, "docs/spec.md"), "LOCAL-EDIT"); // uncommitted edit in the caller's checkout
+    const impl: string[] = [], rev: string[] = [];
+    await runIssue({ cwd: repo, issue: 7, agent: recorder(impl, rev), sandbox: noSandbox() });
+    expect(impl[0]).toContain("COMMITTED");
+    expect(impl[0]).not.toContain("LOCAL-EDIT");
+    expect(rev[0]).not.toContain("LOCAL-EDIT");
+  });
+
+  test("a missing file is an error naming it", async () => {
+    const { repo } = await setup(issue());
+    await publish(repo, { ".bunker/config.toml": 'context = ["docs/nope.md"]\n' });
+    const r = await runIssue({ cwd: repo, issue: 7, agent: recorder([], []), sandbox: noSandbox() });
+    expect(r.status).toBe("failed");
+    expect(r.error).toContain("docs/nope.md");
+  });
+
+  test("the size cap per file is enforced, naming the file", async () => {
+    const { repo } = await setup(issue());
+    await publish(repo, { ".bunker/config.toml": CONFIG, "docs/spec.md": "x".repeat(51 * 1024) });
+    const r = await runIssue({ cwd: repo, issue: 7, agent: recorder([], []), sandbox: noSandbox() });
+    expect(r.status).toBe("failed");
+    expect(r.error).toContain("docs/spec.md");
+    expect(r.error).toMatch(/limit/);
+  });
+
+  test("the total size cap is enforced, naming the file that crosses it", async () => {
+    const { repo } = await setup(issue());
+    await publish(repo, { ".bunker/config.toml": 'context = ["a.md", "b.md"]\n', "a.md": "x".repeat(30 * 1024), "b.md": "y".repeat(30 * 1024) });
+    const r = await runIssue({ cwd: repo, issue: 7, agent: recorder([], []), sandbox: noSandbox() });
+    expect(r.status).toBe("failed");
+    expect(r.error).toContain("b.md");
+    expect(r.error).toMatch(/total/);
+  });
+});

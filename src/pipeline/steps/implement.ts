@@ -7,6 +7,8 @@ import { modelLabel } from "../../agents/models.ts";
 import type { Agent, Usage } from "../../agents/agent.ts";
 import type { Sandbox } from "../../sandboxes/exec.ts";
 import { loadPromptTemplate, renderPrompt } from "../prompt.ts";
+import { parseConfig } from "../../core/config.ts";
+import { contextSection, loadContextFiles, specRefs } from "../context-files.ts";
 import type { Pause } from "../errors.ts";
 import { review, type ReviewResult } from "../review.ts";
 import type { IssueResult } from "../issue.ts";
@@ -47,6 +49,10 @@ export async function implementIssue(ctx: IssueRunContext, input: ImplementInput
         ISSUE: issueSection(number, issue), COMMENTS: commentsSection(issue.comments), CONVENTION: ISSUE_CONVENTION,
       },
     });
+    // Appended after rendering, so the files are values: never template-expanded. The reviewer's task is this prompt.
+    const toml = await $`git -C ${repo} show ${`${input.fetchedSha}:.bunker/config.toml`}`.nothrow().quiet();
+    const configured = toml.exitCode === 0 ? parseConfig(toml.stdout.toString()).config.context ?? [] : [];
+    prompt += contextSection(await loadContextFiles(repo, input.fetchedSha, [...configured, ...specRefs(issue)]));
   } catch (e) {
     return { done: fail("failed", { error: e instanceof Error ? e.message : String(e) }) };
   }
