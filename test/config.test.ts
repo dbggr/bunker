@@ -227,3 +227,14 @@ test("clean.logs_days is parsed and validated", () => {
   expect(parseConfig("[clean]\nlogs_days = 7").config.clean.logs_days).toBe(7);
   expect(() => parseConfig('[clean]\nlogs_days = "x"')).toThrow();
 });
+
+test("verify_retries (0 allowed) and check are parsed and validated", () => {
+  const c = parseConfig('verify_retries = 0\ncheck = "bun run typecheck"').config;
+  expect(c.verify_retries).toBe(0);
+  expect(c.check).toBe("bun run typecheck");
+  expect(() => parseConfig("verify_retries = -1")).toThrow();
+  expect(() => parseConfig("verify_retries = 1.5")).toThrow();
+  expect(() => parseConfig("check = 3")).toThrow();
+  const s = effectiveSettings({ config: parseConfig("").config, legacy: {}, env: {} });
+  expect(s.find((x) => x.key === "verify_retries")?.value).toBe(1);
+});

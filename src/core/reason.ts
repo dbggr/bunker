@@ -53,7 +53,7 @@ export function reasonFromLog(status: string, log: string, fallback: { error?: s
   const last = (re: RegExp) => [...secs].reverse().find((s) => re.test(s.title));
   let reason: string | undefined;
   if (status === "verify-failed") {
-    reason = verifyReason(last(/^verify \(exit/)?.text ?? fallback.verifyOutput ?? "");
+    reason = verifyReason(last(/^verify (?:attempt \d+\/\d+ )?\(exit/)?.text ?? fallback.verifyOutput ?? "");
   } else if (status === "rejected") {
     const text = last(/reviewer output \(changes requested\)/)?.text;
     if (text) {

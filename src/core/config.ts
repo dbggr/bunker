@@ -6,6 +6,8 @@ export interface RepoConfig {
   setup?: string;
   verify?: string;
   verify_network?: boolean;
+  verify_retries?: number;
+  check?: string;
   copy?: string[];
   context?: string[];
   models: { implementer?: string; reviewer?: string; auditor?: string; default?: string };
@@ -18,7 +20,7 @@ export interface RepoConfig {
 /** An invalid `.bunker/config.toml`: the CLI exits 2. */
 export class ConfigError extends Error {}
 
-type Kind = "string" | "strings" | "number" | "integer" | "boolean";
+type Kind = "string" | "strings" | "number" | "integer" | "count" | "boolean";
 
 interface KeySpec {
   key: string;
@@ -33,6 +35,8 @@ export const CONFIG_KEYS: KeySpec[] = [
   { key: "setup", kind: "string", doc: "shell command run in each worktree before the agent (legacy: .bunker/setup)" },
   { key: "verify", kind: "string", doc: "command that must pass before anything is pushed (legacy: .bunker/verify)" },
   { key: "verify_network", kind: "boolean", doc: "let sandboxed verify use the network and Claude credentials (off: verify runs agent-written code)", default: false },
+  { key: "verify_retries", kind: "count", doc: "fix rounds the implementer gets when verify fails, before the run fails as verify-failed (0: none)", default: 1 },
+  { key: "check", kind: "string", doc: "command (e.g. a typecheck) run in the isolated sandbox before each review; its output goes into the reviewer prompt" },
   { key: "copy", kind: "strings", doc: "gitignored paths or globs copied into each worktree (legacy: .bunker/copy)", default: [] },
   { key: "context", kind: "strings", doc: "repo files (read from the default branch) inlined into the implementer and reviewer prompts", default: [] },
   { key: "models.implementer", kind: "string", doc: "model for the implementer role" },
@@ -57,6 +61,7 @@ const EXPECTED: Record<Kind, string> = {
   strings: "an array of strings",
   number: "a positive number",
   integer: "a positive integer",
+  count: "a non-negative integer",
   boolean: "true or false",
 };
 
@@ -72,6 +77,8 @@ function check(kind: Kind, v: unknown): boolean {
       return typeof v === "number" && v > 0 && Number.isFinite(v);
     case "integer":
       return typeof v === "number" && Number.isInteger(v) && v > 0;
+    case "count":
+      return typeof v === "number" && Number.isInteger(v) && v >= 0;
     case "boolean":
       return typeof v === "boolean";
   }
