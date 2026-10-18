@@ -1,4 +1,6 @@
 import { $ } from "bun";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { redact } from "../core/redact.ts";
 import { committedCopies, copyPatterns, copyRejection } from "../worktree/copy.ts";
@@ -28,6 +30,8 @@ export interface RunOptions extends Timeouts {
   resume?: boolean;
   /** Host directory to keep the agent's session files in (`<role>-<round>.jsonl`). Defaults to a temporary one. */
   sessionsDir?: string;
+  /** Start from a copy of this session (a new session id; the original is unchanged). Used by `RunResult.fork`. */
+  fork?: Session;
   /** Host-relative paths or globs copied from `cwd` into the worktree (before setup), e.g. `.env`. Overrides the repo's `.bunker/copy`. Never committed. */
   copyToWorktree?: string[];
 }
@@ -50,11 +54,25 @@ export interface RunResult {
   completionSignal?: string;
   /** Total across all iterations, if the agent reports it. */
   usage?: Usage;
+  /**
+   * Runs a new task that continues from this run's last agent session, in a new branch and session;
+   * this run's session is unchanged, so it can be forked again. `opts` override the original run's options.
+   * Throws if the agent reported no session.
+   */
+  fork(prompt: string, opts?: Partial<Omit<RunOptions, "prompt" | "fork">>): Promise<RunResult>;
 }
 
 const DEFAULT_SIGNAL = "<promise>COMPLETE</promise>";
 
+/** A session's id and transcript, kept in memory so it outlives the run's temporary session store. */
+interface SessionCopy {
+  id: string;
+  text: string;
+}
+
 interface AgentOutcome {
+  /** The last session the agent ran in. */
+  last?: SessionCopy;
   commits: Commit[];
   iterations: Iteration[];
   completionSignal?: string;
@@ -71,7 +89,7 @@ async function runAgent(
   base: string,
   gitCommonDir: string,
   wt: Worktree,
-  { prompt, agent, sandbox, maxIterations = 1, completionSignal = DEFAULT_SIGNAL, onEvent, resume = true, sessionsDir, ...timeouts }: Omit<RunOptions, "cwd" | "copyToWorktree">,
+  { prompt, agent, sandbox, maxIterations = 1, completionSignal = DEFAULT_SIGNAL, onEvent, resume = true, sessionsDir, fork, ...timeouts }: Omit<RunOptions, "cwd" | "copyToWorktree">,
   prefix?: string,
   task?: number,
   copied: string[] = [],
@@ -81,18 +99,22 @@ async function runAgent(
   let commits: Commit[] = [];
   const store = await sessionStore(sessionsDir);
   let prev: Session | undefined;
+  let forkFrom = fork;
+  let last: SessionCopy | undefined;
   try {
     for (let i = 0; i < maxIterations; i++) {
       const target = { onEvent, task, round: i + 1, role: "implementer" as const };
       emitStage(target, "implement", undefined, modelLabel(agent));
       const onLine = lineHook(agent, target);
       const step = await agentStep({
-        agent, sandbox, mode: "write", prompt, prev: resume ? prev : undefined, target,
+        agent, sandbox, mode: "write", prompt, prev: resume ? prev : undefined, ...(forkFrom ? { fork: forkFrom } : {}), target,
         ctx: { worktree: wt.path, gitCommonDir, ...(prefix ? { prefix } : {}), ...(onLine ? { onLine } : {}) },
         dest: join(store.dir, `implementer-${i + 1}.jsonl`), timeouts, signals,
       });
       const { code, stdout } = step;
       prev = step.session;
+      forkFrom = undefined;
+      if (step.session) last = { id: step.session.id, text: await Bun.file(step.session.file).text() };
       const { text, usage } = interpret(agent, stdout);
       if (code !== 0) {
         throw new AgentFailure(`agent exited with ${code}; work kept on ${wt.branch}`, sumUsage([...iterations.map((i) => i.usage), usage]));
@@ -103,9 +125,9 @@ async function runAgent(
       iterations.push({ exitCode: code, commits: total.slice(commits.length), ...(step.session ? { sessionId: step.session.id } : {}), ...(usage ? { usage } : {}) });
       commits = total;
       const matched = signals.find((s) => text.includes(s));
-      if (matched) return { commits, iterations, completionSignal: matched, ...totalUsage(iterations) };
+      if (matched) return { commits, iterations, completionSignal: matched, ...totalUsage(iterations), ...(last ? { last } : {}) };
     }
-    return { commits, iterations, ...totalUsage(iterations) };
+    return { commits, iterations, ...totalUsage(iterations), ...(last ? { last } : {}) };
   } finally {
     await store.done();
     await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
@@ -126,10 +148,25 @@ export async function run({ cwd = process.cwd(), copyToWorktree, ...opts }: RunO
   const patterns = await copyPatterns(cwd, copyToWorktree);
   const wt = await addWorktree(cwd, base);
   const copied = await copyInto(cwd, wt, patterns);
-  const outcome = await runAgent(cwd, base, gitCommonDir, wt, opts, undefined, undefined, copied);
+  const { last, ...outcome } = await runAgent(cwd, base, gitCommonDir, wt, opts, undefined, undefined, copied);
   const conflict = await mergeBack(cwd, wt.branch, outcome.commits);
   if (conflict) throw new Error(conflict);
-  return { branch: wt.branch, ...outcome };
+  const result: RunResult = {
+    branch: wt.branch,
+    ...outcome,
+    async fork(prompt, forkOpts = {}) {
+      if (!last) throw new Error("cannot fork: the run has no session (the agent reported none, or the sandbox keeps no session files)");
+      const dir = await mkdtemp(join(tmpdir(), "bunker-fork-"));
+      try {
+        const file = join(dir, `${last.id}.jsonl`);
+        await Bun.write(file, last.text);
+        return await run({ cwd, copyToWorktree, ...opts, ...forkOpts, prompt, fork: { id: last.id, file } });
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  };
+  return result;
 }
 
 export interface RunAllOptions extends Timeouts {
@@ -199,11 +236,12 @@ export async function runAll({ tasks, cwd = process.cwd(), copyToWorktree, ...op
       results.push({ prompt, status: "failed", branch, commits: [], iterations: [], ...(usage ? { usage } : {}), error });
       continue;
     }
-    const conflict = await mergeBack(cwd, branch, outcome.value.commits);
+    const { last: _last, ...done } = outcome.value;
+    const conflict = await mergeBack(cwd, branch, done.commits);
     results.push(
       conflict
-        ? { prompt, status: "conflict", branch, ...outcome.value, error: conflict }
-        : { prompt, status: "merged", branch, ...outcome.value },
+        ? { prompt, status: "conflict", branch, ...done, error: conflict }
+        : { prompt, status: "merged", branch, ...done },
     );
   }
   return results;

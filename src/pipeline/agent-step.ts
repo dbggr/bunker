@@ -17,6 +17,8 @@ export async function agentStep(o: {
   prompt: string;
   resumePrompt?: string;
   prev?: Session | undefined;
+  /** Continue from this session in a new one, leaving it unchanged. No fresh-session fallback: a fork that cannot start fails. */
+  fork?: Session | undefined;
   ctx: ExecContext;
   target: Pick<EventTarget, "onEvent" | "task" | "round" | "role">;
   dest: string;
@@ -35,7 +37,11 @@ export async function agentStep(o: {
     return r;
   };
   let res: { code: number; stdout: string } | undefined;
-  if (o.prev) {
+  if (o.fork) {
+    await restoreSession(o.sandbox, o.ctx.worktree, o.fork);
+    res = await exec(o.agent.command(o.prompt, o.mode, { fork: o.fork.id }));
+  }
+  if (o.prev && !res) {
     const fallback = (why: string) =>
       emit(o.target.onEvent, { type: "note", ...(o.target.task !== undefined ? { task: o.target.task } : {}), ...(o.target.round !== undefined ? { round: o.target.round } : {}), ...(o.target.role ? { role: o.target.role } : {}), text: `could not resume session ${o.prev!.id} (${why}); starting a fresh session` });
     try {
