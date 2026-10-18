@@ -75,7 +75,8 @@ if [ "$1 $2" = "issue view" ]; then cat "${root}/issue-$3.json"; exit 0; fi
 if [ "$1 $2" = "issue edit" ] && [ -f "${root}/edit-fails" ]; then echo "network down" >&2; exit 1; fi
 if [ "$1 $2" = "issue edit" ]; then case "$*" in *in-progress*|*"--remove-label bunker:failed"*) exit 0;; esac; rm -f "${root}/q/$3.json"; exit 0; fi
 if [ "$1 $2" = "issue comment" ]; then shift 3; echo "COMMENT: $*" >> "${root}/comments.log"; exit 0; fi
-if [ "$1 $2" = "pr list" ] && [ -f "${root}/prlist.json" ]; then cat "${root}/prlist.json"; exit 0; fi
+if [ "$1 $2" = "pr list" ] && [ -f "${root}/prlist.json" ]; then cat "${root}/prlist.json"; [ -f "${root}/prlist-next.json" ] && mv "${root}/prlist-next.json" "${root}/prlist.json"; exit 0; fi
+if [ "$1 $2" = "pr view" ] && [ -f "${root}/prview.json" ]; then cat "${root}/prview.json"; exit 0; fi
 if [ "$1 $2" = "label create" ]; then exit 0; fi
 if [ "$1 $2" = "issue create" ]; then echo "https://github.com/o/r/issues/100"; exit 0; fi
 if [ "$1 $2" = "pr create" ]; then echo "https://github.com/o/r/pull/$(git rev-parse --abbrev-ref HEAD | tr '/' '-')"; exit 0; fi
@@ -216,6 +217,8 @@ describe("runWatch()", () => {
     expect(add).toBeGreaterThan(-1);
     expect(remove).toBeGreaterThan(add);
     expect(gh).not.toContain("bunker:failed");
+    // The PR landed and closed the issue: it must not keep bunker:queued.
+    expect(gh).toContain("issue edit 1 --remove-label bunker:queued");
   });
 
   test("in-progress is cleared and bunker:failed set on failure; a started run removes an old bunker:failed", async () => {
@@ -273,7 +276,7 @@ describe("runWatch()", () => {
     const gh = await Bun.file(join(root, "gh.log")).text();
     expect(gh).toContain("label create bunker:failed");
     expect(gh).toContain("issue edit 1 --remove-label bunker:queued --add-label bunker:failed");
-    expect(gh).not.toMatch(/issue edit 2 --remove-label bunker( |:queued)/);
+    expect(gh).not.toMatch(/issue edit 2 .*bunker:failed/);
     const comments = await Bun.file(join(root, "comments.log")).text();
     expect(comments).toMatch(/failed/);
     expect(comments).toContain("agent exited with 1");
@@ -641,6 +644,18 @@ describe("runWatch() shepherd stage", () => {
     // Merges are the shepherd's to notice, not the run's.
     expect(s.merged).toBe(0);
     expect(s.failed).toBe(0);
+  });
+
+  test("a PR the shepherd sees land drops bunker:queued from its issue", async () => {
+    const { repo, root } = await setup([]);
+    const head = (await Bun.$`git -C ${repo} rev-parse HEAD`.text()).trim();
+    await Bun.write(join(root, "prlist.json"), JSON.stringify([bunkerPr(1)]));
+    await Bun.write(join(root, "prlist-next.json"), "[]");
+    await Bun.write(join(root, "prview.json"), JSON.stringify({ state: "MERGED", mergeCommit: { oid: head }, headRefOid: head, baseRefName: "main", files: [] }));
+    const ctl = new AbortController();
+    const s = await runWatch({ ...base, shepherd: true, cwd: repo, agent: fakeAgent(), signal: ctl.signal, log: (l) => { if (/pass 2 /.test(l)) ctl.abort(); } });
+    expect(s.merged).toBe(1);
+    expect(await Bun.file(join(root, "gh.log")).text()).toContain("issue edit 1 --remove-label bunker:queued");
   });
 
   test("manual-merge mode: PRs end labelled bunker:awaiting-review with a notification, nothing is armed or merged", async () => {
