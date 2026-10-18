@@ -17,6 +17,10 @@ Images come in two layers:
 
 An implementer agent works from the issue (title, body and trusted comments). A reviewer agent then sees the full diff and either approves or lists required changes. Anything the reviewer changes is discarded. On changes requested, the implementer runs again with the feedback. This repeats for up to `--max-rounds` rounds (default 2). Not approved: nothing is pushed. The implementer resumes its own Claude session each round (the feedback is the new prompt) and across `--max-iterations`; reviewers always start fresh, and `--no-resume` turns it off. Session files are kept in `.bunker/sessions/<issue>/` (gitignored; `*.redacted.jsonl` copies for sharing). If a resume fails, bunker falls back to a fresh session.
 
+### Forking a session (library)
+
+`run()` returns a result with `fork(prompt, opts?)`: it starts a new run (own branch, own worktree) that continues from the parent run's last Claude session. Claude is asked to resume that session as a fork, so the child gets a new session id and the parent session is unchanged; fork the same result as often as you like, e.g. one expensive "read the codebase and plan" run followed by several children. `opts` override the parent's run options. Unlike a normal resume there is no fresh-session fallback: if the fork cannot start, the child fails. `fork` throws if the parent reported no session. Agents implement it through `Agent.command(prompt, mode, { fork: sessionId })`.
+
 ## Prompt templates
 
 The prompt for an issue comes from a template. A repo overrides the built-in one with `.bunker/prompts/issue.md` (read from the worktree, so it is whatever the base commit has). Two things are expanded, in one pass over the template:
