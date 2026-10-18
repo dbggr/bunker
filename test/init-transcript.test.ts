@@ -372,6 +372,39 @@ describe("step 6: merge safety", () => {
     expect(await w.log()).not.toContain("rulesets --method POST");
     expect(s.asked.some((q) => /ruleset/i.test(q))).toBe(false);
   });
+  const phpCi = "name: CI\non:\n  pull_request:\njobs:\n  phpunit:\n    runs-on: ubuntu-latest\n    steps:\n      - run: vendor/bin/phpunit\n  lint:\n    name: Code style\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n";
+  const existingCi = async (extra: Record<string, string> = {}) =>
+    repoWith({ "package.json": "{}", ".github/workflows/ci.yml": phpCi }, { files: { "repo.json": JSON.stringify({ default_branch: "main", allow_auto_merge: true }), "rules.json": "[]", "labels.json": JSON.stringify([{ name: "bunker:queued" }]), ...extra } });
+  test("existing CI with differently named jobs: the ruleset requires those jobs, not `test`", async () => {
+    const w = await existingCi({ "check-runs.json": JSON.stringify({ check_runs: [{ name: "phpunit" }, { name: "Code style" }] }) });
+    const s = scripted();
+    await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io, sandbox: fakeSandbox().sandbox });
+    expect(await w.log()).toContain("gh api repos/o/r/rulesets --method POST");
+    expect(s.asked.some((q) => /ruleset/.test(q) && q.includes("`phpunit`") && q.includes("`Code style`") && !q.includes("`test`"))).toBe(true);
+    expect(s.text()).toContain("requiring `phpunit`, `Code style`");
+  });
+  test("a required context that never reported on a recent commit: no ruleset is created", async () => {
+    const w = await existingCi({ "check-runs.json": JSON.stringify({ check_runs: [{ name: "something else" }] }) });
+    const s = scripted();
+    await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io, sandbox: fakeSandbox().sandbox });
+    expect(await w.log()).not.toContain("rulesets --method POST");
+    expect(s.text()).toContain("hasn't reported");
+    expect(s.text()).toMatch(/Still to do:[\s\S]*no ruleset/);
+  });
+  test("classic branch protection already requires a check: no ruleset, and it says which", async () => {
+    const w = await existingCi({ "protection.json": JSON.stringify({ strict: false, contexts: ["phpunit"], checks: [{ context: "phpunit" }] }) });
+    const s = scripted();
+    await runInit({ cwd: w.repo, env: w.env, yes: false, io: s.io, sandbox: fakeSandbox().sandbox });
+    expect(await w.log()).not.toContain("rulesets --method POST");
+    expect(s.text()).toContain("already requires `phpunit`");
+    expect(s.asked.some((q) => /ruleset/i.test(q))).toBe(false);
+  });
+  test("--yes with an already-required ruleset check is unaffected", async () => {
+    const w = await existingCi({ "rules.json": JSON.stringify([{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "phpunit" }] } }]) });
+    const s = scripted();
+    await runInit({ cwd: w.repo, env: w.env, yes: true, io: s.io, sandbox: fakeSandbox().sandbox });
+    expect(await w.log()).not.toContain("rulesets --method POST");
+  });
   test("--yes changes no repo setting and opens no PR, but lists the clicks", async () => {
     const w = await redRepo();
     const s = scripted();
