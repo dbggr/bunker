@@ -48,6 +48,9 @@ describe("doctor", () => {
     expect(out).toContain("✗");
     expect(out).toContain("claude setup-token");
     expect(out).toContain("gh label create discovered");
+    const aw = r.checks.find((c) => c.id === "label-bunker:awaiting-review");
+    expect(aw?.ok).toBe(false);
+    expect(aw?.required).toBe(false);
     for (const id of ["label-severity:high", "label-severity:medium"]) {
       const c = r.checks.find((c) => c.id === id);
       expect(c?.ok).toBe(false);

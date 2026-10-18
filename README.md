@@ -15,7 +15,6 @@ It checks prerequisites first (git and bun to build; docker, gh logged in, and c
 ## Quickstart
 
 ```sh
-bun run build && install -m 755 dist/bunker ~/.local/bin/bunker
 claude setup-token                  # put the token in ~/.config/bunker/.env
 cd your-repo                        # add .bunker/config.toml (setup, verify)
 bunker issue 12                   # one issue to a PR
@@ -28,7 +27,10 @@ bunker queue --merge              # everything labelled `bunker:queued`
 - Implement, review, fix rounds, then verify in the sandbox
 - PR with GitHub auto-merge and a landing check
 - Work queue by label, and unattended `bunker watch` with optional daily and monthly spend caps
-- Opt-in `--parallel <n>` for `bunker queue --merge` and `bunker watch`: n issues at once, merges still serial and each branch updated to the latest main and re-verified first. The trade-off is more concurrent spend and rework when issues touch the same files; 2 is a good choice
+- Opt-in `--parallel <n>`: n issues at once, merges still serial and each branch updated to the latest main and re-verified first (2 is a good choice)
+- A PR shepherd (`bunker watch`, `bunker shepherd`) fixes red CI, updates behind branches and resolves conflicts; `bunker status` shows the watcher, queue and failures
+- Manual-merge mode: PRs stay open for you to merge while bunker keeps them green
+- Context and spec files in the prompts, a verify fix round, and per-role skills
 - Agents file out-of-scope findings as `discovered` issues for human triage
 - Scoped GitHub token and output redaction; agents never see GitHub credentials
 - Live multi-repo view with `bunker ui`
@@ -43,15 +45,14 @@ Before v1.0 bunker will not build:
 - other agent providers (Claude only)
 - an interactive mode
 - cloud or reusable sandboxes
-- prompt templating
-- host hooks
+- host hooks or plugins: the only code that runs on the host is a `` !`cmd` `` line in `.bunker/prompts/issue.md` (read from the default branch, run without tokens)
 - npm publishing (the package stays `@dbggr/bunker` and private)
 
 ## Docs
 
 - [Getting started](docs/getting-started.md)
 - [Concepts](docs/concepts.md)
-- [Security](docs/security.md): token handling, `.bunker/` changes need human review, `--no-sandbox` gives no isolation
+- [Security](docs/security.md): token handling, changes to `.bunker/`, `.github/`, `.claude/`, `CLAUDE.md` and `AGENTS.md` need human review, `--no-sandbox` gives no isolation
 - [Troubleshooting](docs/troubleshooting.md)
 - [CLI reference](docs/cli.md) (generated from `bunker --help`)
 - [Releasing](docs/release.md)

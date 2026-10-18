@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, type Agent } from "../src/index.ts";
-import { TRIAGE_MARKER, planActions, runTriage } from "../src/pipeline/triage.ts";
+import { TRIAGE_MARKER, planActions, runTriage, triageComment } from "../src/pipeline/triage.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -144,6 +144,12 @@ describe("runTriage()", () => {
     expect(r.triaged.map((t) => t.number)).toEqual([2]);
     expect((await writes()).map((c) => c[2])).toEqual(["2"]);
     expect(seen.prompt).not.toContain('#1: "A"');
+  });
+
+  test("the valid comment names bunker:queued, not bunker", () => {
+    const c = triageComment({ verdict: "valid", priority: "low", bug: false, evidence: "e" } as any);
+    expect(c).toContain("`bunker:queued`");
+    expect(c).not.toContain("`bunker` label");
   });
 
   test("an issue already labelled bunker is not triaged", async () => {

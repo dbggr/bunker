@@ -101,7 +101,7 @@ export function triageComment(v: TriageVerdict): string {
     fixed: "**bunker triage: fixed.**",
     "as-designed": "**bunker triage: working as designed.**",
     duplicate: `**bunker triage: duplicate of #${v.duplicate_of}.**`,
-    valid: `**bunker triage: still valid.** Suggested priority: \`${v.priority}\`${v.bug ? ", a bug" : ""}. Queueing stays with a maintainer: add the \`bunker\` label to work it.`,
+    valid: `**bunker triage: still valid.** Suggested priority: \`${v.priority}\`${v.bug ? ", a bug" : ""}. Queueing stays with a maintainer: add the \`bunker:queued\` label to work it.`,
   }[v.verdict];
   return `${TRIAGE_MARKER}\n${head}\n\nEvidence: ${neutralise(v.evidence).trim()}`;
 }
@@ -249,6 +249,6 @@ export function formatTriage(r: TriageResult, mode: TriageMode): string[] {
     if (mode === "dry") lines.push(`  ${t.comment.replace(TRIAGE_MARKER, "").trim().replaceAll("\n", "\n  ")}`);
   }
   for (const u of r.untouched) lines.push(`bunker: #${u.number} left untouched: ${u.reason}`);
-  if (mode === "dry" && r.triaged.length) lines.push("bunker: dry run, nothing changed; --yes comments, closes and labels valid issues bunker + priority + bug");
+  if (mode === "dry" && r.triaged.length) lines.push("bunker: dry run, nothing changed; --yes comments, closes and labels valid issues bunker:queued + priority + bug");
   return lines;
 }

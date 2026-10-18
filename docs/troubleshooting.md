@@ -23,8 +23,20 @@ Each entry is symptom, cause, fix. The run log (`.bunker/runs/<N>-<timestamp>.lo
 ## `ci-timeout`
 
 - **Symptom**: status `ci-timeout`; the PR is still open.
-- **Cause**: not merged within `--ci-timeout` minutes (default 30). Checks are still running, failing, or waiting on a runner.
+- **Cause**: not merged within `--ci-timeout` minutes (default 30). This only happens with `bunker issue`/`bunker queue --merge`; under `bunker watch` the shepherd waits for the merge and there is no `ci-timeout`. Checks are still running, failing, or waiting on a runner.
 - **Fix**: look at the PR's checks. Auto-merge is still armed, so GitHub may merge it later. For slow CI raise `--ci-timeout`. The worktree is kept; remove it with `git worktree remove` once the PR is dealt with.
+
+## `merge-failed: no required status check`
+
+- **Symptom**: status `merge-failed`; the error says the default branch has no required status check in its rulesets.
+- **Cause**: with no required check GitHub would merge the PR at once, so bunker refuses to arm auto-merge (#285). It reads **rulesets**; a classic branch protection rule can't be read with the scoped token.
+- **Fix**: add a ruleset on the default branch that requires a status check (Settings → Rules → Rulesets), then re-run. `bunker doctor` checks this.
+
+## `verify-failed`
+
+- **Symptom**: status `verify-failed`; nothing was pushed.
+- **Cause**: `verify` still failed after the fix round (the implementer gets the output and tries again, `verify_retries` times, default 1).
+- **Fix**: read the verify output in the run log. Raise `verify_retries`, fix the cause or the issue text, then re-run; the worktree and branch are kept.
 
 ## `idle-timeout`
 
@@ -42,7 +54,7 @@ Each entry is symptom, cause, fix. The run log (`.bunker/runs/<N>-<timestamp>.lo
 
 - **Symptom**: the agent or verify says `tsc: not found` or can't resolve modules.
 - **Cause**: a worktree is a fresh checkout without installed dependencies.
-- **Fix**: add the install to `.bunker/setup`, e.g. `bun install`. It runs before the agent and before verify. Commit it to the default branch.
+- **Fix**: put the install in `setup` in `.bunker/config.toml`, e.g. `setup = "bun install"`. It runs before the agent and before verify. Commit it to the default branch.
 
 ## Python (or another tool) not in the image
 

@@ -2,11 +2,11 @@
 
 ## Worktree per issue
 
-Each issue gets its own git worktree at `<repo>/.worktrees/<N>-<slug>` on a branch `fix/<N>-<slug>` (issue labelled `bug`) or `feature/<N>-<slug>`, created from freshly fetched origin. Your checkout and branch are never touched. `.worktrees/` is excluded via `.git/info/exclude`. Worktrees are removed after a merge and kept when a run fails, so you can inspect them. Leftovers pile up (interrupted runs, merged or closed issues): `bunker clean` lists them (a dry run), `bunker clean --yes` removes them; `--logs <days>` also prunes old run logs and `--images` unused `bunker-repo-*` images. Work not on origin's default branch is first kept under a `bunker/stale/<name>-<timestamp>` tag, and only bunker's own names are touched. `bunker issue`, `bunker queue` and `bunker watch` run the same worktree and branch cleanup at start-up, and Ctrl-C removes the current run's empty `/tmp/bunker-*` worktree and branch. `clean` exits 2 while a `bunker watch` for the repo is running, unless `--force`.
+Each issue gets its own git worktree at `<repo>/.worktrees/<N>-<slug>` on a branch `fix/<N>-<slug>` (issue labelled `bug`) or `feature/<N>-<slug>`, created from freshly fetched origin. Your checkout and branch are never touched. `.worktrees/` is excluded via `.git/info/exclude`. Worktrees are removed after a merge and kept when a run fails, so you can inspect them. Sessions (`.bunker/sessions/<issue>/`) are removed once their issue closes, and logs older than `clean.logs_days` (default 30) are pruned at start-up. Leftovers pile up (interrupted runs, merged or closed issues): `bunker clean` lists them (a dry run), `bunker clean --yes` removes them; `--logs <days>` also prunes old run logs and `--images` unused `bunker-repo-*` images. Work not on origin's default branch is first kept under a `bunker/stale/<name>-<timestamp>` tag, and only bunker's own names are touched. `bunker issue`, `bunker queue` and `bunker watch` run the same worktree and branch cleanup at start-up, and Ctrl-C removes the current run's empty `/tmp/bunker-*` worktree and branch. `clean` exits 2 while a `bunker watch` for the repo is running, unless `--force`.
 
 ## Docker sandbox and images
 
-The agent runs in a throwaway docker container with the worktree (and the repo's `.git`, mounted at its host path) as the working directory. The container runs as your uid, and holds the Claude token but no GitHub credentials. `--no-sandbox` runs the agent on the host instead.
+The agent runs in a throwaway docker container with the worktree (and the repo's `.git`, mounted at its host path) as the working directory. The container runs as your uid, and holds the Claude token but no GitHub credentials. Agent steps run with `--network host`, so the container shares the host's network and can reach services on the host's localhost (see [security.md](security.md)). Isolated steps (verify and `check`, by default) run with no network. `--no-sandbox` runs the agent on the host instead.
 
 Images come in two layers:
 
@@ -15,7 +15,7 @@ Images come in two layers:
 
 ## Implement, review, fix
 
-An implementer agent works from the issue (title, body and trusted comments). A reviewer agent then sees the full diff and either approves or lists required changes. Anything the reviewer changes is discarded. On changes requested, the implementer runs again with the feedback. This repeats for up to `--max-rounds` rounds (default 2). Not approved: nothing is pushed. The implementer resumes its own Claude session each round (the feedback is the new prompt) and across `--max-iterations`; reviewers always start fresh, and `--no-resume` turns it off. Session files are kept in `.bunker/sessions/<issue>/` (gitignored; `*.redacted.jsonl` copies for sharing). If a resume fails, bunker falls back to a fresh session.
+An implementer agent works from the issue (title, body and trusted comments). A reviewer agent then sees the full diff and either approves or lists required changes. Anything the reviewer changes is discarded. On changes requested, the implementer runs again with the feedback. This repeats for up to `--max-rounds` rounds (default 2). Not approved: nothing is pushed. If `check` is set in `config.toml` (e.g. a typecheck), it runs isolated before each review and its output goes into the reviewer prompt. The implementer resumes its own Claude session each round (the feedback is the new prompt) and across `--max-iterations`; reviewers always start fresh, and `--no-resume` turns it off. Session files are kept in `.bunker/sessions/<issue>/` (gitignored; `*.redacted.jsonl` copies for sharing) until the issue closes. If a resume fails, bunker falls back to a fresh session.
 
 ### Forking a session (library)
 
@@ -23,7 +23,7 @@ An implementer agent works from the issue (title, body and trusted comments). A 
 
 ## Prompt templates
 
-The prompt for an issue comes from a template. A repo overrides the built-in one with `.bunker/prompts/issue.md` (read from the worktree, so it is whatever the base commit has). Two things are expanded, in one pass over the template:
+The prompt for an issue comes from a template. A repo overrides the built-in one with `.bunker/prompts/issue.md` (read from origin's default branch, never the worktree). Two things are expanded, in one pass over the template:
 
 - `{{KEY}}` is replaced by a value. Built-ins: `ISSUE_NUMBER`, `ISSUE_TITLE`, `BRANCH`, `REPO`, `BASE`, plus `ISSUE` (the fenced issue title and body), `COMMENTS` (trusted comments) and `CONVENTION` (the follow-up reporting instructions). An unknown key is an error and fails the run.
 - `` !`cmd` `` is replaced by the output of `cmd`, run with bash on the host, in the worktree, with a 30 second timeout. It gets the isolated env: no GitHub or Claude tokens. A command that fails or times out fails the run.
@@ -32,15 +32,17 @@ Only the template is ever expanded. Issue text and comments are substituted as v
 
 ## Verify in the sandbox
 
-After approval, `.bunker/verify` (or `--verify "<cmd>"`) runs in the worktree inside the sandbox, after `.bunker/setup`. A failure stops the run before anything is pushed. `--verify-on-host` opts out; see [security.md](security.md).
+After approval, `verify` from `.bunker/config.toml` (or `--verify "<cmd>"`) runs in the worktree inside the sandbox, after `setup`. A failure first gets a fix round: the implementer gets the output and tries again, up to `verify_retries` times (default 1; 0 turns it off), and verify then runs again. If it still fails the run ends as `verify-failed` before anything is pushed. `--verify-on-host` opts out; see [security.md](security.md).
 
 ## PR, auto-merge and the landing check
 
-bunker pushes the branch and opens a PR with `Closes #N`. With `--merge` it first reads the default branch's repository rulesets and refuses (`merge-failed`) unless a required status check is set (or if the lookup fails), because without one GitHub merges at once. Then it asks GitHub for auto-merge (squash), so GitHub merges once the required checks pass. bunker never reads CI itself. It polls the PR until it is merged or closed, or `--ci-timeout` minutes pass. After the merge it checks that the files the branch changed are identical on `origin/<default>` and the branch tip (the landing check), then cleans up.
+bunker pushes the branch and opens a PR with `Closes #N`. With `--merge` it first reads the default branch's repository rulesets and refuses (`merge-failed`) unless a required status check is set (or if the lookup fails), because without one GitHub merges at once. Then it asks GitHub for auto-merge (squash), so GitHub merges once the required checks pass. With `--merge` the run itself does not read CI; it polls the PR until it is merged or closed, or `--ci-timeout` minutes pass. After the merge it checks that the files the branch changed are identical on `origin/<default>` and the branch tip (the landing check), then cleans up.
 
 Under `bunker watch` the run ends as soon as the PR is open and auto-merge is armed (`awaiting-merge`), which frees its `--parallel` slot; the shepherd (below) then waits for the merge, so the wait survives a restart, and `--ci-timeout` is not used. With `bunker issue`/`bunker queue --merge` and no watcher, the run still waits itself.
 
-Outcomes: `idle-timeout` (an agent went quiet, or setup/verify ran too long; worktree and branch kept), `merged`, `ci-timeout` (PR left open, auto-merge still armed), `merge-failed`, `merge-unverified` (merged, but files differ on the default branch), plus `rejected`, `failed`, `conflict`, `verify-failed` and `pr-opened` (no `--merge`).
+Under `bunker watch` the shepherd does read CI: the required checks, and the logs of failed jobs (see below).
+
+Outcomes: `idle-timeout` (an agent went quiet, or setup/verify ran too long; worktree and branch kept), `merged`, `ci-timeout` (PR left open, auto-merge still armed), `merge-failed`, `merge-unverified` (merged, but files differ on the default branch), plus `rejected`, `failed`, `conflict`, `verify-failed`, `bad-output` (an agent's report couldn't be parsed), `blocked`, `already-in-progress`, `paused-usage-limit` (usage limit hit; resumes later), `needs-review` (a human must review the PR), `awaiting-merge` (auto-merge armed under `bunker watch`), `awaiting-review` (manual-merge mode) and `pr-opened` (no `--merge`).
 
 ## Labels
 
@@ -70,7 +72,7 @@ Every issue run writes a redacted log to `<repo>/.bunker/runs/<N>-<timestamp>.lo
 
 - a **red required check**: the failed job's log goes to a fix agent in a worktree of the PR branch; after setup and verify pass the fix is pushed. At most 3 attempts (counted from hidden markers in the PR's comments), then the PR and its issue get `bunker:failed`, a comment and a notification. Reading the log needs Actions: Read on the token; without it the PR is handed to a human the same way;
 - **behind** its base: the branch is updated through GitHub;
-- a **conflict**: an agent merges the base into the branch in the PR's worktree and resolves it, verify runs, and if the diff changed a reviewer checks it again before the push;
+- a **conflict**: an agent merges the base into the branch in the PR's worktree and resolves it (also at most 3 attempts), verify runs, and if the diff changed a reviewer checks it again before the push;
 - a **"changes requested" review** from the owner or an admin/maintainer: the review and its inline comments go to the agent, the result is pushed and the review is re-requested.
 
 The shepherd never merges. PRs labelled `bunker:failed` or `bunker:review`, and drafts, are left alone; removing `bunker:failed` gives a PR a fresh set of attempts.

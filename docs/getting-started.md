@@ -7,11 +7,11 @@ After installing (step 1), run `bunker init` in the repo: it checks everything, 
 ## 1. Install
 
 ```sh
-bun run build && install -m 755 dist/bunker ~/.local/bin/bunker
+curl -fsSL https://raw.githubusercontent.com/dbggr/tool-bunker/main/install.sh | sh
 bunker --version
 ```
 
-The base image's Dockerfile is embedded in the binary and built on first use, so Docker (or Podman) must be running.
+`install.sh` checks the prerequisites (git, bun, docker, gh, claude), builds the latest release tag into `~/.local/share/bunker` and links `~/.local/bin/bunker`; see the [README](../README.md#install). The base image's Dockerfile is embedded in the binary and built on first use, so Docker (or Podman) must be running.
 
 ## 2. Authenticate Claude
 
@@ -43,11 +43,11 @@ In the target repo:
 
   ```toml
   setup = "bun install"                     # runs in each worktree before the agent (worktrees have no node_modules)
-  verify = "bun test && bun run typecheck"  # must pass before anything is pushed
+  verify = "bun test && bun run typecheck"  # must pass before anything is pushed (or pass --verify)
   copy = [".env"]                           # optional: gitignored files your tests need, copied into each worktree
   ```
 
-  `verify` is read from origin's default branch, so an agent cannot edit it for its own run, and it runs in the sandbox. Copied files are never committed and `.env*` values are redacted from logs; paths outside the repo are rejected. Further keys (`[models]`, `[watch]`, `[merge]`, `[queue]`) are listed in [cli.md](cli.md). The older `.bunker/setup`, `.bunker/verify` and `.bunker/copy` files still work but are deprecated. `bunker doctor` shows the effective value and source of every key.
+  `verify` is read from origin's default branch, so an agent cannot edit it for its own run, and it runs in the sandbox. Copied files are never committed and `.env*` values are redacted from logs; paths outside the repo are rejected. Other top-level keys: `verify_network` (give sandboxed verify the network), `verify_retries` (fix rounds when verify fails, default 1), `check` (a command such as a typecheck, run isolated before each review, its output goes to the reviewer) and `context` (repo files inlined into the prompts). Tables: `[models]`, `[skills]`, `[watch]` (including `triage_every`), `[merge]` (`merge.mode = "manual"` leaves PRs for you to merge), `[clean]` (`logs_days`) and `[notify]`; all are listed in [cli.md](cli.md). Spend caps for every repo, `max_cost_day` and `max_cost_month`, go in `~/.config/bunker/config.toml`. The older `.bunker/setup`, `.bunker/verify` and `.bunker/copy` files still work but are deprecated. `bunker doctor` shows the effective value and source of every key.
 - `.bunker/Dockerfile` (optional): adds the repo's toolchain to the agent image. Start with `FROM bunker-claude`. See [concepts.md](concepts.md).
 - On GitHub: enable "Allow auto-merge", and make a CI check required on the default branch. `--merge` hands the merge to GitHub, which merges only when the required checks pass; without auto-merge, or when the repository rulesets (`GET rules/branches/<default>`) show no required status check or cannot be read, bunker refuses (`merge-failed`) rather than merge immediately. Require the check with a repository **ruleset** (Settings → Rules → Rulesets): the fine-grained token can read rulesets but not classic branch protection, which needs Administration (see [security.md](security.md)).
 
@@ -61,7 +61,7 @@ From the repo's main checkout:
 bunker issue 12
 ```
 
-bunker implements issue 12 in a worktree, reviews it, runs `.bunker/verify` and opens a PR. Read the PR before trusting the loop.
+bunker implements issue 12 in a worktree, reviews it, runs `verify` and opens a PR. Read the PR before trusting the loop.
 
 ## 6. Scale up
 
@@ -77,4 +77,4 @@ Or leave it running unattended:
 bunker watch --for 5h --max-cost-day 10
 ```
 
-`bunker watch` implies `bunker queue --merge`, so it needs `.bunker/verify`. Watch the run with `bunker ui`. Every flag is in [cli.md](cli.md); if something goes wrong see [troubleshooting.md](troubleshooting.md).
+`bunker watch` implies `bunker queue --merge`, so it needs `verify` in `config.toml`. Watch the run with `bunker ui`. Every flag is in [cli.md](cli.md); if something goes wrong see [troubleshooting.md](troubleshooting.md).

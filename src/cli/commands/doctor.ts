@@ -6,7 +6,7 @@ import { AUTH_VARS, loadBunkerEnv } from "../../core/env.ts";
 import { DEFAULT_MODEL_LABEL, resolveModels } from "../../agents/models.ts";
 import { ConfigError, effectiveSettings, formatValue, loadRepoConfig } from "../../core/config.ts";
 import { redact } from "../../core/redact.ts";
-import { FAILED_LABEL, IN_PROGRESS_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
+import { AWAITING_REVIEW_LABEL, FAILED_LABEL, IN_PROGRESS_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
 import { SKILL_ROLES, SkillError, resolveSkills, skillPaths } from "../../core/skills.ts";
 import { PRIORITY_LABELS } from "../../core/priority.ts";
 
@@ -17,7 +17,9 @@ export const OLD_LABELS: Record<string, string> = { bunker: QUEUED_LABEL, "bunke
 
 /** Filed on follow-ups and audit findings; filing falls back to no severity label without them, so they are optional. */
 export const SEVERITY_LABELS = ["severity:high", "severity:medium"] as const;
-export const LABELS = [QUEUED_LABEL, IN_PROGRESS_LABEL, FAILED_LABEL, REVIEW_LABEL, "discovered", "bunker-blocked", ...PRIORITY_LABELS.map((p) => p.name), ...SEVERITY_LABELS] as const;
+/** Only manual-merge mode applies this one; it is created by bunker on first use, so it is optional too. */
+export const OPTIONAL_LABELS: readonly string[] = [...SEVERITY_LABELS, AWAITING_REVIEW_LABEL];
+export const LABELS = [QUEUED_LABEL, IN_PROGRESS_LABEL, FAILED_LABEL, REVIEW_LABEL, AWAITING_REVIEW_LABEL, "discovered", "bunker-blocked", ...PRIORITY_LABELS.map((p) => p.name), ...SEVERITY_LABELS] as const;
 
 /** Total bytes of the files under `dir` (0 if missing); symlinks are not followed. */
 function dirSize(dir: string): number {
@@ -218,7 +220,7 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
     } catch {}
     for (const l of LABELS) {
       const old = Object.keys(OLD_LABELS).find((o) => OLD_LABELS[o] === l);
-      add({ id: `label-${l}`, group: "github", label: `label ${l}`, ok: !!names?.includes(l), required: !(SEVERITY_LABELS as readonly string[]).includes(l), fix: old && names?.includes(old) ? `gh label edit ${old} --name ${l} --repo ${repo!.slug} (keeps it on existing issues)` : `gh label create ${l} --repo ${repo!.slug}` });
+      add({ id: `label-${l}`, group: "github", label: `label ${l}`, ok: !!names?.includes(l), required: !OPTIONAL_LABELS.includes(l), fix: old && names?.includes(old) ? `gh label edit ${old} --name ${l} --repo ${repo!.slug} (keeps it on existing issues)` : `gh label create ${l} --repo ${repo!.slug}` });
     }
     for (const [old, now] of Object.entries(OLD_LABELS)) {
       if (names?.includes(old)) add({ id: `old-label-${old}`, group: "github", label: `old label ${old} (no longer used)`, ok: false, required: false, fix: `gh label edit ${old} --name ${now} --repo ${repo!.slug}` });
