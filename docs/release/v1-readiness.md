@@ -95,8 +95,8 @@ Thresholds over a **14-day `--watch` soak** on tool-bunker plus at least one rep
 | Runs failing on state left by a crash or restart | 0 | 0 | ✓ |
 
 **The two levers that move most of the ✗ rows:**
-1. **Verify feedback.** When verify fails, give the failure to the implementer for one fix round instead of ending the run. In the recent window that alone turns 5 of 8 failures into retries, which takes success above 90% and removes most re-queues.
-2. **Test hygiene gates.** A guard test that no test reaches the real Docker daemon, notifier or network (the #293/#295 class), plus running the reviewer with `bun run typecheck` output in its prompt.
+1. **Verify feedback (#336).** When verify fails, give the failure to the implementer for one fix round instead of ending the run. In the recent window that alone turns 5 of 8 failures into retries, which takes success above 90% and removes most re-queues.
+2. **Test hygiene gates (#337).** A guard test that no test reaches the real Docker daemon, notifier or network (the #293/#295 class), plus running the reviewer with `bun run typecheck` output in its prompt.
 
 ## 5. Release contract: what 1.0 freezes
 
@@ -105,15 +105,15 @@ After 1.0.0, removing or renaming any of these needs 2.0:
 - **CLI:** 13 entry points (`init`, `doctor`, `status`, `clean`, `triage`, `ui`, `self-update`, plus `--issue`/`--queue`/`--watch`/`--audit`/`--review`/`--task`) and 45 flags (`docs/cli.md`)
 - **Repo config** (`.bunker/config.toml`): `setup verify verify_network copy models.* watch.* merge.ci_timeout clean.logs_days notify.*` (18 keys)
 - **User config** (`~/.config/bunker/config.toml`): `max-cost-day max-cost-month allow-labelers`
-- **Labels:** `bunker`, `bunker-failed`, `bunker-blocked`, `bunker-exclude`, `needs-human-review`, `discovered`, `priority:*`, `severity:*`
+- **Labels** (after #312): `bunker:queued`, `bunker:in-progress`, `bunker:failed`, `bunker:review`, plus `bunker-blocked`, `bunker-exclude`, `discovered`, `priority:*`, `severity:*`. The old `bunker`/`bunker-failed`/`needs-human-review` names are accepted for one release
 - **Library exports** (`src/index.ts`): 20 export lines
 - **Files:** `.bunker/` layout (`config.toml`, `Dockerfile`, `prompts/*.md`, `runs/`, `sessions/`), the `.env` locations, and the PR body format other tools may parse
 
 **Fix before freezing** (each would be a breaking change after 1.0):
-- **Config naming is inconsistent:** the user config is kebab-case (`max-cost-day`) and the repo config snake_case (`watch.max_cost_day`). Pick one and accept the other for a release.
-- **The CLI mixes two styles:** subcommands (`bunker status`, `bunker clean`) next to mode flags (`bunker --issue 7`, `bunker --watch`). Decide whether 1.0 is `bunker issue 7` / `bunker watch`, with the flags kept as aliases, or keeps the flags.
-- **Internal plumbing is exported:** `worktreeAdmin`, `worktreeAdminLockPath`, `runSetup`, `buildBaseImage`, `hardenHostGit`, `IdleTimeout` and the `DEFAULT_*_MS` constants. Trim the library surface to what an embedder needs (`run`, `runAll`, `review`, the agent and sandbox factories, and their types).
-- **Labels:** #312 renames all of them. Land it before 1.0 or not at all.
+- **Config naming is inconsistent (#338):** the user config is kebab-case (`max-cost-day`) and the repo config snake_case (`watch.max_cost_day`). Pick one and accept the other for a release.
+- **The CLI mixes two styles (#340, your decision):** subcommands (`bunker status`, `bunker clean`) next to mode flags (`bunker --issue 7`, `bunker --watch`). Decide whether 1.0 is `bunker issue 7` / `bunker watch`, with the flags kept as aliases, or keeps the flags.
+- **Internal plumbing is exported (#339):** `worktreeAdmin`, `worktreeAdminLockPath`, `runSetup`, `buildBaseImage`, `hardenHostGit`, `IdleTimeout` and the `DEFAULT_*_MS` constants. Trim the library surface to what an embedder needs (`run`, `runAll`, `review`, the agent and sandbox factories, and their types).
+- **Labels:** #312 landed (PR #331). `bunker-blocked` and `bunker-exclude` are still outside the `bunker:` namespace; move them too, or accept the mix, before the freeze.
 - **Identity:** #286 (App or bot) changes the token setup. Only blocking if 1.0 is public.
 
 ## 6. Verification that doesn't rely on the author or the user
@@ -130,29 +130,50 @@ After 1.0.0, removing or renaming any of these needs 2.0:
 
 ### Gate mutation results
 
-_Filled in from `bun scripts/mutate-gates.ts`._
+From `bun scripts/mutate-gates.ts`: each gate is broken on its own, then the suite and typecheck run. The first 14 ran on 8d85062; the two #318 gates ran on bb95d68, after #318 merged, with every earlier pattern still matching once.
+
+| Gate broken | Result |
+|---|---|
+| human-review paths (`.bunker/`, `.github/`) | caught (5 tests fail) |
+| human-review skips `.claude/`, `CLAUDE.md`, `AGENTS.md` | caught (5) |
+| human-review fails open on a diff error | caught (**1**) |
+| reviewer reads the agent's `.claude/` and `CLAUDE.md` | caught (3) |
+| required check missing → still arm auto-merge | caught (5) |
+| rulesets unreadable → still arm auto-merge | caught (2) |
+| git guard ignores changed hooks/config | caught (4) |
+| host git keeps repo hooks | caught (3) |
+| git common dir mounted writable | caught (2) |
+| isolated verify gets the network | caught (2) |
+| isolated env keeps Claude credentials | caught (3) |
+| redaction skips secret values | caught (5) |
+| label gate skips the permission check | caught (7) |
+| label gate allows edits after labelling | caught (3) |
+| every comment trusted | caught (5) |
+| prompt template from the worktree | caught (**1**) |
+
+**16 of 16 caught.** Two gates hang on a single test each (the fail-closed diff path and the template source); a second test for each is cheap insurance before a refactor. Re-run the whole table on each release candidate: a pattern that stops matching shows up as `STALE`.
 
 ## 7. Cut list
 
 | Issue | Verdict | Why |
 |---|---|---|
-| #318 `.claude/` review gate | done (PR #328) | security |
-| #315 security docs | **blocks 1.0** | the security model must be documented as built |
-| #312 `bunker:*` labels | **blocks 1.0** (or drop) | contract change: land it before the freeze or never |
-| (new) config key naming | **blocks 1.0** | contract |
-| (new) library export trim | **blocks 1.0** | contract |
-| (new) CLI shape decision | **blocks 1.0** | contract; your decision |
-| (new) verify feedback round | **blocks 1.0** | the bar: success rate and interventions |
-| (new) test hygiene guard | **blocks 1.0** | the bar: escapes |
-| #308 install script | **blocks 1.0** | needed for the clean-install check |
-| #322 audit test noise | blocks 1.0 (small) | test hygiene |
+| #318 `.claude/` review gate | **done** (PR #328) | security |
+| #315 security docs | **done** (PR #332) | the security model documented as built |
+| #312 `bunker:*` labels | **done** (PR #331) | contract |
+| #322 audit test noise | **done** | test hygiene |
+| #308 install script | **done** | needed for the clean-install check |
+| #319 context/spec files | **done** (PR #333) | additive |
+| #338 config key naming | **blocks 1.0** | contract |
+| #339 library export trim | **blocks 1.0** | contract |
+| #340 CLI shape | **blocks 1.0** | contract; your decision |
+| #336 verify feedback round | **blocks 1.0** | the bar: success rate and interventions |
+| #337 test hygiene guard | **blocks 1.0** | the bar: escapes |
 | #286 bot identity | blocks 1.0 **only if public** | changes token setup |
 | #283 PR shepherd | after 1.0 | additive (opt-in), large; the CI-timeout class is gone without it |
-| #319 context/spec files | after 1.0 | additive config |
 | #317 skills | after 1.0 | additive config |
 | #327 live cost + budget in the hub | after 1.0 | UI only |
 | #309 release binaries | after 1.0 (public) | distribution |
 | #289 demo video | after 1.0 | by design |
 | #280 session fork | **drop** | no use yet; re-file when one appears |
 
-**Order:** contract fixes (naming, exports, CLI shape, #312), then the bar levers (verify feedback, hygiene guard), then #315 and #308. After that, start the 14-day soak plus the benchmark, chaos and red-team checks; tag 1.0.0 when the bar holds for the whole window.
+**Order:** decide #340, then #338 and #339 (contract), #336 and #337 (the bar). After that, start the 14-day soak plus the benchmark, chaos and red-team checks; tag 1.0.0 when the bar holds for the whole window.
