@@ -105,7 +105,7 @@ After 1.0.0, removing or renaming any of these needs 2.0:
 
 - **CLI:** 13 entry points (`init`, `doctor`, `status`, `clean`, `triage`, `ui`, `self-update`, plus `--issue`/`--queue`/`--watch`/`--audit`/`--review`/`--task`) and 45 flags (`docs/cli.md`)
 - **Repo config** (`.bunker/config.toml`): `setup verify verify_network copy models.* watch.* merge.ci_timeout clean.logs_days notify.*` (18 keys)
-- **User config** (`~/.config/bunker/config.toml`): `max-cost-day max-cost-month allow-labelers`
+- **User config** (`~/.config/bunker/config.toml`): `max_cost_day max_cost_month allow_labelers` (the kebab-case spellings are still read for one release, with a deprecation warning)
 - **Labels** (after #312): `bunker:queued`, `bunker:in-progress`, `bunker:failed`, `bunker:review`, plus `bunker-blocked`, `bunker-exclude`, `discovered`, `priority:*`, `severity:*`. The old `bunker`/`bunker-failed`/`needs-human-review` names are accepted for one release
 - **Library exports** (`src/index.ts`): 20 export lines
 - **Files:** `.bunker/` layout (`config.toml`, `Dockerfile`, `prompts/*.md`, `runs/`, `sessions/`), the `.env` locations, and the PR body format other tools may parse
