@@ -16,6 +16,8 @@ const { values } = parseArgs({ options: { only: { type: "string" } } });
 const MUTATIONS: { name: string; file: string; find: string; replace: string }[] = [
   { name: "human-review paths (.bunker/.github)", file: "src/pipeline/steps/pr.ts", find: "/^\\.(bunker|github)\\//.test(f)", replace: "false" },
   { name: "human-review fails open on a diff error", file: "src/pipeline/steps/pr.ts", find: "const sensitive = diff.exitCode === 0 ?", replace: "const sensitive = true ?" },
+  { name: "human-review skips .claude/, CLAUDE.md, AGENTS.md", file: "src/pipeline/steps/pr.ts", find: " || STEERING.test(f)", replace: "" },
+  { name: "reviewer reads the agent's .claude/ and CLAUDE.md", file: "src/pipeline/review.ts", find: "undoSteering = await restoreSteering(wt.path, base);", replace: "undoSteering = async () => {};" },
   { name: "required check missing → still arm auto-merge", file: "src/pipeline/steps/pr.ts", find: "if (!hasRequiredCheck) return fail(", replace: "if (false) return fail(" },
   { name: "rulesets unreadable → still arm auto-merge", file: "src/pipeline/steps/pr.ts", find: "if (rules.exitCode !== 0) return fail(", replace: "if (false) return fail(" },
   { name: "git guard ignores changed hooks/config", file: "src/sandboxes/git-guard.ts", find: "if (changed.length) {", replace: "if (false) {" },
