@@ -7,10 +7,11 @@ export function claudeCode(opts: { model?: string; attribution?: boolean; json?:
     ...(opts.model ? { model: opts.model } : {}),
     ...(opts.json ? { parse: parseClaudeJson, parseLine: parseClaudeStreamLine } : {}),
     ...(opts.json ? { sessionId: findSessionId, usageLimit: findUsageLimit } : {}),
-    command: (prompt, mode = "write", o) => [
+    // `claude -p` reads the prompt from stdin: a prompt as one argv element is capped at 128 KB on Linux.
+    input: (prompt, mode = "write") => (mode === "write" ? prompt + COMMIT_INSTRUCTION : prompt),
+    command: (_prompt, _mode = "write", o) => [
       "claude",
       "-p",
-      mode === "write" ? prompt + COMMIT_INSTRUCTION : prompt,
       "--dangerously-skip-permissions",
       ...(o?.resume ? ["--resume", o.resume] : o?.fork ? ["--resume", o.fork, "--fork-session"] : []),
       ...(opts.json ? ["--output-format", "stream-json", "--verbose"] : []),

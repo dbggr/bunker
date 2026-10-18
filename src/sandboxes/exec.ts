@@ -29,6 +29,8 @@ export interface ExecContext {
   limits?: ExecLimits;
   /** Runs agent-written code that needs neither: no network and no Claude credentials (verify). */
   isolate?: boolean;
+  /** Written to the command's stdin, then closed. */
+  stdin?: string;
 }
 
 export interface ExecResult {
@@ -93,7 +95,7 @@ function prefixLines(text: string, prefix: string): string {
 }
 
 /** Waits for the process, echoing its (redacted) stdout live (verbose only), each line led by `prefix`, while capturing it unprefixed. */
-export async function teeStdout(proc: Bun.Subprocess<"ignore", "pipe", "inherit">, prefix = "", onLine?: (line: string) => void, limits: ExecLimits = {}, kill: () => void = () => killGroup(proc)): Promise<ExecResult> {
+export async function teeStdout(proc: Bun.Subprocess<any, "pipe", "inherit">, prefix = "", onLine?: (line: string) => void, limits: ExecLimits = {}, kill: () => void = () => killGroup(proc)): Promise<ExecResult> {
   let timedOut: ExecResult["timedOut"];
   let hung = false;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;

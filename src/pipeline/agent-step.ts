@@ -1,6 +1,6 @@
 import { redact } from "../core/redact.ts";
 import { emit, type EventTarget } from "../core/events.ts";
-import { formatDuration, type Agent, type AgentMode } from "../agents/agent.ts";
+import { formatDuration, stdinOf, type Agent, type AgentMode } from "../agents/agent.ts";
 import { DEFAULT_COMPLETION_MS, IdleTimeout, agentLimits, timeoutMessage, type ExecContext, type Sandbox, type Timeouts } from "../sandboxes/exec.ts";
 import { captureSession, restoreSession, type Session } from "../worktree/session.ts";
 import { UsageLimit } from "./errors.ts";
@@ -30,8 +30,8 @@ export async function agentStep(o: {
   const label = { ...(o.target.task !== undefined ? { task: o.target.task } : {}), ...(o.target.round !== undefined ? { round: o.target.round } : {}), ...(o.target.role ? { role: o.target.role } : {}) };
   const ctx: ExecContext = { ...o.ctx, limits: agentLimits(timeouts, o.signals) };
   /** Runs the command; a killed one throws IdleTimeout, a hung-but-finished one is noted and counts as done. */
-  const exec = async (cmd: string[]) => {
-    const r = await o.sandbox.exec(cmd, ctx);
+  const exec = async (cmd: string[], prompt: string) => {
+    const r = await o.sandbox.exec(cmd, { ...ctx, ...stdinOf(o.agent, prompt, o.mode) });
     if (r.timedOut) throw new IdleTimeout(timeoutMessage(o.target.role ?? "agent", r.timedOut, timeouts));
     if (r.hung) emit(o.target.onEvent, { type: "note", ...label, text: `warning: agent did not exit ${formatDuration(timeouts.completionTimeoutMs ?? DEFAULT_COMPLETION_MS)} after finishing; killed it and treating the step as completed` });
     return r;
@@ -39,14 +39,14 @@ export async function agentStep(o: {
   let res: { code: number; stdout: string } | undefined;
   if (o.fork) {
     await restoreSession(o.sandbox, o.ctx.worktree, o.fork);
-    res = await exec(o.agent.command(o.prompt, o.mode, { fork: o.fork.id }));
+    res = await exec(o.agent.command(o.prompt, o.mode, { fork: o.fork.id }), o.prompt);
   }
   if (o.prev && !res) {
     const fallback = (why: string) =>
       emit(o.target.onEvent, { type: "note", ...(o.target.task !== undefined ? { task: o.target.task } : {}), ...(o.target.round !== undefined ? { round: o.target.round } : {}), ...(o.target.role ? { role: o.target.role } : {}), text: `could not resume session ${o.prev!.id} (${why}); starting a fresh session` });
     try {
       await restoreSession(o.sandbox, o.ctx.worktree, o.prev);
-      res = await exec(o.agent.command(o.resumePrompt ?? o.prompt, o.mode, { resume: o.prev.id }));
+      res = await exec(o.agent.command(o.resumePrompt ?? o.prompt, o.mode, { resume: o.prev.id }), o.resumePrompt ?? o.prompt);
       if (res.code !== 0 && !o.agent.usageLimit?.(res.stdout)) {
         fallback(`exit ${res.code}`);
         res = undefined;
@@ -56,7 +56,7 @@ export async function agentStep(o: {
       fallback(redact(e instanceof Error ? e.message : String(e)));
     }
   }
-  res ??= await exec(o.agent.command(o.prompt, o.mode));
+  res ??= await exec(o.agent.command(o.prompt, o.mode), o.prompt);
   const id = o.agent.sessionId?.(res.stdout);
   const session = id ? await captureSession(o.sandbox, id, o.dest) : undefined;
   const limit = o.agent.usageLimit?.(res.stdout);
