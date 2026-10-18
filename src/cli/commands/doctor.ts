@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { deprecatedUserKeys, readUserConfigRaw, userConfigPath } from "../../core/user-config.ts";
 import { formatSpend, loadSpendCaps } from "../../core/spend.ts";
 import { AUTH_VARS, loadBunkerEnv } from "../../core/env.ts";
 import { DEFAULT_MODEL_LABEL, resolveModels } from "../../agents/models.ts";
@@ -278,6 +279,10 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
     required: false,
     detail: (["implementer", "reviewer", "auditor"] as const).map((r) => `${r}: ${models[r] ?? DEFAULT_MODEL_LABEL}`).join(", "),
   });
+
+  // deprecated user config keys (kebab-case, renamed to snake_case)
+  const userKeys = await readUserConfigRaw(env).catch(() => ({}));
+  for (const k of deprecatedUserKeys(userKeys)) add({ id: "config-deprecated", group: "config", label: "deprecated config key", ok: false, required: false, detail: `${k.old} in ${userConfigPath(env)}`, fix: `rename ${k.old} to ${k.new}` });
 
   // spend (notional USD logged by --watch)
   const caps = await loadSpendCaps(env).catch(() => ({}));

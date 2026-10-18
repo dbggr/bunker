@@ -76,11 +76,11 @@ export function formatSpend(file: string, caps: SpendCaps): string {
   }).join(" · ");
 }
 
-/** `max-cost-day` / `max-cost-month` from ~/.config/bunker/config.toml; absent keys mean no cap. */
+/** `max_cost_day` / `max_cost_month` from ~/.config/bunker/config.toml; absent keys mean no cap. */
 export async function loadSpendCaps(env: Record<string, string | undefined> = process.env): Promise<SpendCaps> {
   const parsed = await readUserConfig(env);
   const caps: SpendCaps = {};
-  for (const [key, field] of [["max-cost-day", "day"], ["max-cost-month", "month"]] as const) {
+  for (const [key, field] of [["max_cost_day", "day"], ["max_cost_month", "month"]] as const) {
     const v = parsed[key];
     if (v === undefined) continue;
     if (typeof v !== "number" || !(v > 0) || !Number.isFinite(v)) throw new Error(`config.toml: ${key} must be a positive number of US dollars`);

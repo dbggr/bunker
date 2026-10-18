@@ -56,7 +56,7 @@ Single prompt and --task:
   --allow-labeler <login>    (--issue, --queue, --watch; repeatable) also accept the `bunker:queued` label from this GitHub user. By
                              default only repo admins and maintainers may queue work: otherwise the issue is skipped, the label
                              removed and a comment left. An issue never labeled "bunker:queued" is refused too (no label
-                             event to check): add the label first. Also: allow-labelers = ["login"] in ~/.config/bunker/config.toml.
+                             event to check): add the label first. Also: allow_labelers = ["login"] in ~/.config/bunker/config.toml.
                              If the permission lookup fails the issue is skipped (fail closed)
   --limit <n>                (--queue) max issues per run (default 5; blocked issues don't count)
   --parallel <n>             (--queue --merge, --watch, manual-merge mode) work up to n issues at once, one worktree + container each (default 1).
@@ -90,8 +90,8 @@ Single prompt and --task:
                              blocked comments @-mention notify.github_user (default: the repo owner, if a user account)
   --max-cost-day <usd>       stop starting issues once this much (notional USD, as `claude -p` reports it) was spent in a rolling 24 h,
                              then sleep until the window frees up; kept in .bunker/watch-spend.json (default: no cap).
-                             Also max-cost-day in ~/.config/bunker/config.toml. `--max-cost` is an alias
-  --max-cost-month <usd>     same for a rolling 30 days (default: no cap; config.toml: max-cost-month)
+                             Also max_cost_day in ~/.config/bunker/config.toml. `--max-cost` is an alias
+  --max-cost-month <usd>     same for a rolling 30 days (default: no cap; config.toml: max_cost_month)
   --audit-every <days>       also run --audit at most once per this many days, kept in .bunker/watch-state.json (default off; 30 is a good value)
   --triage-every <hours>     also run triage at most once per this many hours, comment and close only (default off)
   --no-merge                 manual-merge mode (also `merge = "manual"` in config.toml): a run ends at an open PR labelled

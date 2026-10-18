@@ -555,10 +555,10 @@ describe("bunker --watch (CLI)", () => {
     }
   });
 
-  test("max-cost-day in the user config.toml caps the watch, and the log shows dollar amounts", async () => {
+  test("max_cost_day in the user config.toml caps the watch, and the log shows dollar amounts", async () => {
     const { repo, root } = await setup([]);
     const xdg = join(root, "xdg");
-    await Bun.write(join(xdg, "bunker", "config.toml"), "max-cost-day = 20\n");
+    await Bun.write(join(xdg, "bunker", "config.toml"), "max_cost_day = 20\n");
     await Bun.write(join(repo, ".bunker", "verify"), "true");
     await Bun.write(join(repo, ".bunker", "watch-spend.json"), JSON.stringify([{ at: Date.now() - 1000, usd: 25 }]));
     const p = Bun.spawn(["bun", join(import.meta.dir, "..", "src", "cli.ts"), "--watch", "--no-sandbox", "--interval", "0.01"], { cwd: repo, stdout: "pipe", stderr: "pipe", env: { ...process.env, XDG_CONFIG_HOME: xdg } });

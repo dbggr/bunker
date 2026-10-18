@@ -92,11 +92,11 @@ export function parseConfig(text: string, name = ".bunker/config.toml"): { confi
   const known = new Set(CONFIG_KEYS.map((k) => k.key));
   const root = raw as Record<string, unknown>;
   for (const [k, v] of Object.entries(root)) {
-    // A repo file must not widen its own `bunker` label gate: allow-labelers is user-level only.
+    // A repo file must not widen its own `bunker` label gate: allow_labelers is user-level only.
     if (k === "queue" && isTable(v)) {
       for (const sub of Object.keys(v)) {
         warnings.push(sub === "allow_labelers"
-          ? `${name}: queue.allow_labelers is ignored (a repo file could widen its own gate); set allow-labelers in ~/.config/bunker/config.toml`
+          ? `${name}: queue.allow_labelers is ignored (a repo file could widen its own gate); set allow_labelers in ~/.config/bunker/config.toml`
           : `${name}: unknown key queue.${sub}, ignored`);
       }
       continue;

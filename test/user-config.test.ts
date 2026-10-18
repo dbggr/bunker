@@ -2,7 +2,7 @@ import { afterEach, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readUserConfig, userConfigPath } from "../src/core/user-config.ts";
+import { deprecatedUserKeys, readUserConfig, userConfigPath } from "../src/core/user-config.ts";
 
 setDefaultTimeout(60_000);
 
@@ -25,4 +25,28 @@ test("a missing file is an empty config; a present one is parsed", async () => {
   mkdirSync(join(home, "bunker"));
   writeFileSync(join(home, "bunker", "config.toml"), 'a = 1\nb = ["x"]\n');
   expect(await readUserConfig({ XDG_CONFIG_HOME: home })).toEqual({ a: 1, b: ["x"] });
+});
+
+test("kebab-case keys are still read, renamed to snake_case, with a deprecation warning naming the new key", async () => {
+  const home = tmp();
+  mkdirSync(join(home, "bunker"));
+  writeFileSync(join(home, "bunker", "config.toml"), 'max-cost-day = 5\nallow-labelers = ["a"]\n');
+  const warnings: string[] = [];
+  expect(await readUserConfig({ XDG_CONFIG_HOME: home }, (w) => warnings.push(w))).toEqual({ max_cost_day: 5, allow_labelers: ["a"] });
+  expect(warnings.length).toBe(2);
+  expect(warnings[0]).toContain("max-cost-day");
+  expect(warnings[0]).toContain("max_cost_day");
+  expect(deprecatedUserKeys({ "max-cost-month": 1, max_cost_day: 2 })).toEqual([{ old: "max-cost-month", new: "max_cost_month" }]);
+});
+
+test("snake_case keys read silently and win over a kebab-case duplicate", async () => {
+  const home = tmp();
+  mkdirSync(join(home, "bunker"));
+  writeFileSync(join(home, "bunker", "config.toml"), 'max_cost_day = 7\nmax-cost-day = 5\n');
+  const warnings: string[] = [];
+  expect(await readUserConfig({ XDG_CONFIG_HOME: home }, (w) => warnings.push(w))).toEqual({ max_cost_day: 7 });
+  writeFileSync(join(home, "bunker", "config.toml"), 'max_cost_day = 7\n');
+  warnings.length = 0;
+  await readUserConfig({ XDG_CONFIG_HOME: home }, (w) => warnings.push(w));
+  expect(warnings).toEqual([]);
 });
