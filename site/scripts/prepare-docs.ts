@@ -6,7 +6,7 @@ import { join } from "node:path";
 const root = join(import.meta.dir, "..", "..");
 const src = join(root, "docs");
 const dest = join(import.meta.dir, "..", "guide");
-const repo = "https://github.com/dbggr/tool-bunker/blob/main";
+const repo = "https://github.com/dbggr/bunker/blob/main";
 
 rmSync(dest, { recursive: true, force: true });
 mkdirSync(dest, { recursive: true });

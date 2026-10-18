@@ -7,10 +7,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dbggr/tool-bunker.git"
+    "url": "git+https://github.com/dbggr/bunker.git"
   },
-  "homepage": "https://github.com/dbggr/tool-bunker#readme",
-  "bugs": "https://github.com/dbggr/tool-bunker/issues",
+  "homepage": "https://github.com/dbggr/bunker#readme",
+  "bugs": "https://github.com/dbggr/bunker/issues",
   "keywords": [
     "ai",
     "agents",

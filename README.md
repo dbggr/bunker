@@ -23,7 +23,7 @@ Linux or macOS with Docker, git and [Bun](https://bun.sh); the [GitHub CLI](http
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dbggr/tool-bunker/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dbggr/bunker/main/install.sh | sh
 ```
 
 The installer checks prerequisites first and never installs them; for each missing one it links its install page. Then it says what it will do and asks `[y/N]` (`--yes` skips; `--check` only checks; `--skip-runtime-check`, `--ref`, `--uninstall`). It puts a checkout of the latest `vX.Y.Z` release in `~/.local/share/bunker` (`BUNKER_HOME`) and the binary at `~/.local/bin/bunker` (`BUNKER_BIN_DIR`), and doesn't edit your shell rc files. Re-run it to upgrade; `--uninstall` never touches `~/.config/bunker`.

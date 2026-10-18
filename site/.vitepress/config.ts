@@ -21,7 +21,7 @@ export default defineConfig({
       { text: "Concepts", link: "/guide/concepts" },
       { text: "Security", link: "/guide/security" },
       { text: "CLI", link: "/guide/cli" },
-      { text: "Changelog", link: "https://github.com/dbggr/tool-bunker/blob/main/CHANGELOG.md" },
+      { text: "Changelog", link: "https://github.com/dbggr/bunker/blob/main/CHANGELOG.md" },
     ],
     sidebar: [
       {
@@ -41,11 +41,11 @@ export default defineConfig({
         ],
       },
     ],
-    socialLinks: [{ icon: "github", link: "https://github.com/dbggr/tool-bunker" }],
+    socialLinks: [{ icon: "github", link: "https://github.com/dbggr/bunker" }],
     search: { provider: "local" },
     editLink: {
       // Pages come from docs/*.md in the repo, so edits go there.
-      pattern: ({ filePath }) => `https://github.com/dbggr/tool-bunker/edit/main/docs/${filePath.replace(/^guide\//, "")}`,
+      pattern: ({ filePath }) => `https://github.com/dbggr/bunker/edit/main/docs/${filePath.replace(/^guide\//, "")}`,
       text: "Edit this page on GitHub",
     },
     outline: { level: [2, 3] },

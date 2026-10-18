@@ -40,7 +40,7 @@ export async function latestTag(home: string): Promise<string | undefined> {
   return parsed.at(-1)?.t;
 }
 
-/** Builds the tree in `dir` (for the tool-bunker checkout `home`) and returns the path of the compiled binary. */
+/** Builds the tree in `dir` (for the bunker checkout `home`) and returns the path of the compiled binary. */
 export type BuildFn = (dir: string, home: string) => Promise<string | undefined>;
 
 const realBuild: BuildFn = async (dir, home) => {
@@ -80,7 +80,7 @@ export async function selfUpdate(opts: SelfUpdateOptions = {}): Promise<number> 
   const home = opts.home ?? bunkerHome();
   const build = opts.build ?? realBuild;
   if (!existsSync(join(home, ".git"))) {
-    console.error(`bunker: self-update: ${home} is not a git checkout (set BUNKER_HOME to your tool-bunker checkout)`);
+    console.error(`bunker: self-update: ${home} is not a git checkout (set BUNKER_HOME to your bunker checkout)`);
     return 2;
   }
   if (channel === "main") {

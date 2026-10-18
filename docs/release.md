@@ -2,7 +2,7 @@
 
 `bunker self-update` installs the latest `vX.Y.Z` tag, so what lands on `main` only reaches
 other repos' watchers once a human tags it. (`bunker self-update --channel main` tracks `main`
-instead; use it for tool-bunker itself.)
+instead; use it for bunker's own repo.)
 
 To cut a release, from a clean, up-to-date `main`:
 

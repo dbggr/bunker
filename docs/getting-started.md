@@ -7,7 +7,7 @@ After installing (step 1), run `bunker init` in the repo: it checks everything, 
 ## 1. Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dbggr/tool-bunker/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/dbggr/bunker/main/install.sh | sh
 bunker --version
 ```
 
@@ -83,7 +83,7 @@ bunker watch --for 5h --max-cost-day 10
 
 Everything above uses your own PAT, so every PR is authored by you and GitHub won't let you approve it. If you want separate attribution, or "auto-merge, but only after I approve", give bunker its own identity. This is opt-in; with only `BUNKER_GH_TOKEN` set nothing changes, and `bunker init` asks (default no).
 
-> Not yet tested end to end against a real repository; tracked in [#372](https://github.com/dbggr/tool-bunker/issues/372).
+> Not yet tested end to end against a real repository; tracked in [#372](https://github.com/dbggr/bunker/issues/372).
 
 **A GitHub App** (preferred). Create a private App with no webhook and the permissions Contents, Pull requests and Issues: Read and write; Metadata, Actions, Checks and Statuses: Read. Don't grant Workflows. Install it on the repo, generate a private key, and set in `~/.config/bunker/.env`:
 
