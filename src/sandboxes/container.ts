@@ -83,6 +83,14 @@ export function podman(opts: DockerOptions = {}): Sandbox {
   return containerSandbox(opts.bin ?? "podman", ["--userns=keep-id"], opts);
 }
 
+/** Running containers (name -> bin) so an exiting CLI can stop them instead of orphaning the agent. */
+export const liveContainers = new Map<string, string>();
+let exitHooked = false;
+function stopLiveContainers() {
+  for (const [name, bin] of liveContainers) Bun.spawnSync([bin, "kill", name], { stdio: ["ignore", "ignore", "ignore"] });
+  liveContainers.clear();
+}
+
 export function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions): Sandbox {
   const env = opts.env ?? ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
   // runAll() calls exec once per task at the same time; share one image build per repo.
@@ -120,6 +128,8 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
         bin, "run", "--rm", ...(stdin === undefined ? [] : ["-i"]), "--name", cname,
         ...userArgs,
         "-e", "HOME=/tmp",
+        // Marks the container so a bunker CLI run from inside it refuses to start (it would drive the live queue with our token).
+        "-e", "BUNKER_IN_SANDBOX=1",
         // Verify runs code the agent wrote: no network to send anything out, and no credentials to send.
         // Non-isolated runs use the host network: the default bridge creates and removes a veth per run, and each link event makes Chrome fail in-flight requests (ERR_NETWORK_CHANGED).
         // Tradeoff: the container can reach the host's localhost services; it already runs the agent with credentials and full outbound network.
@@ -139,7 +149,12 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
         Bun.spawn([bin, "kill", cname], { stdio: ["ignore", "ignore", "ignore"] });
         killGroup(proc);
       };
-      return teeStdout(proc, prefix, onLine, limits, kill);
+      if (!exitHooked) {
+        exitHooked = true;
+        process.on("exit", stopLiveContainers);
+      }
+      liveContainers.set(cname, bin);
+      return teeStdout(proc, prefix, onLine, limits, kill).finally(() => liveContainers.delete(cname));
       });
     },
   };

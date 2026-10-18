@@ -77,6 +77,12 @@ if (values.help) {
   process.exit(0);
 }
 
+// An agent in a bunker container holds a GitHub token; it must not drive the live queue (or any run) from there.
+if (process.env.BUNKER_IN_SANDBOX) {
+  console.error("bunker: refusing to run inside a bunker sandbox (BUNKER_IN_SANDBOX is set); run bunker on the host");
+  process.exit(2);
+}
+
 if (values.version) {
   console.log(`${pkg.version} (${await buildLabel()})`);
   process.exit(0);
