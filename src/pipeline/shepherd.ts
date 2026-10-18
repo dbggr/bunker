@@ -83,7 +83,7 @@ export interface ShepherdEntry {
 export interface ShepherdPass {
   entries: ShepherdEntry[];
   /** PRs seen open by an earlier pass of this shepherd that are merged now. */
-  merged: { pr: number; url: string; issue: number; branch: string }[];
+  merged: { pr: number; url: string; issue: number; branch: string; /** Set when the landing check could not confirm the squash kept the PR's files. */ unverified?: string }[];
   usage?: Usage;
   /** Set when the pass stopped early on the Claude usage limit. */
   paused?: { resetAt?: number };
@@ -429,6 +429,32 @@ export function createShepherd(o: ShepherdOptions) {
     return entry(pr, checks.length > 0 && checks.every((c) => c.bucket === "pass" || c.bucket === "skipping") ? "green" : "waiting");
   };
 
+  /**
+   * Squash-merges have silently dropped late commits. Compares the merge commit's content with the PR's last head for the PR's own
+   * files (not with the current tip of the base, which later merges may have changed). Returns what is wrong, or undefined.
+   */
+  const landingProblem = async (pr: BunkerPr, info: any): Promise<string | undefined> => {
+    const mergeCommit = String(info?.mergeCommit?.oid ?? "");
+    const head = String(info?.headRefOid ?? "");
+    const base = String(info?.baseRefName ?? pr.base);
+    const files: string[] = Array.isArray(info?.files) ? info.files.flatMap((f: any) => (typeof f?.path === "string" ? [f.path] : [])) : [];
+    if (!mergeCommit || !head) return "merged, but GitHub did not report the merge commit, so the landing could not be verified";
+    const have = (sha: string) => $`git -C ${cwd} cat-file -e ${sha}^{commit}`.nothrow().quiet().then((r) => r.exitCode === 0);
+    if (!(await have(mergeCommit))) {
+      const f = await $`git ${gitCfg} -C ${cwd} fetch -q origin ${`+refs/heads/${base}:refs/remotes/origin/${base}`}`.env(env).nothrow().quiet();
+      if (f.exitCode !== 0 || !(await have(mergeCommit))) return `merged, but could not fetch the merge commit to verify:\n${f.stderr}`;
+    }
+    if (!(await have(head))) {
+      const f = await $`git ${gitCfg} -C ${cwd} fetch -q origin ${head}`.env(env).nothrow().quiet();
+      if (f.exitCode !== 0 || !(await have(head))) return `merged, but could not fetch the PR head to verify:\n${f.stderr}`;
+    }
+    if (!files.length) return undefined;
+    const diff = await $`git -C ${cwd} diff --name-only ${mergeCommit} ${head} -- ${files}`.nothrow().quiet();
+    if (diff.exitCode !== 0) return `merged, but could not compare the merge commit with the PR head:\n${diff.stderr}`;
+    const differing = diff.stdout.toString().split("\n").filter(Boolean);
+    return differing.length ? `merged, but the merge commit differs from the PR head in:\n${differing.join("\n")}` : undefined;
+  };
+
   return {
     /** One pass over the open bunker PRs. */
     async pass(): Promise<ShepherdPass> {
@@ -438,8 +464,12 @@ export function createShepherd(o: ShepherdOptions) {
       const open = new Set(prs.map((p) => p.number));
       for (const old of seen.values()) {
         if (open.has(old.number)) continue;
-        const view = await gh`gh pr view ${old.number} --json state`;
-        if (view.exitCode === 0 && JSON.parse(view.stdout.toString() || "{}").state === "MERGED") merged.push({ pr: old.number, url: old.url, issue: old.issue, branch: old.branch });
+        const view = await gh`gh pr view ${old.number} --json state,mergeCommit,headRefOid,baseRefName,files`;
+        if (view.exitCode !== 0) continue;
+        const info = JSON.parse(view.stdout.toString() || "{}");
+        if (info.state !== "MERGED") continue;
+        const unverified = await landingProblem(old, info);
+        merged.push({ pr: old.number, url: old.url, issue: old.issue, branch: old.branch, ...(unverified ? { unverified } : {}) });
       }
       seen = new Map(prs.map((p) => [p.number, p]));
       const entries: ShepherdEntry[] = [];
