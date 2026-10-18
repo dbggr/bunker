@@ -1,4 +1,7 @@
 import { beforeEach, setDefaultTimeout } from "bun:test";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { output } from "../src/core/output.ts";
 
 // Tests spawn many git/gh processes; Bun's 5s default is exceeded on a loaded host (CI, or a suite run beside others,
@@ -42,3 +45,19 @@ const withEnv = (args: any[]) => {
 // A `bunker --watch` run in a test subprocess would pop real desktop notifications (spend cap, failed, stopped) on a
 // developer's machine; the CLI skips the desktop notifier when this is set (children inherit it from process.env).
 process.env.BUNKER_TEST_NO_NOTIFY = "1";
+
+// Tests must never reach the real Docker daemon, desktop notifier or network. Fakes go first on PATH; any test that
+// puts its own fake earlier still wins. Tests that need real Docker opt in with BUNKER_TEST_REAL_DOCKER=1 (and
+// `describe.skipIf(!dockerUp)`, touching only `bunker-test-` images); test/hygiene.test.ts checks the fakes are in place.
+if (process.env.BUNKER_TEST_REAL_DOCKER !== "1") {
+  const fakeBin = join(tmpdir(), `bunker-test-fakebin-${process.pid}`);
+  mkdirSync(fakeBin, { recursive: true });
+  const refuse = (name: string) => `#!/bin/sh\necho "${name} $*: tests must not reach the real ${name}" >&2\nexit 97\n`;
+  for (const name of ["docker", "podman", "notify-send", "osascript", "curl", "wget"]) {
+    writeFileSync(join(fakeBin, name), refuse(name));
+    chmodSync(join(fakeBin, name), 0o755);
+  }
+  process.env.BUNKER_TEST_FAKE_BIN = fakeBin;
+  process.env.PATH = `${fakeBin}:${process.env.PATH ?? ""}`;
+  process.on("exit", () => rmSync(fakeBin, { recursive: true, force: true }));
+}
