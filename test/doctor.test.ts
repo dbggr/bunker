@@ -30,7 +30,7 @@ describe("doctor", () => {
 
   test("reports each ✗ with a fix and exits 1", async () => {
     const w = await fakeWorld({
-      files: { "labels.json": JSON.stringify([{ name: "bunker:queued" }]), "repo.json": JSON.stringify({ default_branch: "main", allow_auto_merge: false }), "protection.json": "" },
+      files: { "labels.json": JSON.stringify([{ name: "bunker:queued" }]), "repo.json": JSON.stringify({ default_branch: "main", allow_auto_merge: false }), "rules.json": "" },
       noTools: ["docker"],
     });
     await Bun.$`rm ${join(w.repo, ".github/workflows/ci.yml")} ${join(w.repo, ".bunker/verify")}`;
@@ -96,9 +96,24 @@ describe("doctor", () => {
   });
 
   test("ruleset required checks count", async () => {
-    const w = await fakeWorld({ files: { "protection.json": "", "rules.json": JSON.stringify([{ type: "required_status_checks", parameters: {} }]) } });
+    const w = await fakeWorld({ files: { "rules.json": JSON.stringify([{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "test" }] } }]) } });
     const r = await runDoctor({ cwd: w.repo, env: w.env });
     expect(failed(r.checks)).not.toContain("required-check");
+  });
+
+  test("classic branch protection alone does not satisfy required-check (bunker --merge reads rulesets only)", async () => {
+    const w = await fakeWorld({ files: { "rules.json": "[]", "protection.json": JSON.stringify({ contexts: ["test"], checks: [{ context: "test" }] }) } });
+    const r = await runDoctor({ cwd: w.repo, env: w.env });
+    const c = r.checks.find((c) => c.id === "required-check")!;
+    expect(c.ok).toBe(false);
+    expect(c.fix).toContain("ruleset");
+    expect(c.fix).toContain("classic");
+  });
+
+  test("a ruleset status-check rule with no checks listed does not count", async () => {
+    const w = await fakeWorld({ files: { "rules.json": JSON.stringify([{ type: "required_status_checks", parameters: {} }]) } });
+    const r = await runDoctor({ cwd: w.repo, env: w.env });
+    expect(failed(r.checks)).toContain("required-check");
   });
 });
 

@@ -232,25 +232,19 @@ export async function runDoctor(opts: { cwd: string; env?: Env }): Promise<{ che
     } catch {}
     add({ id: "ci", group: "github", label: "CI workflow", ok: ci, fix: "add a workflow under .github/workflows/ that runs your tests, e.g. on pull_request" });
     const u = userEnv(env);
-    const [prot, rules] = await Promise.all([
-      exec(["gh", "api", `repos/${repo!.slug}/branches/${branch}/protection/required_status_checks`], { env: u }),
-      exec(["gh", "api", `repos/${repo!.slug}/rules/branches/${branch}`], { env: u }),
-    ]);
+    // Rulesets only: `bunker --merge` reads nothing else (classic protection needs Administration, which the scoped token lacks).
+    const rules = await exec(["gh", "api", `repos/${repo!.slug}/rules/branches/${branch}`], { env: u });
     let required = false;
     try {
-      const p = JSON.parse(prot.out);
-      required = prot.code === 0 && ((p.contexts?.length ?? 0) > 0 || (p.checks?.length ?? 0) > 0);
-    } catch {}
-    try {
-      const r = JSON.parse(rules.out) as { type: string }[];
-      if (rules.code === 0 && r.some((x) => x.type === "required_status_checks")) required = true;
+      const r = JSON.parse(rules.out) as { type?: string; parameters?: { required_status_checks?: unknown[] } }[];
+      required = rules.code === 0 && r.some((x) => x.type === "required_status_checks" && (x.parameters?.required_status_checks?.length ?? 0) > 0);
     } catch {}
     add({
       id: "required-check",
       group: "github",
       label: `${branch} requires a status check`,
       ok: required,
-      fix: `Settings → Branches → protect ${branch} → "Require status checks to pass" and pick your CI job (https://github.com/${repo!.slug}/settings/branches); if the repo is managed by IaC, change it there`,
+      fix: `Settings → Rules → Rulesets → new branch ruleset targeting ${branch} → "Require status checks to pass" and pick your CI job (https://github.com/${repo!.slug}/settings/rules); classic branch protection (Settings → Branches) is not seen by bunker --merge, so it does not count; if the repo is managed by IaC, change it there`,
     });
   }
 
