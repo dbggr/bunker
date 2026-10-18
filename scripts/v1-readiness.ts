@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Evidence for the v1.0 readiness review (#329): mines bunker's run logs and the repo's GitHub history.
- * Read-only. Re-run any time; numbers in docs/release/v1-readiness.md come from its output.
+ * Read-only. Re-run any time; numbers in release/v1-readiness.md come from its output.
  *
  *   bun scripts/v1-readiness.ts [--runs <dir>] [--repo <owner/name>] [--since <ISO date>] [--json] [--refresh]
  *
