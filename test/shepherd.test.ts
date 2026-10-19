@@ -73,6 +73,10 @@ if (cmd === "pr list") {
     console.log(JSON.stringify({ jobs: all.filter((c) => runOf(c) === run).map((c) => ({ id: Number(run) * 100 + all.indexOf(c), name: c.name, html_url: c.link, ...wf[c.bucket] })) }));
   } else if (/actions\\/jobs\\/\\d+\\/logs/.test(path)) {
     if (s.logDenied) fail("HTTP 403: Resource not accessible by personal access token");
+    if (s.logError) fail(s.logError);
+    const allow = args.includes("--allow-escape-sequences");
+    if (allow && s.oldGh) fail("unknown flag: --allow-escape-sequences");
+    if (s.escapeLogs && !allow) fail("the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway");
     console.log(s.logs[String(Math.floor(Number(/jobs\\/(\\d+)/.exec(path)[1]) / 100))] || "no log");
   } else if (/commits\\/\\w+\\/status/.test(path)) {
     const n = prOfSha(/commits\\/(\\w+)\\/status/.exec(path)[1]);
@@ -325,7 +329,7 @@ describe("shepherd pass", () => {
     expect(prompts[0]).toContain("FAIL expected 1 to be 2");
     expect(prompts[0]).toContain("fix/7-thing");
     expect((await remoteLog(w, "fix/7-thing"))[0]).toBe("fix: make the check pass");
-    expect(w.calls().some((c) => /^api repos\/\{owner\}\/\{repo\}\/actions\/jobs\/\d+\/logs/.test(c))).toBe(true);
+    expect(w.calls().some((c) => /^api --allow-escape-sequences repos\/\{owner\}\/\{repo\}\/actions\/jobs\/\d+\/logs/.test(c))).toBe(true);
     expect(w.calls().some((c) => /check-runs|statusCheckRollup/.test(c))).toBe(false);
     expect(w.state.comments).toBeDefined();
     expect(w.calls().some((c) => /pr merge/.test(c))).toBe(false);
@@ -434,6 +438,52 @@ describe("shepherd pass", () => {
     const prompts: string[] = [];
     expect((await shepherd(w, fakeAgent(COMMIT_FIX, prompts)).pass()).entries[0]).toMatchObject({ action: "skipped" });
     expect(prompts).toHaveLength(0);
+  });
+
+  test("gh refuses logs with escape sequences without --allow-escape-sequences: the flag is passed and ANSI is stripped from the prompt", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs.push(prJson(10, "fix/7-thing", sha));
+    w.state.checks[10] = RED;
+    w.state.escapeLogs = true;
+    w.state.logs["123"] = "\x1b[31mFAILURES!\x1b[0m Tests: 3\x1b]8;;http://x\x07link\x1b]8;;\x07";
+    w.save();
+    const prompts: string[] = [];
+    const pass = await shepherd(w, fakeAgent(COMMIT_FIX, prompts)).pass();
+    expect(pass.entries[0]!.action).toBe("fixed-ci");
+    expect(prompts[0]).toContain("FAILURES! Tests: 3link");
+    expect(prompts[0]).not.toContain("\x1b");
+  });
+
+  test("an older gh that does not know --allow-escape-sequences is retried without it", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs.push(prJson(10, "fix/7-thing", sha));
+    w.state.checks[10] = RED;
+    w.state.oldGh = true;
+    w.state.logs["123"] = "plain failure";
+    w.save();
+    const prompts: string[] = [];
+    const pass = await shepherd(w, fakeAgent(COMMIT_FIX, prompts)).pass();
+    expect(pass.entries[0]!.action).toBe("fixed-ci");
+    expect(prompts[0]).toContain("plain failure");
+  });
+
+  test("a log read failure that is not 403/404 waits for the next pass: no gave-up, no fix attempt, no Actions: read hint", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs.push(prJson(10, "fix/7-thing", sha));
+    w.state.checks[10] = RED;
+    w.state.logError = "HTTP 502: Bad Gateway";
+    w.save();
+    const prompts: string[] = [];
+    const pass = await shepherd(w, fakeAgent(COMMIT_FIX, prompts)).pass();
+    expect(pass.entries[0]).toMatchObject({ action: "waiting" });
+    expect(pass.entries[0]!.detail).not.toMatch(/Actions: read/);
+    expect(prompts).toHaveLength(0);
+    const saved = JSON.parse(readFileSync(join(w.root, "state.json"), "utf8"));
+    expect(JSON.stringify(saved.comments[10] ?? [])).not.toContain("bunker-shepherd");
+    expect(JSON.stringify(saved.labels ?? {})).not.toContain("failed");
   });
 
   test("red without Actions: read → degrades to notifying a human, no agent", async () => {
