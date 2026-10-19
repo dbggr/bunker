@@ -113,7 +113,7 @@ export function startHub({ port = defaultHubPort(), token, historyLimit = HISTOR
   const add = (repo: string, ev: any, msg: string, t: number) => {
     const list = history.get(repo) ?? [];
     // A late page needs only the latest usage per run and the latest budget; keeping every one would push results out of the history.
-    const kind = ev.type === "budget" || ev.type === "watcher" ? ev.type : ev.type === "usage" || ev.type === "result" ? `run:${ev.issue}:${ev.task}` : undefined;
+    const kind = ev.type === "budget" || ev.type === "watcher" ? ev.type : ev.type === "usage" || ev.type === "result" ? `run:${ev.audit ? "audit" : ev.issue}:${ev.task}` : undefined;
     if (kind) for (let n = list.length - 1; n >= 0; n--) if (list[n]!.kind === kind) list.splice(n, 1);
     // Re-insert so Map order runs from least to most recently active.
     history.delete(repo);
