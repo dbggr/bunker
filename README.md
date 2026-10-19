@@ -4,7 +4,7 @@
 
 bunker runs a Claude coding agent on each issue in its own git worktree and Docker sandbox, has a second agent review the change, runs your tests, and lets GitHub's own required checks decide what merges. You choose the work; bunker does it, and stops to ask when it should.
 
-> **Status: beta (v0.9.0).** bunker works its own repository every day (most of its code was written by bunker), but flags, config keys and labels can still change before 1.0. Progress to 1.0: the [v1.0.0 milestone](https://github.com/dbggr/bunker/milestone/1) and [release/v1-readiness.md](release/v1-readiness.md).
+> **Status: beta (v0.9.1).** bunker works its own repository every day (most of its code was written by bunker), but flags, config keys and labels can still change before 1.0. Progress to 1.0: the [v1.0.0 milestone](https://github.com/dbggr/bunker/milestone/1) and [release/v1-readiness.md](release/v1-readiness.md).
 
 ## How it works
 

@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.9.1 - 2026-10-19
+
+- ui: hub redesign (runs by state, stage track, queue/shepherd/watcher panels) (#465)
+- ui: keep hub history across restarts (#464)
+- fix(merge): verify the PR's own added lines landed instead of comparing whole files (#463)
+- docs(release): v1-readiness: #454 landed, first soak reading (#459)
+- v1-readiness.ts counts awaiting-merge runs as failures, so the soak shows 0% success (#457)
+- docs(release): v1-readiness soak status, cut list and escapes from the multi-repo week (#456)
+- fix(status): show the running watcher's spend caps instead of config.toml's (#451) (#453)
+- fix(shepherd): read CI logs with --allow-escape-sequences, strip ANSI, and retry instead of giving up on non-permission read failures (#452)
+- shepherd: fine-grained tokens can't read check runs; read CI from Actions runs + commit statuses (#449)
+- shepherd: 'gh pr checks --json' fails on gh 2.46 (unknown flag), so red PRs are never fixed (#448)
+- shepherd never picks up a red bunker PR; watch just logs 'already has an open PR' every pass (#445)
+- fix(security): measure edits from the first queue label of the cycle and recheck on unblock and at run start (#442)
+- fix(shepherd): count PR comment markers only from bunker's own identity (#443)
+- fix(notify): name the repo in every watch notification title (#437) (#438)
+- closed issue keeps bunker:queued after an auto-merge (lib-symfony #41, watcher 0.9.0) (#436)
+- fix(audit): copy the configured copy patterns into audit and triage worktrees before setup (#435)
+- fix(merge): count classic branch protection as a required check in merge and doctor (#434)
+- fix(ui): finish a handed-off issue's hub row when the shepherd sees its PR merge (#417) (#430)
+- fix(shepherd): start declared services and run prepare for shepherd and init dry-run verify (#429)
+- fix(init): require the repo's own CI job names, skip the ruleset when a check is already required (#428)
+- fix(init): copy gitignored .env into worktrees and give DB-backed php repos a DB-free verify (#427)
+- init: keeps an existing setup/verify even when it just failed in the sandbox (#426)
+- docs: render the CLI reference as sectioned tables generated from structured data (#414) (#423)
+- fix(test): point the default hub port away from a developer's live bunker ui (#422)
+- chore: remove private repo names from docs and test fixtures (#420)
+- feat: sandbox database/services for verify (Postgres, Redis) (#418)
+
 ## v0.9.0 - 2026-10-18
 
 - fix(init): php preset finds composer.json in subdirs, matches PHP version and extensions, flags DB-backed tests (#409) (#410)
