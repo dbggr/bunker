@@ -44,7 +44,7 @@ Set `BUNKER_GH_TOKEN` in the same `.env`. bunker's own `gh` and `git` calls use 
 - Pull requests: Read and write
 - Issues: Read and write
 - Metadata: Read (added automatically)
-- Actions: Read (optional): lets the PR shepherd read the log of a failed CI job and hand it to a fix agent. Without it the shepherd cannot see why a check is red, so it labels the PR `bunker:failed` and notifies you instead
+- Actions: Read: the PR shepherd reads CI from the workflow runs and jobs of the PR's head commit (plus its commit statuses), because a fine-grained token has no Checks permission and `gh pr checks` / `check-runs` answer 403. It also reads the log of a failed job for the fix agent. Without it the shepherd cannot see the checks at all (`bunker doctor` reports `Actions` as missing)
 
 Nothing else. See [security.md](security.md) for why.
 

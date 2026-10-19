@@ -39,20 +39,13 @@ if (cmd === "pr list") {
   console.log(JSON.stringify(s.prs.map((p) => ({ ...p, comments: [...(p.comments || []), ...(s.comments[p.number] || []).map((body) => ({ body }))].map((c) => ({ author: { login: "bunker-bot" }, ...c })), labels: [...(p.labels || []), ...(s.labels[p.number] || []).map((name) => ({ name }))] }))));
 } else if (cmd === "pr checks") {
   fail("unknown flag: --json"); // gh 2.46 has no --json on pr checks: nothing may depend on it
-} else if (cmd === "run view") {
-  if (s.logDenied) fail("HTTP 403: Resource not accessible by personal access token");
-  console.log(s.logs[args[2]] || "no log");
 } else if (cmd === "pr comment") {
   (s.comments[n] = s.comments[n] || []).push(flag("--body"));
   write(s);
 } else if (cmd === "pr edit") {
   fail("GraphQL: Projects (classic) is being deprecated");
 } else if (cmd === "pr view" && args.includes("statusCheckRollup")) {
-  if (s.checkError) fail(s.checkError);
-  const status = { pass: { status: "COMPLETED", conclusion: "SUCCESS" }, fail: { status: "COMPLETED", conclusion: "FAILURE" }, pending: { status: "IN_PROGRESS", conclusion: "" }, cancel: { status: "COMPLETED", conclusion: "CANCELLED" } };
-  const rollup = (s.checks[n] || []).map((c) => ({ __typename: "CheckRun", name: c.name, detailsUrl: c.link, ...status[c.bucket] }));
-  for (const c of s.statuses?.[n] || []) rollup.push({ __typename: "StatusContext", context: c.name, state: c.state, targetUrl: c.link || "" });
-  console.log(JSON.stringify({ statusCheckRollup: rollup }));
+  fail("GraphQL: Resource not accessible by personal access token (repository.pullRequest.statusCheckRollup.contexts)");
 } else if (cmd === "pr view") {
   console.log(JSON.stringify({ state: (s.states || {})[n] || "OPEN", ...((s.views || {})[n] || {}) }));
 } else if (cmd === "label create" || cmd === "issue edit") {
@@ -62,7 +55,30 @@ if (cmd === "pr list") {
 } else if (args[0] === "api") {
   const path = args.find((a) => a.startsWith("repos/")) || "";
   const field = (k) => (args.find((a) => a.startsWith(k + "[]=")) || "").slice(k.length + 3);
-  if (path.endsWith("/labels") && args.includes("POST")) { const k = path.split("/")[4]; (s.labels[k] = s.labels[k] || []).push(field("labels")); write(s); }
+  const wf = { pass: { status: "completed", conclusion: "success" }, fail: { status: "completed", conclusion: "failure" }, pending: { status: "in_progress", conclusion: null }, cancel: { status: "completed", conclusion: "cancelled" } };
+  const runOf = (c) => /actions\\/runs\\/(\\d+)/.exec(c.link)[1];
+  const prOfSha = (sha) => s.prs.find((p) => p.headRefOid === sha)?.number;
+  const allChecks = () => Object.values(s.checks).flat();
+  if (path.includes("/check-runs")) fail("HTTP 403: Resource not accessible by personal access token");
+  else if (path.includes("/actions/runs?")) {
+    if (s.checkError) fail(s.checkError);
+    const n = prOfSha(/head_sha=(\\w+)/.exec(path)[1]);
+    const seen = new Set();
+    const runs = [];
+    for (const c of s.checks[n] || []) { const r = runOf(c); if (seen.has(r)) continue; seen.add(r); runs.push({ id: Number(r), name: "wf" + r, html_url: "https://github.com/o/r/actions/runs/" + r, ...wf[c.bucket] }); }
+    console.log(JSON.stringify({ workflow_runs: runs }));
+  } else if (/actions\\/runs\\/\\d+\\/jobs/.test(path)) {
+    const run = /runs\\/(\\d+)\\/jobs/.exec(path)[1];
+    const all = allChecks();
+    console.log(JSON.stringify({ jobs: all.filter((c) => runOf(c) === run).map((c) => ({ id: Number(run) * 100 + all.indexOf(c), name: c.name, html_url: c.link, ...wf[c.bucket] })) }));
+  } else if (/actions\\/jobs\\/\\d+\\/logs/.test(path)) {
+    if (s.logDenied) fail("HTTP 403: Resource not accessible by personal access token");
+    console.log(s.logs[String(Math.floor(Number(/jobs\\/(\\d+)/.exec(path)[1]) / 100))] || "no log");
+  } else if (/commits\\/\\w+\\/status/.test(path)) {
+    const n = prOfSha(/commits\\/(\\w+)\\/status/.exec(path)[1]);
+    console.log(JSON.stringify({ state: "pending", statuses: (s.statuses?.[n] || []).map((c) => ({ context: c.name, state: c.state.toLowerCase(), target_url: c.link || "" })) }));
+  }
+  else if (path.endsWith("/labels") && args.includes("POST")) { const k = path.split("/")[4]; (s.labels[k] = s.labels[k] || []).push(field("labels")); write(s); }
   else if (path.includes("/rules/branches/")) console.log(JSON.stringify(s.rules || []));
   else if (path.includes("/protection/")) fail("HTTP 404: Not Found");
   else if (path.endsWith("/update-branch")) { if (s.updateFails) fail("HTTP 422"); }
@@ -202,6 +218,31 @@ describe("shepherd pass", () => {
     expect(prompts[0]).not.toContain("lint");
   });
 
+  test("check-runs return 403: a red required job from the Actions runs is detected and handed to fixRed with its job log", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs = [prJson(5, "fix/7-thing", sha)];
+    w.state.rules = [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "Tests" }] } }];
+    w.state.checks[5] = [{ name: "Tests", bucket: "fail", link: "https://github.com/o/r/actions/runs/123/job/9" }, { name: "Dependabot auto-merge", bucket: "pass", link: "https://github.com/o/r/actions/runs/124/job/9" }];
+    w.state.logs["123"] = "phpunit: 3 failures";
+    w.save();
+    const prompts: string[] = [];
+    const p = await shepherd(w, fakeAgent(COMMIT_FIX, prompts)).pass();
+    expect(p.entries[0]!.action).toBe("fixed-ci");
+    expect(prompts[0]).toContain("phpunit: 3 failures");
+  });
+
+  test("a required context with no run yet is pending, not failed", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs = [prJson(5, "fix/7-thing", sha)];
+    w.state.rules = [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "Tests" }] } }];
+    w.state.checks[5] = [{ name: "lint", bucket: "pass", link: "https://github.com/o/r/actions/runs/124/job/9" }];
+    w.save();
+    const p = await shepherd(w, fakeAgent("true")).pass();
+    expect(p.entries[0]).toMatchObject({ action: "waiting", detail: expect.stringContaining("Tests") });
+  });
+
   test("a required legacy commit status that is red reaches fixRed", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
@@ -215,7 +256,7 @@ describe("shepherd pass", () => {
     expect(p.entries[0]!.action).toBe("fixed-ci");
   });
 
-  test("a 403 reading the checks is a visible waiting decision naming the error, and uses no Checks-permission endpoint", async () => {
+  test("a 403 reading the checks is a visible waiting decision naming the error", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
     w.state.prs = [prJson(5, "fix/7-thing", sha)];
@@ -223,7 +264,7 @@ describe("shepherd pass", () => {
     w.save();
     const p = await shepherd(w, fakeAgent("true")).pass();
     expect(p.entries[0]).toMatchObject({ action: "waiting", detail: expect.stringContaining("HTTP 403") });
-    expect(w.calls().some((c) => /check-runs|\/status\b|pr checks/.test(c))).toBe(false);
+    expect(w.calls().some((c) => /check-runs|statusCheckRollup|pr checks/.test(c))).toBe(false);
   });
 
   test("the protection cannot be read: the full check list decides", async () => {
@@ -284,7 +325,8 @@ describe("shepherd pass", () => {
     expect(prompts[0]).toContain("FAIL expected 1 to be 2");
     expect(prompts[0]).toContain("fix/7-thing");
     expect((await remoteLog(w, "fix/7-thing"))[0]).toBe("fix: make the check pass");
-    expect(w.calls().some((c) => /^run view 123 --log-failed/.test(c))).toBe(true);
+    expect(w.calls().some((c) => /^api repos\/\{owner\}\/\{repo\}\/actions\/jobs\/\d+\/logs/.test(c))).toBe(true);
+    expect(w.calls().some((c) => /check-runs|statusCheckRollup/.test(c))).toBe(false);
     expect(w.state.comments).toBeDefined();
     expect(w.calls().some((c) => /pr merge/.test(c))).toBe(false);
     // The worktree is gone.

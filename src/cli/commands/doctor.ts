@@ -103,6 +103,7 @@ export async function probeGhToken(repo: RepoInfo, defaultBranch: string, env: E
     ["Contents", `${base}/branches/${defaultBranch}`],
     ["Issues", `${base}/issues?per_page=1`],
     ["Pull requests", `${base}/pulls?per_page=1`],
+    ["Actions", `${base}/actions/runs?per_page=1`],
   ];
   const results = await Promise.all(probes.map(([, path]) => exec(["gh", "api", path], { env: e })));
   const missing = probes.filter((_, i) => results[i]!.code !== 0).map(([name]) => name);
@@ -114,7 +115,7 @@ export async function probeGhToken(repo: RepoInfo, defaultBranch: string, env: E
 }
 
 export const TOKEN_FIX =
-  "create a fine-grained token for this one repo with Contents RW, Pull requests RW, Issues RW, Metadata R (nothing else) at https://github.com/settings/personal-access-tokens/new, then set BUNKER_GH_TOKEN in ~/.config/bunker/.env (`bunker init` does this)";
+  "create a fine-grained token for this one repo with Contents RW, Pull requests RW, Issues RW, Actions R, Metadata R (nothing else) at https://github.com/settings/personal-access-tokens/new, then set BUNKER_GH_TOKEN in ~/.config/bunker/.env (`bunker init` does this)";
 
 export async function runDoctor(opts: { cwd: string; env?: Env; fetch?: typeof globalThis.fetch }): Promise<{ checks: Check[]; code: number; repo?: RepoInfo; defaultBranch?: string }> {
   const env = opts.env ?? process.env;

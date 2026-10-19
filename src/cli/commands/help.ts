@@ -96,7 +96,7 @@ watch:
   Under watch a run ends once its PR is open and auto-merge is armed, which frees the --parallel slot. The shepherd (the same
   stage as \`bunker shepherd\`) then owns every open bunker PR (same-repo branch {feature|fix}/<n>-*, body "Closes #<n>") on each pass.
   It keeps no state: it reads GitHub, so it carries on after a restart. A red required check goes, with its failed log, to a fix agent on the
-  PR branch (3 attempts, then \`bunker:failed\` on the PR and a notification; reading logs needs Actions: read on BUNKER_GH_TOKEN, else it
+  PR branch (3 attempts, then \`bunker:failed\` on the PR and a notification; CI is read from Actions runs and jobs plus commit statuses, which needs Actions: read on BUNKER_GH_TOKEN, else it
   notifies you); a branch behind its base is updated; a conflict is resolved by an agent, verified, and reviewed again if the diff changed;
   "changes requested" by a maintainer goes to the agent and the review is re-requested. It never merges: auto-merge plus a required check is the gate
   Failed issues get \`bunker:failed\` instead of \`bunker:queued\` and are never retried automatically; a running one shows \`bunker:in-progress\`.

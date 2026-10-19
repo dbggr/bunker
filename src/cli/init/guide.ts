@@ -40,7 +40,7 @@ export const STEPS: StepGuide[] = [
       "  Pull requests: Read and write   (open, update and merge the PR)",
       "  Issues: Read and write          (read the task, label and comment on it)",
       "  Metadata: Read                  (added automatically)",
-      "  Actions: Read                   (see whether CI passed)",
+      "  Actions: Read                   (read CI runs, jobs and logs)",
       "  Workflows: NO                   (so an agent can never change your CI to pass itself)",
       "Create it at https://github.com/settings/personal-access-tokens/new (bunker pre-fills the name and permissions in the link it prints).",
       "Advanced, skipped by default: act as a GitHub App or a separate bot account instead, for separate PR attribution (docs/getting-started.md).",
