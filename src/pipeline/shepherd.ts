@@ -38,6 +38,10 @@ const MARK = {
  * Attempts of a kind since the shepherd last gave up on the PR (a human removing `bunker:failed` starts a fresh count). Only
  * comments by bunker's own identity (`isOwn`) count: anyone can comment a marker on a public repo.
  */
+// eslint-disable-next-line no-control-regex
+const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
+const stripAnsi = (s: string) => s.replace(ANSI, "");
+
 export function attemptsOf(pr: Pick<BunkerPr, "comments">, marker: string, isOwn: (author: string) => boolean): number {
   let n = 0;
   for (const c of pr.comments) {
@@ -255,16 +259,22 @@ export function createShepherd(o: ShepherdOptions) {
   };
 
   /** The failed jobs' logs (`actions/jobs/{id}/logs`), or why they can't be read (usually: the token lacks Actions: read). */
-  const failureLog = async (failed: Check[]): Promise<{ ok: true; text: string } | { ok: false; why: string }> => {
+  const failureLog = async (failed: Check[]): Promise<{ ok: true; text: string } | { ok: false; why: string; denied: boolean }> => {
     const texts: string[] = [];
     let why = "";
+    let denied = false;
     const seen = new Set<string>();
     const jobLog = async (id: string) => {
       if (seen.has(id)) return;
       seen.add(id);
-      const log = await gh`gh api repos/{owner}/{repo}/actions/jobs/${id}/logs`;
-      if (log.exitCode !== 0) why ||= `could not read the log of job ${id}: ${log.stderr.toString().trim()}`;
-      else texts.push(log.stdout.toString());
+      // Newer gh refuses output with terminal escape sequences unless told otherwise; older gh doesn't know the flag.
+      let log = await gh`gh api --allow-escape-sequences repos/{owner}/{repo}/actions/jobs/${id}/logs`;
+      if (log.exitCode !== 0 && /unknown flag/i.test(log.stderr.toString())) log = await gh`gh api repos/{owner}/{repo}/actions/jobs/${id}/logs`;
+      if (log.exitCode !== 0) {
+        const err = log.stderr.toString().trim();
+        why ||= `could not read the log of job ${id}: ${err}`;
+        if (/\b40[34]\b/.test(err)) denied = true;
+      } else texts.push(stripAnsi(log.stdout.toString()));
     };
     for (const c of failed) {
       const job = c.job ?? /\/job\/(\d+)/.exec(c.link ?? "")?.[1];
@@ -282,7 +292,7 @@ export function createShepherd(o: ShepherdOptions) {
         for (const j of bad) await jobLog(String(j.id));
       } else why ||= `check ${c.name} is not a GitHub Actions job, so there is no log to read`;
     }
-    return texts.length ? { ok: true, text: tailLines(texts.join("\n"), 400).slice(-30_000) } : { ok: false, why: why || "no failing check had a log" };
+    return texts.length ? { ok: true, text: tailLines(texts.join("\n"), 400).slice(-30_000) } : { ok: false, why: why || "no failing check had a log", denied };
   };
 
   const maintainer = async (login: string, association: string) => {
@@ -466,7 +476,12 @@ export function createShepherd(o: ShepherdOptions) {
     const attempts = attemptsOf(pr, MARK.fix, isOwn);
     if (attempts >= max) return giveUp(pr, `required check(s) ${names} are still red after ${attempts} fix attempt(s)`);
     const log = await failureLog(failed);
-    if (!log.ok) return giveUp(pr, `${log.why} (reading CI logs needs Actions: read on BUNKER_GH_TOKEN)`);
+    if (!log.ok) {
+      if (log.denied) return giveUp(pr, `${log.why} (reading CI logs needs Actions: read on BUNKER_GH_TOKEN)`);
+      // Not a permission problem: no attempt is spent, the next pass reads the log again.
+      note(pr, `could not read the CI log, will retry: ${log.why}`);
+      return entry(pr, "waiting", log.why);
+    }
     await mark(pr, `${MARK.fix}\nbunker: fixing failing check(s) ${codeSpan(names)} (attempt ${attempts + 1} of ${max}).`);
     note(pr, `fixing ${names} (attempt ${attempts + 1} of ${max})`);
     const prompt =
