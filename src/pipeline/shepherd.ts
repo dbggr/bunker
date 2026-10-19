@@ -34,10 +34,14 @@ const MARK = {
   review: (id: string) => `<!-- bunker-shepherd:review:${id} -->`,
 };
 
-/** Attempts of a kind since the shepherd last gave up on the PR (a human removing `bunker:failed` starts a fresh count). */
-export function attemptsOf(pr: Pick<BunkerPr, "comments">, marker: string): number {
+/**
+ * Attempts of a kind since the shepherd last gave up on the PR (a human removing `bunker:failed` starts a fresh count). Only
+ * comments by bunker's own identity (`isOwn`) count: anyone can comment a marker on a public repo.
+ */
+export function attemptsOf(pr: Pick<BunkerPr, "comments">, marker: string, isOwn: (author: string) => boolean): number {
   let n = 0;
   for (const c of pr.comments) {
+    if (!isOwn(c.author)) continue;
     if (c.body.includes(MARK.gaveUp)) n = 0;
     else if (c.body.includes(marker)) n++;
   }
@@ -135,8 +139,21 @@ export function createShepherd(o: ShepherdOptions) {
   /** Adds to `pr.comments` too, so later steps of this pass count what was just written. */
   const mark = async (pr: BunkerPr, body: string) => {
     await comment(pr, body);
-    pr.comments.push({ body });
+    pr.comments.push({ body, author: ownLogin ?? "" });
   };
+
+  /** The login the token acts as, or undefined when it can't say (an App installation token can't read `/user`). */
+  let ownLogin: string | undefined;
+  let ownResolved = false;
+  const resolveOwn = async () => {
+    if (ownResolved) return;
+    const r = await gh`gh api user --jq .login`;
+    const login = r.exitCode === 0 ? r.stdout.toString().trim() : "";
+    ownLogin = env.BUNKER_IDENTITY_LOGIN || login || undefined;
+    ownResolved = true;
+  };
+  /** Bunker's own comments: the token's login, or (when that is unknown, i.e. a GitHub App) an App bot account. */
+  const isOwn = (author: string) => (ownLogin ? author === ownLogin : author.endsWith("[bot]"));
 
   const giveUp = async (pr: BunkerPr, why: string): Promise<ShepherdEntry> => {
     await ensureLabel(FAILED_LABEL, cwd, env);
@@ -207,7 +224,7 @@ export function createShepherd(o: ShepherdOptions) {
     const pending = [];
     for (const row of rows) {
       if (row.state !== "CHANGES_REQUESTED" || latest.get(row.login) !== row.id) continue;
-      if (pr.comments.some((c) => c.body.includes(MARK.review(row.id)))) continue;
+      if (pr.comments.some((c) => isOwn(c.author) && c.body.includes(MARK.review(row.id)))) continue;
       if (await maintainer(row.login, row.association)) pending.push(row);
     }
     if (!pending.length) return [];
@@ -359,7 +376,7 @@ export function createShepherd(o: ShepherdOptions) {
 
   const fixRed = async (pr: BunkerPr, failed: Check[]): Promise<ShepherdEntry> => {
     const names = failed.map((c) => c.name).join(", ");
-    const attempts = attemptsOf(pr, MARK.fix);
+    const attempts = attemptsOf(pr, MARK.fix, isOwn);
     if (attempts >= max) return giveUp(pr, `required check(s) ${names} are still red after ${attempts} fix attempt(s)`);
     const log = await failureLog(failed);
     if (!log.ok) return giveUp(pr, `${log.why} (reading CI logs needs Actions: read on BUNKER_GH_TOKEN)`);
@@ -386,7 +403,7 @@ export function createShepherd(o: ShepherdOptions) {
 
   /** Merges the base into the PR branch; an agent resolves conflicts, verify runs, and a changed diff is reviewed again. */
   const resolveConflict = async (pr: BunkerPr): Promise<ShepherdEntry> => {
-    const attempts = attemptsOf(pr, MARK.conflict);
+    const attempts = attemptsOf(pr, MARK.conflict, isOwn);
     if (attempts >= max) return giveUp(pr, `the merge conflict with ${pr.base} is still there after ${attempts} attempt(s)`);
     await mark(pr, `${MARK.conflict}\nbunker: resolving a conflict with ${codeSpan(pr.base)} (attempt ${attempts + 1} of ${max}).`);
     note(pr, `resolving a conflict with ${pr.base}`);
@@ -428,6 +445,7 @@ export function createShepherd(o: ShepherdOptions) {
   };
 
   const handle = async (pr: BunkerPr): Promise<ShepherdEntry> => {
+    await resolveOwn();
     const skip = skipReason(pr);
     if (skip) return entry(pr, "skipped", skip);
     if (pr.mergeable === "CONFLICTING" || pr.mergeState === "DIRTY") return resolveConflict(pr);
