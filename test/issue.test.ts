@@ -175,6 +175,12 @@ if [ "$1 $2" = "api repos/{owner}/{repo}/rules/branches/main" ]; then
   if [ -f "${root}/rules.fail" ]; then echo "HTTP 403" >&2; exit 1; fi
   cat "${root}/rules.json"; exit 0
 fi
+if [ "$1 $2" = "api repos/{owner}/{repo}/branches/main/protection/required_status_checks" ]; then
+  echo "$*" >> "${root}/protection.log"
+  if [ -f "${root}/protection.err" ]; then cat "${root}/protection.err" >&2; exit 1; fi
+  if [ -f "${root}/protection.json" ]; then cat "${root}/protection.json"; exit 0; fi
+  echo "HTTP 404: Branch not protected" >&2; exit 1
+fi
 if [ "$1" = "api" ]; then
   case "$*" in *"/permission"*) l="$*"; l=\${l#*collaborators/}; l=\${l%%/*}; if [ -f "${root}/perm-$l" ]; then cat "${root}/perm-$l"; exit 0; fi; echo "HTTP 404" >&2; exit 1;; esac
   echo "$*" >> "${root}/api.log"
@@ -866,11 +872,47 @@ describe("runIssue() --merge", () => {
     expect(await Bun.file(mergeLog).exists()).toBe(false);
   });
 
-  test("required checks come from the rules endpoint only, no classic protection lookup", async () => {
+  test("ruleset only: protection is not consulted", async () => {
     const { repo, mergeLog } = await setup(issue(), "ff");
     const r = await run(repo);
     expect(r.status).toBe("merged");
-    expect((await Bun.file(join(dirname(mergeLog), "rules.log")).text()).trim()).toBe("api repos/{owner}/{repo}/rules/branches/main");
+    expect(await Bun.file(join(dirname(mergeLog), "protection.log")).exists()).toBe(false);
+  });
+
+  test("protection only (empty rulesets) arms auto-merge", async () => {
+    const { repo, mergeLog } = await setup(issue(), "ff");
+    await Bun.write(join(dirname(mergeLog), "rules.json"), "[]");
+    await Bun.write(join(dirname(mergeLog), "protection.json"), JSON.stringify({ contexts: ["phpunit"], checks: [{ context: "phpunit" }] }));
+    const r = await run(repo);
+    expect(r.status).toBe("merged");
+  });
+
+  test("ruleset and protection both set arms auto-merge", async () => {
+    const { repo, mergeLog } = await setup(issue(), "ff");
+    await Bun.write(join(dirname(mergeLog), "protection.json"), JSON.stringify({ contexts: ["phpunit"] }));
+    const r = await run(repo);
+    expect(r.status).toBe("merged");
+  });
+
+  test("neither ruleset nor protection → merge-failed naming both", async () => {
+    const { repo, mergeLog } = await setup(issue(), "ff");
+    await Bun.write(join(dirname(mergeLog), "rules.json"), "[]");
+    const r = await run(repo);
+    expect(r.status).toBe("merge-failed");
+    expect(r.error).toMatch(/no required status check in its rulesets or branch protection/);
+    expect(await Bun.file(mergeLog).exists()).toBe(false);
+  });
+
+  test("protection unreadable (403) → merge-failed saying so, not 'no required check'", async () => {
+    const { repo, mergeLog } = await setup(issue(), "ff");
+    await Bun.write(join(dirname(mergeLog), "rules.json"), "[]");
+    await Bun.write(join(dirname(mergeLog), "protection.err"), "HTTP 403: Resource not accessible by integration");
+    const r = await run(repo);
+    expect(r.status).toBe("merge-failed");
+    expect(r.error).toMatch(/could not read the classic branch protection/);
+    expect(r.error).toContain("Administration");
+    expect(r.error).not.toMatch(/has no required status check/);
+    expect(await Bun.file(mergeLog).exists()).toBe(false);
   });
 
   test.each([".bunker/Dockerfile", ".github/workflows/ci.yml"])("a PR touching %s → no auto-merge, labelled bunker:review, needs-review", async (path) => {

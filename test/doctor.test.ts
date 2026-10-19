@@ -116,13 +116,34 @@ describe("doctor", () => {
     expect(failed(r.checks)).not.toContain("required-check");
   });
 
-  test("classic branch protection alone does not satisfy required-check (bunker --merge reads rulesets only)", async () => {
+  test("classic branch protection alone satisfies required-check", async () => {
     const w = await fakeWorld({ files: { "rules.json": "[]", "protection.json": JSON.stringify({ contexts: ["test"], checks: [{ context: "test" }] }) } });
+    const r = await runDoctor({ cwd: w.repo, env: w.env });
+    expect(failed(r.checks)).not.toContain("required-check");
+  });
+
+  test("ruleset and protection both set satisfies required-check", async () => {
+    const w = await fakeWorld({ files: { "protection.json": JSON.stringify({ contexts: ["phpunit"], checks: [] }) } });
+    const r = await runDoctor({ cwd: w.repo, env: w.env });
+    expect(failed(r.checks)).not.toContain("required-check");
+  });
+
+  test("neither ruleset nor protection fails required-check", async () => {
+    const w = await fakeWorld({ files: { "rules.json": "[]" } });
     const r = await runDoctor({ cwd: w.repo, env: w.env });
     const c = r.checks.find((c) => c.id === "required-check")!;
     expect(c.ok).toBe(false);
     expect(c.fix).toContain("ruleset");
     expect(c.fix).toContain("classic");
+  });
+
+  test("unreadable protection is reported as such, not as no required check", async () => {
+    const w = await fakeWorld({ files: { "rules.json": "[]", "protection-err.txt": "HTTP 403: Resource not accessible by integration" } });
+    const r = await runDoctor({ cwd: w.repo, env: w.env });
+    const c = r.checks.find((c) => c.id === "required-check")!;
+    expect(c.ok).toBe(false);
+    expect(c.fix).toContain("could not read");
+    expect(c.fix).toContain("Administration");
   });
 
   test("a ruleset status-check rule with no checks listed does not count", async () => {

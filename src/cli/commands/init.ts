@@ -445,7 +445,7 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
 
   // 6. merge safety
   step(5);
-  wrap("That takes three things: auto-merge allowed on the repo, a CI workflow (bunker init writes one with a job named `test` if you have none), and a ruleset (GitHub's newer branch protection) that requires it. Classic branch protection (Settings -> Branches) doesn't count: bunker's scoped token can't read it.");
+  wrap("That takes three things: auto-merge allowed on the repo, a CI workflow (bunker init writes one with a job named `test` if you have none), and a required status check on the default branch, from a ruleset (GitHub's newer branch protection) or classic branch protection (Settings -> Branches).");
   const slug = repo?.slug;
   const branch = first.defaultBranch ?? "main";
   const iac = iacTool(root);
@@ -486,7 +486,7 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
         todo.push({ what: "no CI workflow", fix: `add ${CI_FILE} with a job named \`${CI_JOB}\` (bunker init offers to write it; https://docs.github.com/actions/quickstart)` });
       }
     }
-    if (!failing("required-check")) skip(`${branch} requires a status check (ruleset)`);
+    if (!failing("required-check")) skip(`${branch} requires a status check (ruleset or branch protection)`);
     else {
       const already = await requiredChecks(slug, branch, env);
       const list = (cs: string[]) => cs.map((c) => `\`${c}\``).join(", ");
@@ -496,7 +496,7 @@ async function steps(opts: InitOptions, env: Env, ui: ReturnType<typeof makeUi>,
       const checks = ownCi ? jobs : [CI_JOB];
       if (already.length) {
         say(`  ✓ ${branch} already requires ${list(already)} (branch protection or a ruleset); adding no ruleset.`);
-        wrap("bunker --merge reads rulesets only: if it reports no required check, recreate that rule as a ruleset (Settings -> Rules) rather than adding a second check.", 4);
+        wrap("bunker --merge reads classic branch protection with its scoped token, which needs Administration: read; if it reports it can't read it, grant that or recreate the rule as a ruleset (Settings -> Rules) rather than adding a second check.", 4);
       } else if (!checks.length) {
         say(`  ✗ ${branch} has no ruleset requiring a status check, and none of the CI jobs that run on pull_request could be identified.`);
         wrap(`By hand: ${ui.link(settingsUrl("/rules"))} -> New ruleset -> target ${branch} -> "Require status checks to pass" -> add your CI job's name -> Create.`, 4);

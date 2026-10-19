@@ -11,6 +11,7 @@ import { applyIdentity, identityKind } from "../../github/identity.ts";
 import { AWAITING_REVIEW_LABEL, FAILED_LABEL, IN_PROGRESS_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
 import { SKILL_ROLES, SkillError, resolveSkills, skillPaths } from "../../core/skills.ts";
 import { PRIORITY_LABELS } from "../../core/priority.ts";
+import { requiredCheck } from "../../core/required-check.ts";
 
 type Env = Record<string, string | undefined>;
 
@@ -286,19 +287,20 @@ export async function runDoctor(opts: { cwd: string; env?: Env; fetch?: typeof g
     } catch {}
     add({ id: "ci", group: "github", label: "CI workflow", ok: ci, fix: "add a workflow under .github/workflows/ that runs your tests, e.g. on pull_request" });
     const u = userEnv(env);
-    // Rulesets only: `bunker --merge` reads nothing else (classic protection needs Administration, which the scoped token lacks).
-    const rules = await exec(["gh", "api", `repos/${repo!.slug}/rules/branches/${branch}`], { env: u });
-    let required = false;
-    try {
-      const r = JSON.parse(rules.out) as { type?: string; parameters?: { required_status_checks?: unknown[] } }[];
-      required = rules.code === 0 && r.some((x) => x.type === "required_status_checks" && (x.parameters?.required_status_checks?.length ?? 0) > 0);
-    } catch {}
+    // Same check as `bunker --merge`: a ruleset or classic branch protection (read with the user's own gh login, which has the admin access protection needs).
+    const gate = await requiredCheck(
+      () => exec(["gh", "api", `repos/${repo!.slug}/rules/branches/${branch}`], { env: u }),
+      () => exec(["gh", "api", `repos/${repo!.slug}/branches/${branch}/protection/required_status_checks`], { env: u }),
+    );
     add({
       id: "required-check",
       group: "github",
       label: `${branch} requires a status check`,
-      ok: required,
-      fix: `Settings → Rules → Rulesets → new branch ruleset targeting ${branch} → "Require status checks to pass" and pick your CI job (https://github.com/${repo!.slug}/settings/rules); classic branch protection (Settings → Branches) is not seen by bunker --merge, so it does not count; if the repo is managed by IaC, change it there`,
+      ok: gate.state === "required",
+      fix:
+        gate.state === "unreadable"
+          ? `could not read the rulesets or branch protection of ${branch} (${gate.detail.slice(0, 160)}); check that your gh login can administer the repo, and that the run's token has Administration: read`
+          : `Settings → Rules → Rulesets → new branch ruleset targeting ${branch} → "Require status checks to pass" and pick your CI job (https://github.com/${repo!.slug}/settings/rules), or require one in classic branch protection (Settings → Branches); if the repo is managed by IaC, change it there`,
     });
   }
 
