@@ -63,7 +63,7 @@ async function setup(issues: [number, string, string][], mergeMode: "ff" | "none
   await Bun.write(
     join(bin, "gh"),
     `#!/bin/sh
-if [ "$1" = "api" ]; then case "$*" in *"/rules/branches/"*) echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]'; exit 0;; *graphql*|*renamed*) exit 0;; *created_at*) echo 2020-01-01T00:00:00Z; exit 0;; *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
+if [ "$1" = "api" ]; then case "$*" in *"/rules/branches/"*) echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]'; exit 0;; *graphql*) cat "${root}/graphql.txt" 2>/dev/null; exit 0;; *renamed*) exit 0;; *created_at*) if [ -f "${root}/events.txt" ]; then cat "${root}/events.txt"; else echo 2020-01-01T00:00:00Z; fi; exit 0;; *"/events"*) echo owner; exit 0;; *"/permission"*) echo admin; exit 0;; esac; fi
 if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker:in-progress"; then echo '[]'; exit 0; fi
 if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker-blocked"; then
   if [ -f "${root}/blocked-list.json" ]; then cat "${root}/blocked-list.json"; else echo '[]'; fi
@@ -433,6 +433,49 @@ describe("blocked issues", () => {
     const resumed = await resumeBlocked(repo, process.env as Record<string, string>);
     expect(resumed.map((q) => q.number)).toEqual([1]);
     expect(await Bun.file(join(root, "edits.log")).text()).toContain("issue edit 1 --remove-label bunker-blocked --add-label bunker:queued");
+  });
+
+  describe("edits after the maintainer's label", () => {
+    const CYCLE = ["2026-01-01T00:00:00Z", "U\t2026-01-02T00:00:00Z", "B\t2026-01-02T00:00:00Z", "2026-01-05T00:00:00Z"].join("\n");
+    async function blockedOn50(editAt?: string) {
+      const { repo } = await setup(issues, "ff");
+      const root = join(repo, "..");
+      const bin = join(root, "bin");
+      const orig = await Bun.file(join(bin, "gh")).text();
+      await Bun.write(join(bin, "gh"), orig.replace(/\*"\/permission"\*\) echo admin; exit 0;;/, '*"/permission"*) case "$*" in *mallory*) echo read; exit 0;; esac; echo admin; exit 0;;'));
+      await Bun.write(join(root, "events.txt"), CYCLE);
+      if (editAt) await Bun.write(join(root, "graphql.txt"), `edit\t${editAt}\tmallory\n`);
+      await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Do it.", author: { login: "mallory" }, state: "OPEN", labels: [{ name: "bunker-blocked" }], comments: [{ authorAssociation: "OWNER", body: "Blocked by #50: ` x `" }] }));
+      await Bun.write(join(root, "issue-50.json"), JSON.stringify({ number: 50, title: "x", state: "CLOSED", labels: [] }));
+      await Bun.write(join(root, "blocked-list.json"), JSON.stringify([{ number: 1, title: "First", createdAt: "2026-01-01T00:00:00Z" }]));
+      return { repo, root };
+    }
+
+    test("an outsider's edit while blocked is not requeued: a comment asks for a manual relabel", async () => {
+      const { repo, root } = await blockedOn50("2026-01-03T00:00:00Z"); // after the first label, before the bunker requeue
+      expect(await resumeBlocked(repo, process.env as Record<string, string>)).toEqual([]);
+      const log = await Bun.file(join(root, "edits.log")).text();
+      expect(log).not.toContain("--add-label bunker:queued");
+      expect(log).toContain("issue comment 1");
+    });
+
+    test("no edit while blocked is requeued", async () => {
+      const { repo } = await blockedOn50();
+      expect((await resumeBlocked(repo, process.env as Record<string, string>)).map((q) => q.number)).toEqual([1]);
+    });
+
+    test("an edit between the queue check and the fetch rejects the run", async () => {
+      const { repo, root } = await blockedOn50("2026-01-03T00:00:00Z");
+      await Bun.write(join(root, "events.txt"), "2026-01-01T00:00:00Z\n");
+      await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Do it.", author: { login: "mallory" }, state: "OPEN", labels: [{ name: "bunker:queued" }] }));
+      await expect(runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: fakeAgent() })).rejects.toThrow(/edited after/);
+    });
+
+    test("an unedited queued issue runs", async () => {
+      const { repo, root } = await blockedOn50();
+      await Bun.write(join(root, "issue-1.json"), JSON.stringify({ number: 1, title: "First", body: "Do it.", author: { login: "mallory" }, state: "OPEN", labels: [{ name: "bunker:queued" }] }));
+      expect((await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: fakeAgent() })).status).toBe("pr-opened");
+    });
   });
 
   test("the old <blocked-by> tag is no longer a block", async () => {

@@ -3,7 +3,8 @@ import { codeSpan } from "../core/redact.ts";
 import { output } from "../core/output.ts";
 import type { Queued } from "../core/priority.ts";
 import { markTrust } from "./trust.ts";
-import { QUEUED_LABEL, unqueue } from "./labels.ts";
+import { enforceUnedited } from "./labeler.ts";
+import { BLOCKED_LABEL, QUEUED_LABEL, unqueue } from "./labels.ts";
 
 export interface IssueInfo {
   number: number;
@@ -58,8 +59,6 @@ export function issueBranch(issue: Pick<IssueInfo, "number" | "title" | "labels"
   return { branch: `${type}/${issue.number}-${slug}`, slug };
 }
 
-const BLOCKED_LABEL = "bunker-blocked";
-
 export type Env = Record<string, string>;
 
 /** Swaps `bunker:queued` for `bunker-blocked` on the issue and says what it waits on. */
@@ -108,6 +107,8 @@ export async function resumeBlocked(cwd: string, env: Env): Promise<Queued[]> {
     if (!refs.length) continue;
     const states = await Promise.all(refs.map((r) => isDone(r, cwd, env)));
     if (!states.every((s) => s === true)) continue;
+    // A non-maintainer may have rewritten it while it waited; the label vouched for the text as it was then.
+    if (!(await enforceUnedited(n, { cwd, env, dropLabel: BLOCKED_LABEL }))) continue;
     const edit = await $`gh issue edit ${n} --remove-label ${BLOCKED_LABEL} --add-label ${QUEUED_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
     if (edit.exitCode !== 0) continue;
     await $`gh issue comment ${n} --body ${`Unblocked: ${refs.map((r) => `#${r}`).join(", ")} ${refs.length === 1 ? "is" : "are"} closed`}`.cwd(cwd).env(env).nothrow().quiet();

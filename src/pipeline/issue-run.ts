@@ -2,6 +2,8 @@ import type { Services } from "../sandboxes/services.ts";
 import { liveGhEnv } from "../github/identity.ts";
 import { issueBranch, type IssueInfo } from "../github/issues.ts";
 import { markTrust } from "../github/trust.ts";
+import { enforceUnedited } from "../github/labeler.ts";
+import { hasQueuedLabel } from "../github/labels.ts";
 import { claimRemoteBranch } from "../github/branches.ts";
 import { $ } from "bun";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -28,7 +30,7 @@ import { runVerify } from "./steps/verify.ts";
 import { publishIssue } from "./steps/pr.ts";
 import { closeNoChange } from "./steps/close.ts";
 
-export async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyRetries, check, verifyOnHost, verifyNetwork, merge, manual, handoff, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, mention, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
+export async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyRetries, check, verifyOnHost, verifyNetwork, merge, manual, handoff, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, mention, allowLabelers, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -43,6 +45,8 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   issue.authorAssociation = assoc.exitCode === 0 ? assoc.stdout.toString().trim() : "";
   await markTrust(issue, cwd, env);
   if (issue.state.toUpperCase() !== "OPEN") throw new Error(`issue #${number} is closed`);
+  // The queue checked the label before this fetch: refuse a body an outsider rewrote in between.
+  if (hasQueuedLabel(issue.labels) && !(await enforceUnedited(number, { cwd, env, ...(allowLabelers ? { allow: allowLabelers } : {}) }))) throw new Error(`issue #${number} was edited after it was queued`);
 
   const base = issueBranch(issue);
   const slug = attempt > 1 ? `${base.slug}-${attempt}` : base.slug;

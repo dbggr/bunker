@@ -18,6 +18,8 @@ export interface IssueOptions extends Timeouts {
   cwd?: string;
   /** `@login` put in the comment when the issue becomes `bunker-blocked`, so GitHub notifies the user. */
   mention?: string;
+  /** Logins besides admin/maintain whose edits after the queue label are trusted (`--allow-labeler`). */
+  allowLabelers?: string[];
   maxRounds?: number;
   /** Resume the implementer's agent session across review rounds. Defaults to true. */
   resume?: boolean;

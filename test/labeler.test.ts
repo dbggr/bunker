@@ -2,7 +2,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkLabeler, configAllowedLabelers, enforceLabeler } from "../src/github/labeler.ts";
+import { checkLabeler, configAllowedLabelers, enforceLabeler, queueCycleStartAt } from "../src/github/labeler.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -147,5 +147,30 @@ describe("configAllowedLabelers()", () => {
     dirs.push(home);
     await Bun.write(join(home, "bunker", "config.toml"), 'allow-labelers = ["a"]\n');
     await expect(configAllowedLabelers({ XDG_CONFIG_HOME: home })).rejects.toThrow(/allow_labelers/);
+  });
+});
+
+describe("queueCycleStartAt()", () => {
+  async function withEvents(lines: string[]) {
+    const root = await mkdtemp(join(tmpdir(), "bunker-cycle-"));
+    dirs.push(root);
+    await Bun.write(join(root, "gh"), `#!/bin/sh\nprintf '%b\\n' '${lines.join("\\n")}'\n`);
+    await chmod(join(root, "gh"), 0o755);
+    return { cwd: process.cwd(), env: { ...process.env, PATH: `${root}:${process.env.PATH}` } as Record<string, string> };
+  }
+  const t = (s: string) => Date.parse(s);
+
+  test("a block and its requeue stay in the cycle that began at the first label", async () => {
+    const o = await withEvents(["2026-01-01T00:00:00Z", "U\\t2026-01-02T00:00:00Z", "B\\t2026-01-02T00:00:01Z", "2026-01-05T00:00:00Z"]);
+    expect(await queueCycleStartAt(7, o)).toBe(t("2026-01-01T00:00:00Z"));
+  });
+
+  test("a removal that is not a block starts a new cycle at the next label", async () => {
+    const o = await withEvents(["2026-01-01T00:00:00Z", "U\\t2026-01-02T00:00:00Z", "2026-01-05T00:00:00Z"]);
+    expect(await queueCycleStartAt(7, o)).toBe(t("2026-01-05T00:00:00Z"));
+  });
+
+  test("no label event is undefined", async () => {
+    expect(await queueCycleStartAt(7, await withEvents([""]))).toBeUndefined();
   });
 });

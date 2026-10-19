@@ -79,7 +79,7 @@ export async function issueCommand({ manual, values, repoCfg, onEvent, agent, re
       await publisher?.flush();
       process.exit(1);
     }
-    result = await runIssue({ onEvent, issue, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, merge: values.merge, manual, ciTimeoutMin, ...timeouts });
+    result = await runIssue({ onEvent, issue, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, merge: values.merge, manual, allowLabelers, ciTimeoutMin, ...timeouts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();

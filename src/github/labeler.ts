@@ -1,6 +1,6 @@
 import { $ } from "bun";
 import { readUserConfig } from "../core/user-config.ts";
-import { QUEUED_EVENT_JQ, unqueue } from "./labels.ts";
+import { BLOCKED_LABEL, QUEUED_EVENT_JQ, QUEUED_LABEL, unqueue } from "./labels.ts";
 
 type Env = Record<string, string>;
 
@@ -38,12 +38,13 @@ async function checkPermission(adder: string, opts: { cwd: string; env: Env }): 
 
 /**
  * The maintainer gate checks who labelled, but the body is read later: an outsider could swap it after the label. Refuse when the
- * body or title was edited after the latest `bunker:queued` label by anyone who is not admin/maintain/allowed. Fails closed on any error.
+ * body or title was edited after the `bunker:queued` label that opened the current cycle (see queueCycleStartAt) by anyone who is
+ * not admin/maintain/allowed. Fails closed on any error.
  */
-async function checkEditedSince(issue: number, adder: string, opts: { cwd: string; env: Env }, allowed: (login: string) => boolean): Promise<LabelerCheck> {
+export async function checkEditedSince(issue: number, adder: string, opts: { cwd: string; env: Env }, allowed: (login: string) => boolean): Promise<LabelerCheck> {
   const { cwd, env } = opts;
   const fail = (why: string): LabelerCheck => ({ ok: false, adder, denied: false, reason: `could not check #${issue} for edits after labelling: ${why}` });
-  const labeledAt = await latestBunkerLabeledAt(issue, opts);
+  const labeledAt = await queueCycleStartAt(issue, opts);
   if (labeledAt === undefined) return fail("no label time");
   const query = "query($owner:String!,$repo:String!,$n:Int!){repository(owner:$owner,name:$repo){issue(number:$n){lastEditedAt userContentEdits(first:100){nodes{editedAt editor{login}}}}}}";
   const jq = '.data.repository.issue | ("last\t" + (.lastEditedAt // "")), (.userContentEdits.nodes[] | "edit\t" + .editedAt + "\t" + (.editor.login // ""))';
@@ -82,6 +83,34 @@ async function checkEditedSince(issue: number, adder: string, opts: { cwd: strin
   return { ok: true, adder };
 }
 
+/**
+ * When the current queue cycle began (ms since epoch): the first `bunker:queued` label since the label was last taken off for any
+ * reason but a block. A block (`bunker-blocked` replaces the label) and the requeue that follows stay in the cycle, so a human's
+ * vetting at the first label keeps covering the issue; any other removal and relabel starts a new cycle. Undefined if there is no
+ * such event or the lookup failed.
+ */
+export async function queueCycleStartAt(issue: number, opts: { cwd: string; env: Env }): Promise<number | undefined> {
+  const jq = `.[] | if (${QUEUED_EVENT_JQ}) then .created_at elif (.event == "unlabeled" and .label.name == "${QUEUED_LABEL}") then "U\t" + .created_at elif (.event == "labeled" and .label.name == "${BLOCKED_LABEL}") then "B\t" + .created_at else empty end`;
+  const events = await $`gh api repos/{owner}/{repo}/issues/${issue}/events --paginate --jq ${jq}`.cwd(opts.cwd).env(opts.env).nothrow().quiet();
+  if (events.exitCode !== 0) return undefined;
+  const blocks: number[] = [];
+  let start: number | undefined;
+  let unqueuedAt: number | undefined;
+  for (const line of events.stdout.toString().split("\n").map((l) => l.trim()).filter(Boolean)) {
+    const [kind, rest] = line.includes("\t") ? (line.split("\t") as [string, string]) : ["T", line];
+    const at = Date.parse(rest);
+    if (Number.isNaN(at)) return undefined;
+    if (kind === "B") blocks.push(at);
+    else if (kind === "U") unqueuedAt = at;
+    else {
+      const blocked = unqueuedAt !== undefined && blocks.some((b) => b >= unqueuedAt! - 5000 && b <= at);
+      if (start === undefined || (unqueuedAt !== undefined && !blocked)) start = at;
+      unqueuedAt = undefined;
+    }
+  }
+  return start;
+}
+
 /** When the latest `bunker:queued` label was added (ms since epoch); undefined if there is no such event or the lookup failed. */
 export async function latestBunkerLabeledAt(issue: number, opts: { cwd: string; env: Env }): Promise<number | undefined> {
   const events = await $`gh api repos/{owner}/{repo}/issues/${issue}/events --paginate --jq ${`.[] | select(${QUEUED_EVENT_JQ}) | .created_at`}`.cwd(opts.cwd).env(opts.env).nothrow().quiet();
@@ -89,6 +118,26 @@ export async function latestBunkerLabeledAt(issue: number, opts: { cwd: string; 
   const last = events.stdout.toString().split("\n").map((l) => l.trim()).filter(Boolean).pop();
   const at = last ? Date.parse(last) : NaN;
   return Number.isNaN(at) ? undefined : at;
+}
+
+/**
+ * For a run or requeue of an issue a maintainer already queued: refuses when its title or body was edited by a non-maintainer after
+ * the cycle's first `bunker:queued` label. On refusal takes the label off and comments, so a maintainer must relabel after reading it.
+ * True if the issue may be worked.
+ */
+export async function enforceUnedited(issue: number, opts: { cwd: string; env: Env; allow?: string[]; dropLabel?: string; log?: (text: string) => void }): Promise<boolean> {
+  const log = opts.log ?? ((t: string) => console.warn(t));
+  const allow = opts.allow ?? [];
+  const r = await checkEditedSince(issue, "", opts, (login) => allow.some((a) => a.toLowerCase() === login.toLowerCase()));
+  if (r.ok) return true;
+  log(`bunker: skipping #${issue}: ${r.reason}`);
+  if (r.denied) {
+    const { cwd, env } = opts;
+    const edit = await unqueue(issue, cwd, env, opts.dropLabel ? ["--remove-label", opts.dropLabel] : []);
+    if (edit.exitCode !== 0) log(`bunker: could not remove the label from #${issue}: ${edit.stderr.toString().trim()}`);
+    await $`gh issue comment ${issue} --body ${"The title or body was edited after a maintainer queued this issue, so bunker will not run it unread. Review it, then add `bunker:queued` again."}`.cwd(cwd).env(env).nothrow().quiet();
+  }
+  return false;
 }
 
 /** Checks the labeler; when refused for lack of permission, removes the label and says why on the issue. True if the issue may be worked. */
