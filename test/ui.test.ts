@@ -468,6 +468,22 @@ describe("hub page model", () => {
     expect(level(5).frac).toBeUndefined();
   });
 
+  test("repoLinks: an owner/repo tab gets the repo link and four quick links; a folder name gets neither", async () => {
+    const M = await load();
+    const l = M.repoLinks("acme/widgets");
+    const base = "https://github.com/acme/widgets";
+    expect(l.url).toBe(base);
+    expect(l.quick.map((q: any) => q.label)).toEqual(["Queued", "Failed", "Open PRs", "Actions"]);
+    const q = (s: string) => base + "/issues?q=" + encodeURIComponent(`is:issue is:open label:"${s}"`);
+    expect(l.quick[0].url).toBe(q("bunker:queued"));
+    expect(l.quick[1].url).toBe(q("bunker:failed"));
+    expect(l.quick[0].url).toContain("label%3A%22bunker%3Aqueued%22");
+    expect(l.quick[2].url).toBe(base + "/pulls");
+    expect(l.quick[3].url).toBe(base + "/actions");
+    expect(M.repoLinks("my-folder")).toBeUndefined();
+    expect(M.repoLinks("")).toBeUndefined();
+  });
+
   test("page uses no external assets and spells status with icons", async () => {
     const html = await Bun.file(new URL("../src/ui/ui.html", import.meta.url)).text();
     expect(html).not.toMatch(/https?:\/\/(?!127)|@import|<link/);

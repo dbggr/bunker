@@ -109,6 +109,9 @@
   .badge { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: #22262B; color: var(--text-2); }
   .badge.green { background: #16261D; color: var(--ok); } .badge.waiting { background: #2B2416; color: var(--warn); } .badge.failed, .badge.gave-up { background: #2E1A18; color: var(--bad-text); }
   .shep .note { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .repo-name { display: flex; align-items: center; gap: 8px; font-weight: 600; flex-wrap: wrap; }
+  .repo-links { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; }
+  .repo-links a { color: var(--muted); } .repo-links a:hover { color: var(--text); }
   .kv { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 16px; font-size: 13px; }
   .kv dt { color: var(--muted); } .kv dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
   .none { color: var(--muted); font-size: 13px; }
@@ -279,6 +282,13 @@ const Model = (() => {
     if (slug) for (const s of rows) if (!s.prUrl) s.prUrl = "https:" + "//github.com/" + slug + "/pull/" + s.pr;
     return rows;
   }
+  /** Repo link and quick links from the tab's owner/repo; undefined for a folder-name id. */
+  function repoLinks(name) {
+    if (!/^[\w.-]+\/[\w.-]+$/.test(name || "")) return undefined;
+    const url = "https:" + "//github.com/" + name;
+    const lab = (l) => url + "/issues?q=" + encodeURIComponent('is:issue is:open label:"' + l + '"');
+    return { url, quick: [{ label: "Queued", url: lab("bunker:queued") }, { label: "Failed", url: lab("bunker:failed") }, { label: "Open PRs", url: url + "/pulls" }, { label: "Actions", url: url + "/actions" }] };
+  }
   /** Tab label: status dot kind plus a count ("2 running", "1 failed", "idle"). */
   function tab(r, now) {
     const g = groups(r, now);
@@ -310,7 +320,7 @@ const Model = (() => {
     return { nextPassAt: r.watcher && r.watcher.nextPassAt, spentToday: r.spend ? r.spend.day.spentUsd : undefined, mergedToday: merged.length, lastMerge: last ? { issue: last.issue, prUrl: last.prUrl, at: last.at } : merged[0] ? { issue: merged[0].issue, prUrl: merged[0].prUrl, at: merged[0].at } : undefined };
   }
   const watcherLive = (r, now) => !!r.watcher && ([...r.runs.values()].some((x) => !x.done) || (r.watcher.nextPassAt !== undefined && r.watcher.nextPassAt > now - 60000));
-  return { STAGES, TRACK, newRepo, ingest, track, groups, queue, shepherd, tab, spend, idle, watcherLive };
+  return { STAGES, TRACK, newRepo, ingest, track, groups, queue, shepherd, repoLinks, tab, spend, idle, watcherLive };
 })();
 </script>
 <script>
@@ -423,7 +433,11 @@ function renderPane(r, now) {
   const queued = q.filter((x) => !x.blockedOn), blocked = q.filter((x) => x.blockedOn);
   const tagEl = (t) => span("tag" + (t === "bug" ? " bug" : t === "high" ? " high" : ""), t);
   const w = r.watcher;
+  const rl = Model.repoLinks(r.name), tb = Model.tab(r, now);
   const side = h("aside", { class: "col-side" },
+    h("section", { class: "card side repo", "aria-label": "Repository" },
+      h("div", { class: "repo-name" }, h("span", { class: "dot " + tb.kind, role: "img", "aria-label": tb.kind }), rl ? link(rl.url, r.name) : span("", r.name), w ? span("muted", "v" + w.version) : ""),
+      rl ? h("div", { class: "repo-links" }, rl.quick.map((q) => link(q.url, q.label))) : ""),
     sideCard("Queue · next up", [
       ...queued.map((x, n) => h("div", { class: "q" }, span("pos", String(n + 1)), span("num", "#" + x.issue), h("span", { class: "grow" }, x.tags.map(tagEl)))),
       ...(blocked.length ? [h("div", { class: "blocked" }, blocked.map((x) => h("div", null, "#" + x.issue + " waiting on #" + x.blockedOn.number + " (blocked)")))] : []),
