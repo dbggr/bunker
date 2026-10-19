@@ -216,8 +216,8 @@ describe("runAudit() events", () => {
     const events: BunkerEvent[] = [];
     await runAudit({ cwd: repo, agent: fakeAgent(block("A")), sandbox: noSandbox(), onEvent: (e) => events.push(e) });
     const stages = events.filter((e) => e.type === "stage");
-    expect(stages.map((e) => e.name)).toEqual(["audit", "done"]);
-    expect(stages[0]!.role).toBe("auditor");
+    expect(stages.map((e) => e.name)).toEqual(["setup", "audit", "filing", "done"]);
+    expect(stages[1]!.role).toBe("auditor");
   });
 
   test("publishes failed when the audit throws", async () => {
@@ -225,7 +225,7 @@ describe("runAudit() events", () => {
     const events: BunkerEvent[] = [];
     const bad: Agent = { command: () => ["sh", "-c", "exit 3"] };
     await expect(runAudit({ cwd: repo, agent: bad, sandbox: noSandbox(), onEvent: (e) => events.push(e) })).rejects.toThrow();
-    expect(events.filter((e) => e.type === "stage").map((e) => e.name)).toEqual(["audit", "failed"]);
+    expect(events.filter((e) => e.type === "stage").map((e) => e.name)).toEqual(["setup", "audit", "failed"]);
   });
 });
 
@@ -254,5 +254,26 @@ describe("runAudit() copy", () => {
     await Bun.write(join(repo, "backend/.env"), "A=1\n");
     const r = await runAudit({ cwd: repo, agent: fakeAgent(blocks()), sandbox: noSandbox(), setup: "test -f backend/.env" });
     expect(r.filed).toEqual([]);
+  });
+});
+
+describe("runAudit() hub events", () => {
+  test("emits tagged stages, a titled meta, each filed issue and the cost", async () => {
+    const { repo } = await setup();
+    const events: BunkerEvent[] = [];
+    await runAudit({ cwd: repo, agent: fakeAgent(blocks("A", "B")), sandbox: noSandbox(), focus: "error handling", onEvent: (e) => events.push(e) });
+    expect(events.every((e) => e.audit === true && e.issue === undefined)).toBe(true);
+    expect(events.filter((e) => e.type === "stage").map((e) => e.name)).toEqual(["setup", "audit", "filing", "done"]);
+    expect(events.find((e) => e.type === "meta" && e.title)?.title).toBe("Audit: error handling");
+    const filed = events.filter((e) => e.type === "filed").map((e) => e.filed);
+    expect(filed.map((f) => [f!.number, f!.title])).toEqual([[101, "A"], [102, "B"]]);
+    expect(filed[0]!.url).toContain("/issues/101");
+  });
+
+  test("a failing audit ends on a failed stage", async () => {
+    const { repo } = await setup();
+    const events: BunkerEvent[] = [];
+    await expect(runAudit({ cwd: repo, agent: fakeAgent("no block"), sandbox: noSandbox(), maxRetries: 0, onEvent: (e) => events.push(e) })).rejects.toThrow();
+    expect(events.filter((e) => e.type === "stage").at(-1)?.name).toBe("failed");
   });
 });

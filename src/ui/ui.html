@@ -75,6 +75,8 @@
   .run .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
   .chip { font: 12px var(--mono); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; }
   .grow { flex: 1 1 auto; }
+  .filedlist { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+  .filedlist .filed { display: flex; gap: 8px; align-items: baseline; }
   button.show { background: var(--raised); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; min-height: 32px; }
   button.show:hover { border-color: var(--faint); }
   .log { display: none; flex-direction: column; gap: 8px; } .run.open .log { display: flex; }
@@ -142,15 +144,16 @@
 const Model = (() => {
   const STAGES = ["setup", "audit", "implement", "review", "verify", "PR", "waiting for merge", "awaiting review", "merged", "done", "failed"];
   const TRACK = ["setup", "implement", "review", "verify", "PR", "merge"];
+  const AUDIT_TRACK = ["setup", "audit", "filing"];
   const day0 = (now) => new Date(now).setHours(0, 0, 0, 0);
   const isDone = (s) => s === "merged" || s === "done" || s === "failed";
   function newRepo() { return { runs: new Map(), queueText: "", blocked: new Map(), shepherd: new Map(), notes: [], spend: undefined, watcher: undefined }; }
   function run(r, issue) {
     let x = r.runs.get(issue);
-    if (!x) { x = { key: issue, title: "", stage: "", model: "", round: undefined, role: "", start: undefined, end: undefined, cost: 0, est: undefined, tokens: 0, url: "", logPath: "", reason: "", done: false, log: [] }; r.runs.set(issue, x); }
+    if (!x) { x = { key: issue, title: "", stage: "", model: "", round: undefined, role: "", start: undefined, end: undefined, cost: 0, est: undefined, tokens: 0, url: "", logPath: "", reason: "", done: false, kind: "issue", filed: [], log: [] }; r.runs.set(issue, x); }
     return x;
   }
-  const keyOf = (e) => (e.issue !== undefined ? "#" + e.issue : e.task !== undefined ? "task " + e.task : "run");
+  const keyOf = (e) => (e.audit ? "audit" : e.issue !== undefined ? "#" + e.issue : e.task !== undefined ? "task " + e.task : "run");
   function ingest(r, e) {
     if (e.type === "budget") { r.spend = e.budget; return; }
     if (e.type === "watcher") { r.watcher = e.watcher; return; }
@@ -169,6 +172,7 @@ const Model = (() => {
       return;
     }
     const i = run(r, keyOf(e));
+    if (e.audit) i.kind = "audit";
     i.start ??= e.at;
     i.end = e.at;
     if (e.round !== undefined) { i.round = e.round; i.role = e.role || ""; }
@@ -183,6 +187,10 @@ const Model = (() => {
       if (e.title) i.title = e.title;
       if (e.logPath) i.logPath = e.logPath;
       if (e.url) i.url = e.url;
+      if (e.costUsd !== undefined && i.kind === "audit") i.cost = e.costUsd;
+    } else if (e.type === "filed" && e.filed) {
+      i.filed.push(e.filed);
+      i.log.push({ t: e.at, kind: "note", text: "filed #" + e.filed.number + ": " + e.filed.title });
     } else if (e.type === "toolCall") i.log.push({ t: e.at, kind: "tool", text: "▸ " + e.name });
     else if (e.type === "text") i.log.push({ t: e.at, kind: "text", text: e.text || "" });
     else if (e.type === "usage") { i.est = e.estCostUsd; i.tokens = e.tokens ? e.tokens.input + e.tokens.output + e.tokens.cacheRead + e.tokens.cacheWrite : 0; }
@@ -190,8 +198,18 @@ const Model = (() => {
     if (i.log.length > 1000) i.log.splice(0, i.log.length - 1000);
   }
   /** The six-step track with each step done, current or todo. */
+<<<<<<< HEAD
   function track(stage) {
     const at = stage === "setup" || stage === "audit" ? 0 : stage === "implement" ? 1 : stage === "review" ? 2 : stage === "verify" ? 3 : stage === "PR" ? 4 : stage === "waiting for merge" || stage === "awaiting review" ? 5 : -1;
+=======
+  function track(stage, kind) {
+    if (kind === "audit") {
+      const n = AUDIT_TRACK.indexOf(stage);
+      const all = stage === "done";
+      return AUDIT_TRACK.map((name, k) => ({ name, state: all || k < n ? "done" : k === n ? "current" : "todo" }));
+    }
+    const at = stage === "setup" || stage === "audit" ? 0 : stage === "implement" ? 1 : stage === "review" ? 2 : stage === "verify" ? 3 : stage === "PR" ? 4 : stage === "waiting for merge" ? 5 : -1;
+>>>>>>> 79c810f543eeb5891193969548f009489b49a2fa
     const all = stage === "merged" || stage === "done";
     return TRACK.map((name, n) => ({ name, state: all || n < at ? "done" : n === at ? "current" : "todo" }));
   }
@@ -217,8 +235,14 @@ const Model = (() => {
     const since = day0(now);
     const byIssue = new Map();
     const add = (issue, row) => { const o = byIssue.get(issue); if (!o || row.at >= o.at) byIssue.set(issue, row); };
+    const audits = [];
     for (const x of runs) {
       if (!x.done || (x.end || 0) < since) continue;
+      if (x.kind === "audit") {
+        const n = x.filed.length;
+        audits.push({ kind: "audit", key: x.key, issue: undefined, title: x.title || "Audit", outcome: x.stage === "failed" ? "failed" : "audit · " + n + (n === 1 ? " issue" : " issues") + " filed", reason: x.reason, prUrl: "", filed: x.filed, at: x.end, elapsed: x.end - x.start, cost: x.cost });
+        continue;
+      }
       const issue = Number(String(x.key).slice(1));
       add(issue, { issue, title: x.title, outcome: x.stage === "failed" ? "failed" : "merged", reason: x.reason, prUrl: x.url, at: x.end, elapsed: x.end - x.start, cost: x.cost });
     }
@@ -229,7 +253,7 @@ const Model = (() => {
     }
     // A watcher record of a failed run that is now running again is stale.
     const live = new Set([...running, ...waiting.map((x) => x.run)].map((x) => Number(String(x.key).slice(1))));
-    const finished = [...byIssue.values()].filter((f) => !live.has(f.issue)).sort((a, b) => b.at - a.at);
+    const finished = [...byIssue.values()].filter((f) => !live.has(f.issue)).concat(audits).sort((a, b) => b.at - a.at);
     return { running, waiting, finished, idle: !running.length && !waiting.length };
   }
   function stats(r, issue) { const x = r.runs.get("#" + issue); return x && x.start !== undefined ? { elapsed: x.end - x.start, cost: x.cost } : {}; }
@@ -324,6 +348,8 @@ function spendCard(sp) {
   return card;
 }
 
+const filedLinks = (list) => list.map((f) => h("div", { class: "filed" }, span("num", "#" + f.number), link(f.url, f.title) || span("", f.title)));
+
 function runCard(repo, x, now) {
   const id = repo.name + "\0" + x.key;
   const isOpen = open.has(id);
@@ -332,9 +358,10 @@ function runCard(repo, x, now) {
   const stat = [x.start ? clock(now - x.start) : "", runCost(x), x.tokens ? tokens(x.tokens) + " tok" : ""].filter(Boolean).join(" · ");
   const feed = h("div", { class: "feed", role: "log", "aria-label": "Run log", "data-id": id }, x.log.map((l) => h("div", { class: l.kind }, span("ts", hhmm(l.t)), span("", l.text))));
   card.append(
-    h("div", { class: "head" }, span("num", keyLabel(x.key)), span("title", x.title || ""), span("stat", stat)),
-    h("ol", { class: "track", "aria-label": "Stages" }, Model.track(x.stage).map((s) => h("li", { class: s.state }, span("m", s.state === "done" ? "✓" : s.state === "current" ? "●" : "○"), s.name, s.state === "current" ? span("sr", " (current)") : ""))),
+    h("div", { class: "head" }, span("num", x.kind === "audit" ? "Audit" : keyLabel(x.key)), span("title", x.kind === "audit" ? (x.title || "").replace(/^Audit:?\s*/, "") : x.title || ""), span("stat", stat)),
+    h("ol", { class: "track", "aria-label": "Stages" }, Model.track(x.stage, x.kind).map((s) => h("li", { class: s.state }, span("m", s.state === "done" ? "✓" : s.state === "current" ? "●" : "○"), s.name, s.state === "current" ? span("sr", " (current)") : ""))),
     h("div", { class: "meta" }, x.round !== undefined ? span("", "round " + x.round + (x.role ? " · " + x.role : "")) : "", x.model ? span("chip", x.model) : "", span("grow", ""), btn),
+    x.kind === "audit" && x.filed.length ? h("div", { class: "filedlist", "aria-label": "Issues filed" }, filedLinks(x.filed)) : "",
     h("div", { class: "log" }, x.logPath ? h("div", { class: "logpath" }, x.logPath) : "", feed));
   return card;
 }
@@ -353,7 +380,8 @@ function finishedList(list) {
     const st = [f.elapsed !== undefined ? clock(f.elapsed) : "", f.cost !== undefined ? usd(f.cost) : ""].filter(Boolean).join(" · ");
     return h("div", { class: "fin" },
       h("span", { class: "ico" + (failed ? " bad" : f.outcome === "no change" ? " nochange" : ""), role: "img", "aria-label": f.outcome }, failed ? "✕" : "✓"),
-      span("n", "#" + f.issue), span("title", f.title || ""),
+      span("n", f.kind === "audit" ? "Audit" : "#" + f.issue), span("title", f.title || ""),
+      f.kind === "audit" && !failed ? h("span", { class: "note" }, f.outcome, f.filed.length ? [" · ", f.filed.map((i, n) => [n ? ", " : "", link(i.url, "#" + i.number) || "#" + i.number])] : "") :
       failed || f.outcome === "no change" ? h("span", { class: "note" + (failed ? " bad" : ""), title: f.reason || "" }, f.reason || f.outcome) : h("span", { class: "note" }, link(f.prUrl, prNum(f.prUrl)) || "merged"),
       span("st", st));
   }));
@@ -384,8 +412,9 @@ function renderPane(r, now) {
   if (g.running.length) col.append(h("section", null, h("h2", null, "Running · " + g.running.length), g.running.map((x) => runCard(r, x, now))));
   if (g.waiting.length) col.append(h("section", null, h("h2", null, "Waiting for merge · " + g.waiting.length), g.waiting.map(waitingRow)));
   if (g.finished.length) {
-    const merged = g.finished.filter((f) => f.outcome !== "failed").length, failed = g.finished.length - merged;
-    col.append(h("section", null, h("h2", null, "Finished today · " + merged + " merged" + (failed ? " · " + failed + " failed" : "")), finishedList(g.finished)));
+    const audits = g.finished.filter((f) => f.kind === "audit" && f.outcome !== "failed").length;
+    const failed = g.finished.filter((f) => f.outcome === "failed").length, merged = g.finished.length - audits - failed;
+    col.append(h("section", null, h("h2", null, "Finished today · " + merged + " merged" + (audits ? " · " + audits + (audits === 1 ? " audit" : " audits") : "") + (failed ? " · " + failed + " failed" : "")), finishedList(g.finished)));
   }
   const q = Model.queue(r);
   const queued = q.filter((x) => !x.blockedOn), blocked = q.filter((x) => x.blockedOn);

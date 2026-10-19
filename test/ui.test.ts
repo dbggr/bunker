@@ -459,6 +459,39 @@ describe("hub page model", () => {
     expect(html).not.toMatch(/https?:\/\/(?!127)|@import|<link/);
     for (const s of ["✓", "✕", "●", "Nothing queued. Watching.", "read-only"]) expect(html).toContain(s);
   });
+
+  test("audit events make an audit card, a filed list and a finished row; issue runs are unchanged", async () => {
+    const M = await load();
+    const r = M.newRepo();
+    const a = (e: object) => M.ingest(r, ev({ audit: true, ...e }));
+    a({ type: "meta", title: "Audit: tests" });
+    a({ type: "stage", name: "setup" });
+    a({ type: "stage", name: "audit", model: "m" });
+    expect(M.tab(r, NOW).kind).toBe("working");
+    let g = M.groups(r, NOW);
+    expect(g.running.length).toBe(1);
+    expect(g.running[0].kind).toBe("audit");
+    expect(M.track(g.running[0].stage, "audit").map((s: any) => [s.name, s.state])).toEqual([["setup", "done"], ["audit", "current"], ["filing", "todo"]]);
+    a({ type: "stage", name: "filing" });
+    a({ type: "filed", filed: { number: 7, title: "T", url: "https://x/issues/7" } });
+    a({ type: "meta", costUsd: 0.5 });
+    expect(M.groups(r, NOW).running[0].filed).toEqual([{ number: 7, title: "T", url: "https://x/issues/7" }]);
+    a({ type: "stage", name: "done" });
+    g = M.groups(r, NOW);
+    expect(g.running).toEqual([]);
+    expect(g.finished.length).toBe(1);
+    expect(g.finished[0]).toMatchObject({ kind: "audit", title: "Audit: tests", outcome: "audit · 1 issue filed", cost: 0.5 });
+    M.ingest(r, ev({ type: "stage", issue: 9, name: "implement" }));
+    expect(M.groups(r, NOW).running[0].kind).toBe("issue");
+    expect(M.track("implement").length).toBe(6);
+  });
+
+  test("a failed audit is finished as failed", async () => {
+    const M = await load();
+    const r = M.newRepo();
+    M.ingest(r, ev({ audit: true, type: "stage", name: "failed", reason: "boom" }));
+    expect(M.groups(r, NOW).finished[0]).toMatchObject({ kind: "audit", outcome: "failed", reason: "boom" });
+  });
 });
 
 describe("hub keeps only the latest watcher snapshot", () => {
