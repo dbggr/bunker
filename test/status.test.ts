@@ -81,6 +81,18 @@ describe("collectStatus()", () => {
     expect(t).toContain("#5 Five");
   });
 
+  test("a live watcher's own caps win over the configured ones", async () => {
+    const r = repo();
+    const dir = join(r, ".bunker");
+    writeFileSync(join(dir, "watch.lock"), "4242");
+    createStatusRecorder(dir, { pid: 4242, version: "x", caps: { day: 100 } });
+    const live = await collectStatus({ repo: r, caps: { day: 20, month: 500 }, alive: () => true });
+    expect(live.spend.day.capUsd).toBe(100);
+    expect(live.spend.month.capUsd).toBeUndefined();
+    const dead = await collectStatus({ repo: r, caps: { day: 20 }, alive: () => false });
+    expect(dead.spend.day.capUsd).toBe(20);
+  });
+
   test("a no-change run is listed with its reason, and is not a failure", async () => {
     const r = repo();
     const dir = join(r, ".bunker");
