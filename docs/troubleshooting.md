@@ -29,7 +29,7 @@ Each entry is symptom, cause, fix. The run log (`.bunker/runs/<N>-<timestamp>.lo
 ## `merge-failed: no required status check`
 
 - **Symptom**: status `merge-failed`; the error says the default branch has no required status check in its rulesets.
-- **Cause**: with no required check GitHub would merge the PR at once, so bunker refuses to arm auto-merge (#285). It reads **rulesets**; a classic branch protection rule can't be read with the scoped token.
+- **Cause**: with no required check GitHub would merge the PR at once, so bunker refuses to arm auto-merge (#285). It reads **rulesets** and classic **branch protection**; the latter needs Administration: read on the token, and if it can't be read the error says so (it is not treated as "no check").
 - **Fix**: add a ruleset on the default branch that requires a status check (Settings → Rules → Rulesets), then re-run. `bunker doctor` checks this.
 
 ## `verify-failed`
