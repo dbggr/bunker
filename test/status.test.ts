@@ -177,6 +177,17 @@ describe("collectStatus()", () => {
     expect(text).toContain("$2.50 of $10");
   });
 
+  test("a merge-unverified run is not offered for re-queueing", async () => {
+    const r = repo();
+    const rec = createStatusRecorder(join(r, ".bunker"), { pid: 1, version: "0.1.0" });
+    rec.failed({ issue: 4, status: "merge-unverified", reason: "merged, but part of the PR's own change is missing", prUrl: "https://github.com/o/r/pull/9" });
+    const s = await collectStatus({ repo: r, alive: () => false });
+    expect(s.failed[0]?.retry).toBeUndefined();
+    const text = formatStatus(s);
+    expect(text).not.toContain("bunker:queued");
+    expect(text).toContain("do not re-queue");
+  });
+
   test("without a watcher the last run's results are still shown, and no run is current", async () => {
     const r = repo();
     const dir = join(r, ".bunker");

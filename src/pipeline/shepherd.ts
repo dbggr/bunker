@@ -10,6 +10,7 @@ import { parseConfig, REMOVED_FILES, removedFileMessage } from "../core/config.t
 import { noNotify, type Notify } from "../core/notify.ts";
 import { extractOutput, verdictOutput } from "../core/structured.ts";
 import { interpret, stdinOf, sumUsage, type Agent, type Usage } from "../agents/agent.ts";
+import { describeMissing, missingHunks } from "./landing.ts";
 import { agentLimits, stepLimits, type Sandbox, type Timeouts } from "../sandboxes/exec.ts";
 import { isolatedEnv } from "../sandboxes/env.ts";
 import type { Services } from "../sandboxes/services.ts";
@@ -576,7 +577,6 @@ export function createShepherd(o: ShepherdOptions) {
     const mergeCommit = String(info?.mergeCommit?.oid ?? "");
     const head = String(info?.headRefOid ?? "");
     const base = String(info?.baseRefName ?? pr.base);
-    const files: string[] = Array.isArray(info?.files) ? info.files.flatMap((f: any) => (typeof f?.path === "string" ? [f.path] : [])) : [];
     if (!mergeCommit || !head) return "merged, but GitHub did not report the merge commit, so the landing could not be verified";
     const have = (sha: string) => $`git -C ${cwd} cat-file -e ${sha}^{commit}`.nothrow().quiet().then((r) => r.exitCode === 0);
     if (!(await have(mergeCommit))) {
@@ -587,11 +587,13 @@ export function createShepherd(o: ShepherdOptions) {
       const f = await $`git ${gitCfg} -C ${cwd} fetch -q origin ${head}`.env(env).nothrow().quiet();
       if (f.exitCode !== 0 || !(await have(head))) return `merged, but could not fetch the PR head to verify:\n${f.stderr}`;
     }
-    if (!files.length) return undefined;
-    const diff = await $`git -C ${cwd} diff --name-only ${mergeCommit} ${head} -- ${files}`.nothrow().quiet();
-    if (diff.exitCode !== 0) return `merged, but could not compare the merge commit with the PR head:\n${diff.stderr}`;
-    const differing = diff.stdout.toString().split("\n").filter(Boolean);
-    return differing.length ? `merged, but the merge commit differs from the PR head in:\n${differing.join("\n")}` : undefined;
+    if (mergeCommit === head) return undefined;
+    const parent = `${mergeCommit}^`;
+    const fork = (await $`git -C ${cwd} merge-base ${parent} ${head}`.nothrow().quiet()).stdout.toString().trim();
+    if (!fork) return "merged, but the PR head shares no history with the merge commit's parent, so the landing could not be verified";
+    const missing = await missingHunks(cwd, fork, head, mergeCommit);
+    if (!Array.isArray(missing)) return `merged, but could not compare the merge commit with the PR head:\n${missing.error}`;
+    return missing.length ? describeMissing("the merge commit", missing) : undefined;
   };
 
   return {
@@ -603,7 +605,7 @@ export function createShepherd(o: ShepherdOptions) {
       const open = new Set(prs.map((p) => p.number));
       for (const old of seen.values()) {
         if (open.has(old.number)) continue;
-        const view = await gh`gh pr view ${old.number} --json state,mergeCommit,headRefOid,baseRefName,files`;
+        const view = await gh`gh pr view ${old.number} --json state,mergeCommit,headRefOid,baseRefName`;
         if (view.exitCode !== 0) continue;
         const info = JSON.parse(view.stdout.toString() || "{}");
         if (info.state !== "MERGED") continue;

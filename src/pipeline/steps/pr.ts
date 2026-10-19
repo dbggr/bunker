@@ -3,6 +3,7 @@ import { waitForMerge } from "../../github/branches.ts";
 import { neutralise } from "../../core/redact.ts";
 import { addPrLabel, AWAITING_REVIEW_LABEL, ensureLabel, REVIEW_LABEL } from "../../github/labels.ts";
 import { requiredCheck } from "../../core/required-check.ts";
+import { describeMissing, missingHunks } from "../landing.ts";
 import { emit, emitStage } from "../../core/events.ts";
 import { tailLines } from "../../core/output.ts";
 import { isSensitivePath } from "../../worktree/steering.ts";
@@ -129,18 +130,15 @@ export function publishIssue(ctx: IssueRunContext, input: PublishInput): Promise
     if (waited.outcome !== "merged") return fail(waited.outcome === "closed" ? "merge-failed" : "ci-timeout", { ...opened, error: waited.detail });
     await $`gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/${branch}`.cwd(worktree).env(env).nothrow().quiet();
 
-    // Squash-merges have silently dropped late commits: check every file the branch touched.
+    // Squash-merges have silently dropped late commits: check that every line the PR added is on the default branch.
     const refspec = `+refs/heads/${defaultBranch}:refs/remotes/origin/${defaultBranch}`;
     const refetch = await $`git ${gitCfg} -C ${repo} fetch -q ${remote} ${refspec}`.env(env).nothrow().quiet();
     if (refetch.exitCode !== 0) return fail("merge-unverified", { ...opened, error: `merged, but could not fetch to verify:\n${refetch.stderr}` });
     const target = `origin/${defaultBranch}`;
-    const files = (await $`git -C ${repo} diff --name-only ${baseSha} ${branch}`.text()).split("\n").filter(Boolean);
-    const differing = files.length
-      ? (await $`git -C ${repo} diff --name-only ${branch} ${target} -- ${files}`.text()).split("\n").filter(Boolean)
-      : [];
-    if (differing.length) {
-      return fail("merge-unverified", { ...opened, error: `merged, but ${target} differs from ${branch} in:\n${differing.join("\n")}` });
-    }
+    const forkPoint = (await $`git -C ${repo} merge-base ${branch} ${target}`.nothrow().quiet().text()).trim() || baseSha;
+    const missing = await missingHunks(repo, forkPoint, branch, target);
+    if (!Array.isArray(missing)) return fail("merge-unverified", { ...opened, error: `merged, but could not compare ${target} with ${branch}:\n${missing.error}` });
+    if (missing.length) return fail("merge-unverified", { ...opened, error: describeMissing(target, missing) });
 
     await worktreeAdmin(repo, () => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
     await worktreeAdmin(repo, () => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
