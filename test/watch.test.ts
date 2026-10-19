@@ -662,6 +662,40 @@ describe("runWatch() shepherd stage", () => {
     expect(await Bun.file(join(root, "gh.log")).text()).toContain("issue edit 1 --remove-label bunker:queued");
   });
 
+  describe("stage events for PRs the shepherd sees finish", () => {
+    const run = async (view: (head: string) => object) => {
+      const { repo, root } = await setup([]);
+      const head = (await Bun.$`git -C ${repo} rev-parse HEAD`.text()).trim();
+      await Bun.write(join(root, "prlist.json"), JSON.stringify([bunkerPr(1)]));
+      await Bun.write(join(root, "prlist-next.json"), "[]");
+      await Bun.write(join(root, "prview.json"), JSON.stringify(view(head)));
+      const events: any[] = [];
+      const ctl = new AbortController();
+      await runWatch({ ...base, shepherd: true, cwd: repo, agent: fakeAgent(), onEvent: (e: any) => events.push(e), signal: ctl.signal, log: (l) => { if (/pass 2 /.test(l)) ctl.abort(); } });
+      const st = JSON.parse(await Bun.file(join(repo, ".bunker", "watch-status.json")).text());
+      return { stages: events.filter((e) => e.type === "stage" && e.issue === 1).map((e) => e.name), events, st };
+    };
+
+    test("a verified merge produces exactly one merged stage", async () => {
+      const { stages } = await run((head) => ({ state: "MERGED", mergeCommit: { oid: head }, headRefOid: head, baseRefName: "main", files: [] }));
+      expect(stages).toEqual(["merged"]);
+    });
+
+    test("an unverified merge ends as failed, never merged", async () => {
+      const { stages, events, st } = await run(() => ({ state: "MERGED", headRefOid: "abc", baseRefName: "main", files: [] }));
+      expect(stages).toEqual(["failed"]);
+      expect(events.find((e) => e.type === "stage" && e.name === "failed").reason).toMatch(/could not be verified/);
+      expect(st.failed).toEqual([expect.objectContaining({ issue: 1, status: "merge-unverified" })]);
+    });
+
+    test("a PR closed unmerged publishes failed with a reason and is recorded in the snapshot", async () => {
+      const { stages, events, st } = await run(() => ({ state: "CLOSED" }));
+      expect(stages).toEqual(["failed"]);
+      expect(events.find((e) => e.type === "stage" && e.name === "failed").reason).toMatch(/closed without merging/);
+      expect(st.failed).toEqual([expect.objectContaining({ issue: 1, status: "closed-unmerged", reason: expect.stringMatching(/closed without merging/) })]);
+    });
+  });
+
   test("an issue logging 'already has an open PR' still gets a shepherd pass; a red required check that --required does not report reaches fixRed", async () => {
     const { repo, root } = await setup(three.slice(0, 1));
     await Bun.write(join(root, "prlist.json"), JSON.stringify([bunkerPr(1)]));

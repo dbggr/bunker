@@ -362,6 +362,49 @@ describe("hub page model", () => {
     expect(M.shepherd(r)[0].action).toBe("waiting");
   });
 
+  const wsnap = (o: object) => ({ type: "watcher", watcher: { version: "1", startedAt: 1, parallel: 1, merged: [], noChange: [], failed: [], shepherd: [], ...o } });
+
+  test("awaiting-merge run shows as a waiting card, then merged moves it to Finished today", async () => {
+    const M = await load();
+    const r = M.newRepo();
+    M.ingest(r, ev({ type: "stage", issue: 4, name: "PR" }));
+    M.ingest(r, ev({ type: "stage", issue: 4, name: "waiting for merge", text: "http://pr/4" }));
+    let g = M.groups(r, NOW);
+    expect([g.running.length, g.waiting.length, g.finished.length]).toEqual([0, 1, 0]);
+    M.ingest(r, { at: NOW - 1000, type: "stage", issue: 4, name: "merged" });
+    g = M.groups(r, NOW);
+    expect([g.running.length, g.waiting.length]).toEqual([0, 0]);
+    expect(g.finished.map((f: any) => [f.issue, f.outcome])).toEqual([[4, "merged"]]);
+  });
+
+  test("a missed stage event is healed by the watcher snapshot (merged and failed)", async () => {
+    const M = await load();
+    const r = M.newRepo();
+    M.ingest(r, ev({ type: "stage", issue: 4, name: "PR" }));
+    M.ingest(r, ev({ type: "stage", issue: 5, name: "waiting for merge" }));
+    M.ingest(r, { at: NOW - 1000, ...wsnap({ merged: [{ issue: 4, prUrl: "http://pr/4", at: NOW - 1000 }], failed: [{ issue: 5, status: "gave-up", reason: "closed", at: NOW - 900 }] }) });
+    const g = M.groups(r, NOW);
+    expect([g.running.length, g.waiting.length]).toEqual([0, 0]);
+    expect(g.finished.map((f: any) => [f.issue, f.outcome]).sort()).toEqual([[4, "merged"], [5, "failed"]]);
+  });
+
+  test("a watcher record from before the run started does not finish a new run", async () => {
+    const M = await load();
+    const r = M.newRepo();
+    M.ingest(r, { at: NOW - 5000, ...wsnap({ failed: [{ issue: 4, status: "x", reason: "old", at: NOW - 70_000 }] }) });
+    M.ingest(r, ev({ type: "stage", issue: 4, name: "implement" }));
+    expect(M.groups(r, NOW).running.length).toBe(1);
+  });
+
+  test("manual mode: awaiting review is a waiting card, not running", async () => {
+    const M = await load();
+    const r = M.newRepo();
+    M.ingest(r, ev({ type: "stage", issue: 4, name: "awaiting review" }));
+    const g = M.groups(r, NOW);
+    expect([g.running.length, g.waiting.length]).toEqual([0, 1]);
+    expect(M.track("awaiting review")[5].state).toBe("current");
+  });
+
   test("a run's notes land in its log; the stage track marks done/current/todo", async () => {
     const M = await load();
     const r = M.newRepo();

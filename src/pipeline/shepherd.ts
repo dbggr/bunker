@@ -95,6 +95,8 @@ export interface ShepherdEntry {
 export interface ShepherdPass {
   entries: ShepherdEntry[];
   /** PRs seen open by an earlier pass of this shepherd that are merged now. */
+  /** PRs that were open last pass and have since been closed without merging. */
+  closed: { pr: number; url: string; issue: number; branch: string }[];
   merged: { pr: number; url: string; issue: number; branch: string; /** Set when the landing check could not confirm the squash kept the PR's files. */ unverified?: string }[];
   usage?: Usage;
   /** Set when the pass stopped early on the Claude usage limit. */
@@ -600,17 +602,23 @@ export function createShepherd(o: ShepherdOptions) {
     /** One pass over the open bunker PRs. */
     async pass(): Promise<ShepherdPass> {
       const prs = await listBunkerPrs(cwd, env);
-      if (!prs) return { entries: [], merged: [], error: "could not list the open pull requests" };
+      if (!prs) return { entries: [], merged: [], closed: [], error: "could not list the open pull requests" };
       const merged: ShepherdPass["merged"] = [];
+      const closed: ShepherdPass["closed"] = [];
       const open = new Set(prs.map((p) => p.number));
       for (const old of seen.values()) {
         if (open.has(old.number)) continue;
         const view = await gh`gh pr view ${old.number} --json state,mergeCommit,headRefOid,baseRefName`;
         if (view.exitCode !== 0) continue;
         const info = JSON.parse(view.stdout.toString() || "{}");
+        if (info.state === "CLOSED") {
+          closed.push({ pr: old.number, url: old.url, issue: old.issue, branch: old.branch });
+          continue;
+        }
         if (info.state !== "MERGED") continue;
         const unverified = await landingProblem(old, info);
-        emit(o.onEvent, { type: "stage", name: "merged", issue: old.issue });
+        // An unverified landing is reported as failed by the watcher, so only a verified one is a merge.
+        if (!unverified) emit(o.onEvent, { type: "stage", name: "merged", issue: old.issue });
         merged.push({ pr: old.number, url: old.url, issue: old.issue, branch: old.branch, ...(unverified ? { unverified } : {}) });
       }
       seen = new Map(prs.map((p) => [p.number, p]));
@@ -632,7 +640,7 @@ export function createShepherd(o: ShepherdOptions) {
         }
       }
       const usage = sumUsage(spent.splice(0));
-      return { entries, merged, ...(usage ? { usage } : {}), ...(paused ? { paused } : {}) };
+      return { entries, merged, closed, ...(usage ? { usage } : {}), ...(paused ? { paused } : {}) };
     },
   };
 }

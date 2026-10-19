@@ -64,6 +64,8 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   const fail = (status: IssueResult["status"], extra: Partial<IssueResult> = {}): IssueResult => {
     log(`final status: ${status}`, [extra.error, extra.prUrl].filter(Boolean).join("\n"));
     if (status === "merged") emitStage({ onEvent }, "merged");
+    else if (status === "awaiting-merge") emitStage({ onEvent }, "waiting for merge", extra.prUrl);
+    else if (status === "awaiting-review") emitStage({ onEvent }, "awaiting review", extra.prUrl);
     else if (!["pr-opened", "needs-review", "awaiting-merge", "awaiting-review", "no-change"].includes(status)) {
       const reason = failureReason(status, logPath, { ...(extra.error ? { error: extra.error } : {}), ...(extra.verifyOutput ? { verifyOutput: extra.verifyOutput } : {}) });
       emit(onEvent, { type: "stage", name: "failed", text: status, reason });
