@@ -6,7 +6,7 @@ What v1.0.0 promises, how close bunker is, and what would prove it, from raw evi
   - every run log in `.bunker/runs` (142 logs, 2026-10-16 18:02Z to 2026-10-18 01:22Z)
   - GitHub's history of this repo: 151 PRs, 132 CI runs on `main`, issue label events
   - the cost recorded in each run's `result` events
-- **Snapshot:** the numbers below were taken at 2026-10-18 01:22Z; re-running gives newer ones (GitHub answers are cached, so pass `--refresh`).
+- **Snapshot:** the numbers below were taken at 2026-10-18 01:22Z, before the soak; re-running gives newer ones (GitHub answers are cached, so pass `--refresh`). Soak numbers wait for #454: the script currently counts runs that end `awaiting-merge` (auto-merge armed, merged later by GitHub) as failures. Soak status is in section 4.
 - **Reproduce:**
   - `bun scripts/v1-readiness.ts` (add `--since 2026-10-17T12:00:00Z` for the recent window, `--json` for raw numbers)
   - `bun scripts/mutate-gates.ts` for the gate mutation table
@@ -80,7 +80,36 @@ Bug issues filed against code that had already merged through bunker (from the i
 
 **What this says:** the gates (verify, required CI, the reviewer) reliably stop broken code from merging. They don't stop **missing behaviour** or **tests with side effects**, and nothing but a human has found a security gap yet.
 
+### Found on other repos (2026-10-18/19)
+
+Pointing bunker at repos it wasn't built on (a private Symfony library, a private Node tool, the public bunary-dev packages) and making it public surfaced a second batch. Most were wrong assumptions about the environment rather than bad code: bunker's own repo happened to satisfy all of them. All are fixed.
+
+| Escape | Kind | Found by |
+|---|---|---|
+| #409 init php preset: composer.json in a subdirectory, distro PHP too old, missing extensions | init assumptions | the user, on a real repo |
+| #421 init reuses a setup/verify that just failed in the sandbox | init UX | the user |
+| #424 setup fails when the toolchain needs a gitignored file (`backend/.env`); no DB-free verify offered | init assumptions | the user |
+| #425 init's ruleset requires a `test` check the repo's CI never reports, blocking every PR (fixed by #428) | init assumptions, **blocked merges** | the user (PR stuck "waiting for status") |
+| #431 merge step ignores required checks from classic branch protection | merge safety, refused merges | a refused run |
+| #433 `bunker audit` ignores the `copy` key | logic | a failed audit |
+| #415 watch tests publish to the developer's live hub | test hygiene | the user |
+| #432 a closed issue keeps `bunker:queued` after auto-merge | logic | the user |
+| #439 requeue after unblock skips the edited-after-label check | **security** | a pre-flip safety review (agent, commissioned by a human) |
+| #440 anyone can spoof the shepherd's PR comment markers | **security** | the same review |
+| #441 the shepherd never acts on a red bunker PR; the queue just skips the issue | logic, stalled work | a stuck PR on the private Symfony library |
+| #446 `gh pr checks --json` doesn't exist in gh 2.46 (the Ubuntu package) | environment | the same PR |
+| #447 fine-grained tokens can't read check runs at all (GitHub-App-only): read CI from Actions runs/jobs + commit statuses | environment, design | the same PR |
+| #450 newer gh refuses CI logs without `--allow-escape-sequences` | environment | the same PR |
+
+**What this says:** the shepherd's "fix red CI" path had never really run outside bunker's own repo; one stuck PR found four bugs in a row (#441 → #446 → #447 → #450) before it fixed the PR unattended. The two security escapes were found before any outsider could use them, by a review rather than an incident.
+
 ## 4. Reliability bar for 1.0
+
+**Soak status (#199):**
+- **Started** 2026-10-18T23:57:25Z with v0.9.0 watchers, daytime `bunker watch`. **Ends** 2026-11-01 at the earliest, if the bar below holds the whole window.
+- **Repos:** bunker; a private Symfony library (setup in `backend/`, PHPUnit needs Postgres, gated by CI); a private Node/Bun tool. The public bunary-dev packages (core, http, cli, orm, auth) were onboarded during the window and have run audits through bunker; they count from when they joined, not from the soak start.
+- **Interventions so far** (count against the bar): re-queueing a failed hello-world issue after the private library's broken first config; clearing `bunker:failed` on the private library's stuck PR after the shepherd fixes (#441/#446/#447/#450) landed; restarting watchers to pick up those fixes. The private library's ruleset was also recreated by hand after #425.
+- **Measuring:** `scripts/v1-readiness.ts --since 2026-10-18T23:57:25Z --refresh` per repo, once #454 counts `awaiting-merge` runs whose PR merged as merged and can report several repos at once.
 
 Thresholds over a **14-day `--watch` soak** on bunker itself plus at least one repo bunker wasn't built on (core or a private repo), measured by `scripts/v1-readiness.ts --since <soak start>`:
 
@@ -115,7 +144,7 @@ After 1.0.0, removing or renaming any of these needs 2.0:
 - **The CLI shape (#340), resolved:** every mode is a subcommand (`bunker issue 7`, `bunker watch`) and the old mode flags are removed (#358).
 - **Internal plumbing is exported (#339), resolved:** the library surface was trimmed to what an embedder needs (`run`, `runAll`, `review`, the agent and sandbox factories, and their types) in #352.
 - **Labels:** #312 landed (PR #331). `bunker-blocked` is still outside the `bunker:` namespace; move it too, or accept the mix, before the freeze.
-- **Identity:** #286 (App or bot) changes the token setup. Only blocking if 1.0 is public.
+- **Identity, resolved:** #286 (optional App or bot identity; the owner's PAT stays the default) landed in PR #389. The repo is public since 2026-10-19 (iac-github#66), so this did matter.
 
 ## 6. Verification that doesn't rely on the author or the user
 
@@ -169,7 +198,9 @@ From `bun scripts/mutate-gates.ts`: each gate is broken on its own, then the sui
 | #340 CLI shape | **done** (#358) | contract |
 | #336 verify feedback round | **done** | the bar: success rate and interventions |
 | #337 test hygiene guard | **done** | the bar: escapes |
-| #286 bot identity | blocks 1.0 **only if public** | changes token setup |
+| #286 bot identity | **done** (PR #389) | changes token setup; the repo is public now |
+| #411 sandbox services for verify (Postgres, Redis) | **done** | repos whose tests need a database can verify in the sandbox instead of leaving it to CI |
+| #454 soak measurement (`awaiting-merge` runs, several repos) | **open** | needed to measure the bar |
 | #283 PR shepherd | **done** | not opt-in: `bunker watch` runs it on every pass |
 | #317 skills | **done** | additive config |
 | #327 live cost + budget in the hub | **done** (#359) | UI only |
@@ -177,4 +208,4 @@ From `bun scripts/mutate-gates.ts`: each gate is broken on its own, then the sui
 | #289 demo video | after 1.0 | by design |
 | #280 session fork | **done** (#353) | shipped as `fork()` on a run result |
 
-**Order:** the contract and the bar items above are done. Next, start the 14-day soak plus the benchmark, chaos and red-team checks; tag 1.0.0 when the bar holds for the whole window.
+**Order:** the contract and the bar items above are done, and the soak started 2026-10-18T23:57:25Z (section 4). Next: #454 so the soak can be measured, then the benchmark, chaos and red-team checks during the window; tag 1.0.0 when the bar holds for the whole window. Open 1.0 work is tracked in the [v1.0.0 milestone](https://github.com/dbggr/bunker/milestone/1).
