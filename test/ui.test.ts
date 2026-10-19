@@ -500,6 +500,14 @@ describe("hub page model", () => {
     expect(links("https://github.com/a/b/commit/1 #4")).toEqual(["#4"]);
   });
 
+  test("waiting row status keeps the CI state", async () => {
+    const M = await load();
+    expect(M.waitingStatus("armed")).toBe("auto-merge armed");
+    expect(M.waitingStatus("waiting: CI pending")).toBe("auto-merge armed · waiting: CI pending");
+    const html = await Bun.file(new URL("../src/ui/ui.html", import.meta.url)).text();
+    expect(html).toContain("Model.waitingStatus(w.ci)");
+  });
+
   test("the page builds links as elements and never uses innerHTML", async () => {
     const html = await Bun.file(new URL("../src/ui/ui.html", import.meta.url)).text();
     expect(html).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML/);

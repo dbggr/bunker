@@ -293,6 +293,8 @@ const Model = (() => {
     plain(String(text == null ? "" : text).slice(at));
     return out;
   }
+  /** The waiting row's status text: "auto-merge armed", plus " · <ci state>" once the shepherd reported one. */
+  const waitingStatus = (ci) => "auto-merge armed" + (ci && ci !== "armed" ? " · " + ci : "");
   /** Open PRs: the watcher snapshot is the truth when present, else shepherd notes minus finished runs. Links fall back to the tab's owner/repo. */
   function shepherd(r, name) {
     let rows;
@@ -333,7 +335,7 @@ const Model = (() => {
     return { nextPassAt: r.watcher && r.watcher.nextPassAt, spentToday: r.spend ? r.spend.day.spentUsd : undefined, mergedToday: merged.length, lastMerge: last ? { issue: last.issue, prUrl: last.prUrl, at: last.at } : merged[0] ? { issue: merged[0].issue, prUrl: merged[0].prUrl, at: merged[0].at } : undefined };
   }
   const watcherLive = (r, now) => !!r.watcher && ([...r.runs.values()].some((x) => !x.done) || (r.watcher.nextPassAt !== undefined && r.watcher.nextPassAt > now - 60000));
-  return { STAGES, TRACK, newRepo, ingest, track, groups, queue, shepherd, slug, refs, refUrl, tab, spend, idle, watcherLive };
+  return { STAGES, TRACK, newRepo, ingest, track, groups, queue, shepherd, slug, waitingStatus, refs, refUrl, tab, spend, idle, watcherLive };
 })();
 </script>
 <script>
@@ -403,7 +405,7 @@ const clockIcon = () => document.getElementById("clock-icon").content.firstEleme
 function waitingRow(sl, w) {
   return h("article", { class: "card wait" },
     clockIcon(),
-    issueRef("num", sl, num(w.run.key)), span("title", w.run.title || ""), span("muted", "auto-merge armed", w.ci && w.ci !== "armed" ? [" · ", rich(w.ci, sl)] : ""), link(w.prUrl, prNum(w.prUrl)));
+    issueRef("num", sl, num(w.run.key)), span("title", w.run.title || ""), h("span", { class: "muted" }, Model.waitingStatus(w.ci)), link(w.prUrl, prNum(w.prUrl)));
 }
 
 function finishedList(list, sl) {
