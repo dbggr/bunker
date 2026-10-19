@@ -38,11 +38,7 @@ const fail = (msg) => { process.stderr.write(msg + "\\n"); process.exit(1); };
 if (cmd === "pr list") {
   console.log(JSON.stringify(s.prs.map((p) => ({ ...p, comments: [...(p.comments || []), ...(s.comments[p.number] || []).map((body) => ({ body }))].map((c) => ({ author: { login: "bunker-bot" }, ...c })), labels: [...(p.labels || []), ...(s.labels[p.number] || []).map((name) => ({ name }))] }))));
 } else if (cmd === "pr checks") {
-  const checks = s.checks[n] || [];
-  if (s.checkError) fail(s.checkError);
-  if (s.requiredEmpty && args.includes("--required")) fail(s.requiredEmpty);
-  console.log(JSON.stringify(checks));
-  process.exit(checks.some((c) => c.bucket === "fail") ? 1 : checks.some((c) => c.bucket === "pending") ? 8 : 0);
+  fail("unknown flag: --json"); // gh 2.46 has no --json on pr checks: nothing may depend on it
 } else if (cmd === "run view") {
   if (s.logDenied) fail("HTTP 403: Resource not accessible by personal access token");
   console.log(s.logs[args[2]] || "no log");
@@ -61,6 +57,13 @@ if (cmd === "pr list") {
   const path = args.find((a) => a.startsWith("repos/")) || "";
   const field = (k) => (args.find((a) => a.startsWith(k + "[]=")) || "").slice(k.length + 3);
   if (path.endsWith("/labels") && args.includes("POST")) { const k = path.split("/")[4]; (s.labels[k] = s.labels[k] || []).push(field("labels")); write(s); }
+  else if (path.includes("/check-runs")) {
+    if (s.checkError) fail(s.checkError);
+    const sha = path.split("/")[4];
+    const pr = s.prs.find((p) => p.headRefOid === sha);
+    const status = { pass: ["completed", "success"], fail: ["completed", "failure"], pending: ["in_progress", null], cancel: ["completed", "cancelled"] };
+    for (const c of (pr && s.checks[pr.number]) || []) console.log(JSON.stringify([c.name, status[c.bucket][0], status[c.bucket][1], c.link]));
+  }
   else if (path.includes("/rules/branches/")) console.log(JSON.stringify(s.rules || []));
   else if (path.includes("/protection/")) fail("HTTP 404: Not Found");
   else if (path.endsWith("/update-branch")) { if (s.updateFails) fail("HTTP 422"); }
@@ -185,11 +188,10 @@ describe("pure helpers", () => {
 });
 
 describe("shepherd pass", () => {
-  test("--required reports nothing but a ruleset requires the failing check: it still reaches fixRed", async () => {
+  test("gh pr checks --json is unavailable (gh 2.46) and a ruleset requires the failing check: it still reaches fixRed", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
     w.state.prs = [prJson(5, "fix/7-thing", sha)];
-    w.state.requiredEmpty = "no required checks reported on the 'fix/7-thing' branch";
     w.state.rules = [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "phpunit" }] } }];
     w.state.checks[5] = [{ name: "phpunit", bucket: "fail", link: "https://github.com/o/r/actions/runs/123/job/9" }, { name: "lint", bucket: "fail", link: "https://github.com/o/r/actions/runs/124/job/9" }];
     w.state.logs["123"] = "3 failures";
@@ -201,11 +203,10 @@ describe("shepherd pass", () => {
     expect(prompts[0]).not.toContain("lint");
   });
 
-  test("--required reports nothing and the protection cannot be read: the full check list decides", async () => {
+  test("the protection cannot be read: the full check list decides", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
     w.state.prs = [prJson(5, "fix/7-thing", sha)];
-    w.state.requiredEmpty = "no required checks reported";
     w.state.checks[5] = RED;
     w.save();
     const prompts: string[] = [];
@@ -217,7 +218,7 @@ describe("shepherd pass", () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
     w.state.prs = [prJson(5, "fix/7-thing", sha)];
-    w.state.checkError = "no required checks reported on the 'fix/7-thing' branch";
+    w.state.checkError = "HTTP 403: no required checks reported";
     w.save();
     const events: any[] = [];
     const p = await shepherd(w, fakeAgent("true"), { onEvent: (e: any) => events.push(e) }).pass();

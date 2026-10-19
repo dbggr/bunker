@@ -167,15 +167,23 @@ export function createShepherd(o: ShepherdOptions) {
 
   const entry = (pr: BunkerPr, action: ShepherdAction, detail?: string): ShepherdEntry => ({ pr: pr.number, url: pr.url, issue: pr.issue, action, ...(detail ? { detail: redact(detail) } : {}) });
 
-  /** Required checks of the PR; their `fail` bucket is what the shepherd reacts to. Exit codes mean pending/failing, so only the JSON counts. */
-  const requiredChecks = async (pr: BunkerPr): Promise<{ checks: Check[]; error?: string }> => {
-    const r = await gh`gh pr checks ${pr.number} --required --json name,bucket,link`;
-    try {
-      const list = JSON.parse(r.stdout.toString()) as Check[];
-      if (Array.isArray(list)) return { checks: list };
-    } catch {}
-    const error = r.stderr.toString().trim().split("\n")[0] || `gh pr checks exited ${r.exitCode} without output`;
-    return { checks: [], error };
+  /**
+   * The check runs of the PR's head commit, read through the REST API: `gh pr checks --json` does not exist before gh 2.50.
+   * Runs are mapped to the buckets `gh pr checks` used (pass, fail, pending, cancel).
+   */
+  const checkRuns = async (pr: BunkerPr): Promise<{ checks: Check[]; error?: string }> => {
+    const jq = '.check_runs[] | [.name, .status, (.conclusion // ""), (.html_url // "")] | @json';
+    const r = await gh`gh api repos/{owner}/{repo}/commits/${pr.headSha}/check-runs --paginate --jq ${jq}`;
+    if (r.exitCode !== 0) return { checks: [], error: r.stderr.toString().trim().split("\n")[0] || `gh api check-runs exited ${r.exitCode}` };
+    const checks: Check[] = [];
+    for (const l of r.stdout.toString().split("\n").filter(Boolean)) {
+      try {
+        const [name, status, conclusion, link] = JSON.parse(l) as string[];
+        const bucket = status !== "completed" ? "pending" : ["success", "neutral", "skipped"].includes(conclusion!) ? "pass" : conclusion === "cancelled" ? "cancel" : "fail";
+        checks.push({ name: name!, bucket, link: link! });
+      } catch {}
+    }
+    return { checks };
   };
 
   /** Contexts the base branch requires, from rulesets and classic protection (either may be unreadable with the run's token). */
@@ -198,22 +206,12 @@ export function createShepherd(o: ShepherdOptions) {
     return [...out];
   };
 
-  /**
-   * `gh pr checks --required` reports nothing when the requirement lives in a ruleset or classic branch protection it does not map.
-   * Then the PR's full check list is narrowed to the contexts the base branch requires; when those can't be read either, every check counts.
-   */
+  /** The PR's checks narrowed to the contexts the base branch requires; when those can't be read, every check counts. */
   const checksFor = async (pr: BunkerPr): Promise<{ checks: Check[]; error?: string }> => {
-    const req = await requiredChecks(pr);
-    if (!req.error && req.checks.length) return req;
-    const r = await gh`gh pr checks ${pr.number} --json name,bucket,link`;
-    let all: Check[] = [];
-    try {
-      const list = JSON.parse(r.stdout.toString());
-      if (Array.isArray(list)) all = list;
-    } catch {}
-    if (!all.length) return req;
+    const all = await checkRuns(pr);
+    if (all.error || !all.checks.length) return all;
     const contexts = await requiredContexts(pr);
-    return { checks: contexts.length ? all.filter((c) => contexts.includes(c.name)) : all };
+    return { checks: contexts.length ? all.checks.filter((c) => contexts.includes(c.name)) : all.checks };
   };
 
   /** The failed jobs' logs, or why they can't be read (usually: the token lacks Actions: read). */
