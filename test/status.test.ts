@@ -248,3 +248,16 @@ test("the status recorder shows which verify attempt a run is on", () => {
   expect(JSON.parse(readFileSync(join(dir, "watch-status.json"), "utf8")).current[0].stage).toBe("verify (attempt 2/2)");
   rmSync(dir, { recursive: true, force: true });
 });
+
+describe("createStatusRecorder() change feed", () => {
+  test("publishes the watcher snapshot with parallel and the next pass", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bunker-status-"));
+    const seen: any[] = [];
+    const rec = createStatusRecorder(dir, { pid: 1, version: "9", parallel: 3 }, (w) => seen.push(w));
+    rec.nextPass(123);
+    rec.merged({ issue: 4 });
+    expect(seen[0]).toMatchObject({ version: "9", parallel: 3, merged: [] });
+    expect(seen[1].nextPassAt).toBe(123);
+    expect(seen[2].merged.map((m: any) => m.issue)).toEqual([4]);
+  });
+});

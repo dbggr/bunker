@@ -134,7 +134,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     ...(maxCostDayUsd === undefined ? {} : { day: maxCostDayUsd }),
     ...(maxCostMonthUsd === undefined ? {} : { month: maxCostMonthUsd }),
   };
-  const status = createStatusRecorder(dir, { pid: process.pid, version: pkg.version, caps });
+  const status = createStatusRecorder(dir, { pid: process.pid, version: pkg.version, caps, parallel: opts.parallel ?? 1 }, (watcher) => emit(opts.onEvent, { type: "watcher", watcher }));
   const userOnEvent = opts.onEvent;
   opts.onEvent = (e) => {
     status.event(e);
@@ -397,7 +397,9 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       }
       const mins = intervalMs / 60_000;
       log(`bunker: pass ${summary.passes} · ${merged} merged · next pass in ${Number.isInteger(mins) ? mins : mins.toFixed(2)} min · ${formatSpend(spendFile, caps)}`);
+      status.nextPass(Date.now() + intervalMs);
       await sleep(intervalMs);
+      status.nextPass(undefined);
     }
   } catch (e) {
     notify("bunker: watch crashed", e instanceof Error ? e.message : String(e));

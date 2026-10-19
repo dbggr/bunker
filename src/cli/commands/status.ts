@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DAY_MS, MONTH_MS, spentWithin, type SpendCaps } from "../../core/spend.ts";
 import { orderQueue, priorityRank, PRIORITY_LABELS, isBug, type Queued } from "../../core/priority.ts";
-import type { BunkerEvent } from "../../core/events.ts";
+import type { BunkerEvent, WatcherInfo } from "../../core/events.ts";
 
 export const STATUS_FILE = "watch-status.json";
 export const LOCK_FILE = "watch.lock";
@@ -66,17 +66,27 @@ export interface WatchStatusFile {
 }
 
 /** Keeps the status file current for a watcher; every change is written straight away. */
-export function createStatusRecorder(dir: string, init: { pid: number; version: string; caps?: SpendCaps }) {
+export function createStatusRecorder(dir: string, init: { pid: number; version: string; caps?: SpendCaps; parallel?: number }, onChange?: (watcher: WatcherInfo) => void) {
   const file = join(dir, STATUS_FILE);
-  const state: WatchStatusFile = { ...init, startedAt: Date.now(), current: [], merged: [], noChange: [], failed: [], shepherd: [] };
+  const { parallel = 1, ...fileInit } = init;
+  let nextPassAt: number | undefined;
+  const state: WatchStatusFile = { ...fileInit, startedAt: Date.now(), current: [], merged: [], noChange: [], failed: [], shepherd: [] };
   const save = () => {
     try {
       mkdirSync(dir, { recursive: true });
       writeFileSync(file, JSON.stringify(state));
     } catch {}
+    try {
+      onChange?.({ version: state.version, startedAt: state.startedAt, parallel, ...(nextPassAt === undefined ? {} : { nextPassAt }), ...structuredClone({ merged: state.merged, noChange: state.noChange, failed: state.failed, shepherd: state.shepherd }) });
+    } catch {}
   };
   save();
   return {
+    /** When the next queue pass starts (undefined while one runs). */
+    nextPass(at: number | undefined) {
+      nextPassAt = at;
+      save();
+    },
     /** Feed every run event through here. */
     event(e: BunkerEvent) {
       if (e.issue === undefined) return;

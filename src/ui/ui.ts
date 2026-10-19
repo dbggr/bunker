@@ -113,8 +113,8 @@ export function startHub({ port = defaultHubPort(), token, historyLimit = HISTOR
   const add = (repo: string, ev: any, msg: string, t: number) => {
     const list = history.get(repo) ?? [];
     // A late page needs only the latest usage per run and the latest budget; keeping every one would push results out of the history.
-    const kind = ev.type === "budget" ? "budget" : ev.type === "usage" || ev.type === "result" ? `run:${ev.issue}:${ev.task}` : undefined;
-    if (kind) for (let n = list.length - 1; n >= 0; n--) if (list[n]!.kind === (ev.type === "budget" ? "budget" : kind)) list.splice(n, 1);
+    const kind = ev.type === "budget" || ev.type === "watcher" ? ev.type : ev.type === "usage" || ev.type === "result" ? `run:${ev.issue}:${ev.task}` : undefined;
+    if (kind) for (let n = list.length - 1; n >= 0; n--) if (list[n]!.kind === kind) list.splice(n, 1);
     // Re-insert so Map order runs from least to most recently active.
     history.delete(repo);
     history.set(repo, list);
@@ -123,7 +123,7 @@ export function startHub({ port = defaultHubPort(), token, historyLimit = HISTOR
       history.delete(evicted);
       if (historyDir) rmSync(historyFile(historyDir, evicted), { force: true });
     }
-    const entry = { seq: seq++, msg, t, ...(ev.type === "budget" || ev.type === "usage" ? { kind } : {}) };
+    const entry = { seq: seq++, msg, t, ...(ev.type === "budget" || ev.type === "watcher" || ev.type === "usage" ? { kind } : {}) };
     list.push(entry);
     if (list.length > historyLimit) list.splice(0, list.length - historyLimit);
     return list;

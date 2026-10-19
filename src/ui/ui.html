@@ -2,196 +2,315 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>bunker</title>
 <style>
-  body { font: 14px/1.4 system-ui, sans-serif; margin: 0; background: #111; color: #ddd; }
-  header { padding: 10px 16px; background: #1b1b1b; border-bottom: 1px solid #333; }
-  main { padding: 12px 16px; }
-  .issue { border: 1px solid #333; border-radius: 6px; margin-bottom: 10px; background: #181818; }
-  .head { display: flex; gap: 14px; align-items: baseline; padding: 8px 12px; cursor: pointer; flex-wrap: wrap; }
-  .head b { min-width: 3em; }
-  .stage { padding: 1px 8px; border-radius: 10px; background: #345; }
-  .stage.merged { background: #264; } .stage.failed { background: #622; }
-  .muted { color: #888; }
-  .detail { display: none; padding: 0 12px 10px; }
-  .issue.open .detail { display: block; }
-  .feed { font: 12px/1.4 ui-monospace, monospace; max-height: 340px; overflow-y: auto; background: #0c0c0c; padding: 6px; white-space: pre-wrap; word-break: break-word; }
-  .feed .tool { color: #8ab; } .feed .stagel { color: #db6; } .feed .res { color: #9c9; }
-  a { color: #7af; }
-  #tabs { display: flex; gap: 2px; background: #1b1b1b; border-bottom: 1px solid #333; padding: 0 8px; flex-wrap: wrap; }
+  /* System font stacks only: no external assets. Text colours keep >= 4.5:1 on their backgrounds. */
+  :root { --bg: #111; --panel: #181818; --line: #3a3a3a; --text: #e2e2e2; --muted: #a0a0a0; --link: #8ab8ff; --ok: #7fd48a; --warn: #f0c060; --bad: #ff8a8a; }
+  * { box-sizing: border-box; }
+  body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 10px 16px; background: #1b1b1b; border-bottom: 1px solid var(--line); display: flex; gap: 14px; flex-wrap: wrap; align-items: baseline; }
+  header .addr { margin-left: auto; }
+  .muted { color: var(--muted); }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  a { color: var(--link); }
+  #tabs { display: flex; gap: 2px; background: #1b1b1b; border-bottom: 1px solid var(--line); padding: 0 8px; flex-wrap: wrap; }
   .tab { padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent; display: flex; gap: 8px; align-items: center; }
-  .tab.sel { border-bottom-color: #7af; background: #222; }
-  .tab .x { color: #888; margin-left: 4px; } .tab .x:hover { color: #fff; }
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: #666; display: inline-block; }
-  .dot.working { background: #4a4; } .dot.waiting { background: #db6; } .dot.failed { background: #c44; }
-  .budget { border: 1px solid #333; border-radius: 6px; margin-bottom: 10px; padding: 8px 12px; background: #181818; }
-  .budget:empty { display: none; }
-  .bar { height: 6px; background: #333; border-radius: 3px; margin: 4px 0 8px; overflow: hidden; }
-  .bar > i { display: block; height: 100%; background: #4a4; }
-  .bar.warn > i { background: #db6; } .bar.full > i { background: #c44; }
+  .tab.sel { border-bottom-color: var(--link); background: #222; }
+  .tab .x { color: var(--muted); margin-left: 4px; } .tab .x:hover { color: #fff; }
+  main { padding: 12px 16px; }
+  .sr { position: absolute; left: -9999px; }
+  .dot.working { color: var(--ok); } .dot.waiting { color: var(--warn); } .dot.failed { color: var(--bad); } .dot.idle { color: var(--muted); }
   .pane { display: none; } .pane.sel { display: block; }
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
+  @media (max-width: 800px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+  section { margin-bottom: 14px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 6px; font-weight: 600; }
+  .card { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 8px; background: var(--panel); padding: 8px 12px; }
+  .row { display: flex; gap: 6px 14px; flex-wrap: wrap; align-items: baseline; }
+  .title { font-weight: 600; overflow-wrap: anywhere; }
+  .track { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 6px 0; padding: 0; list-style: none; }
+  .track li.done { color: var(--ok); } .track li.current { color: #fff; font-weight: 700; } .track li.todo { color: var(--muted); }
+  .bar { height: 6px; background: #333; border-radius: 3px; margin: 3px 0 8px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--ok); }
+  .bar.warn > i { background: var(--warn); } .bar.full > i { background: var(--bad); }
+  button.show { background: none; border: 1px solid var(--line); color: var(--link); border-radius: 4px; cursor: pointer; font: inherit; padding: 0 8px; }
+  .log { display: none; margin-top: 6px; } .card.open .log { display: block; }
+  .feed { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; max-height: 340px; overflow-y: auto; background: #0c0c0c; padding: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .feed .ts { color: var(--muted); margin-right: 6px; }
+  .feed .tool { color: #9cc4dd; } .feed .stage { color: var(--warn); } .feed .result { color: var(--ok); } .feed .note { color: #c7b6ff; }
+  ul.plain { list-style: none; margin: 0; padding: 0; }
+  ul.plain li { padding: 3px 0; overflow-wrap: anywhere; }
+  .side .card { margin-bottom: 10px; }
+  .idle { text-align: center; padding: 28px 8px; }
+  .idle h1 { font-size: 20px; margin: 0 0 10px; }
+  #empty { padding: 20px 0; }
 </style>
 </head>
 <body>
-<header><b>bunker</b> <span class="muted" id="conn">connecting…</span></header>
+<header><b>bunker</b> <span id="status">connecting…</span> <span class="muted" id="watchers"></span> <span class="muted addr" id="addr"></span></header>
 <nav id="tabs"></nav>
 <main id="main"><div class="muted" id="empty">no runs yet — start one with bunker --ui</div></main>
+<script id="model">
+// Pure state and view-model code: no DOM, so tests can load it on its own.
+const Model = (() => {
+  const STAGES = ["setup", "audit", "implement", "review", "verify", "PR", "waiting for merge", "merged", "done", "failed"];
+  const TRACK = ["setup", "implement", "review", "verify", "PR", "merge"];
+  const day0 = (now) => new Date(now).setHours(0, 0, 0, 0);
+  const isDone = (s) => s === "merged" || s === "done" || s === "failed";
+  function newRepo() { return { runs: new Map(), queueText: "", blocked: new Map(), shepherd: new Map(), notes: [], spend: undefined, watcher: undefined }; }
+  function run(r, issue) {
+    let x = r.runs.get(issue);
+    if (!x) { x = { key: issue, title: "", stage: "", model: "", round: undefined, role: "", start: undefined, end: undefined, cost: 0, est: undefined, tokens: 0, url: "", logPath: "", reason: "", done: false, log: [] }; r.runs.set(issue, x); }
+    return x;
+  }
+  const keyOf = (e) => (e.issue !== undefined ? "#" + e.issue : e.task !== undefined ? "task " + e.task : "run");
+  function ingest(r, e) {
+    if (e.type === "budget") { r.spend = e.budget; return; }
+    if (e.type === "watcher") { r.watcher = e.watcher; return; }
+    if (e.type === "note") {
+      const text = e.text || "";
+      if (e.issue === undefined && /^queue:/.test(text)) { r.queueText = text; return; }
+      const pr = e.issue !== undefined ? /^PR #(\d+): ([\s\S]*)$/.exec(text) : null;
+      if (pr) r.shepherd.set(Number(pr[1]), { issue: e.issue, pr: Number(pr[1]), action: "note", detail: pr[2].split("\n")[0] });
+      const bl = /^blocked by #(\d+): (.*)$/.exec(text);
+      if (bl && e.issue !== undefined) r.blocked.set(e.issue, { number: Number(bl[1]), title: bl[2] });
+      const live = [...r.runs.values()].filter((x) => !x.done);
+      const target = e.issue !== undefined ? r.runs.get("#" + e.issue) : live.length === 1 ? live[0] : undefined;
+      if (target) target.log.push({ t: e.at, kind: "note", text });
+      else r.notes.push({ t: e.at, text });
+      if (r.notes.length > 50) r.notes.shift();
+      return;
+    }
+    const i = run(r, keyOf(e));
+    i.start ??= e.at;
+    i.end = e.at;
+    if (e.round !== undefined) { i.round = e.round; i.role = e.role || ""; }
+    if (e.type === "stage") {
+      i.stage = e.name;
+      if (e.model) i.model = e.model;
+      i.done = isDone(e.name);
+      if (e.name === "failed") i.reason = e.reason || e.text || "";
+      i.log.push({ t: e.at, kind: "stage", text: "— " + e.name + (e.model ? " · " + e.model : "") + (e.text ? " (" + e.text + ")" : "") + (e.reason ? ": " + e.reason : "") });
+      if (i.done) { i.est = undefined; i.tokens = 0; }
+    } else if (e.type === "meta") {
+      if (e.title) i.title = e.title;
+      if (e.logPath) i.logPath = e.logPath;
+      if (e.url) i.url = e.url;
+    } else if (e.type === "toolCall") i.log.push({ t: e.at, kind: "tool", text: "▸ " + e.name });
+    else if (e.type === "text") i.log.push({ t: e.at, kind: "text", text: e.text || "" });
+    else if (e.type === "usage") { i.est = e.estCostUsd; i.tokens = e.tokens ? e.tokens.input + e.tokens.output + e.tokens.cacheRead + e.tokens.cacheWrite : 0; }
+    else if (e.type === "result") { i.cost += e.costUsd || 0; i.est = undefined; i.tokens = 0; i.log.push({ t: e.at, kind: "result", text: "result" + (e.costUsd ? " $" + e.costUsd.toFixed(2) : "") }); }
+    if (i.log.length > 1000) i.log.splice(0, i.log.length - 1000);
+  }
+  /** The six-step track with each step done, current or todo. */
+  function track(stage) {
+    const at = stage === "setup" || stage === "audit" ? 0 : stage === "implement" ? 1 : stage === "review" ? 2 : stage === "verify" ? 3 : stage === "PR" ? 4 : stage === "waiting for merge" ? 5 : -1;
+    const all = stage === "merged" || stage === "done";
+    return TRACK.map((name, n) => ({ name, state: all || n < at ? "done" : n === at ? "current" : "todo" }));
+  }
+  const title = (r, issue, fallback) => (r.runs.get("#" + issue) || {}).title || fallback || "";
+  function groups(r, now) {
+    const runs = [...r.runs.values()];
+    const running = runs.filter((x) => !x.done && x.stage !== "waiting for merge");
+    const waiting = runs.filter((x) => !x.done && x.stage === "waiting for merge").map((x) => {
+      const n = Number(String(x.key).slice(1));
+      const sh = [...r.shepherd.values()].find((s) => s.issue === n);
+      return { run: x, ci: sh ? sh.action + (sh.detail ? ": " + sh.detail : "") : "armed", prUrl: x.url };
+    });
+    const since = day0(now);
+    const byIssue = new Map();
+    const add = (issue, row) => { const o = byIssue.get(issue); if (!o || row.at >= o.at) byIssue.set(issue, row); };
+    for (const x of runs) {
+      if (!x.done || (x.end || 0) < since) continue;
+      const issue = Number(String(x.key).slice(1));
+      add(issue, { issue, title: x.title, outcome: x.stage === "failed" ? "failed" : "merged", reason: x.reason, prUrl: x.url, at: x.end, elapsed: x.end - x.start, cost: x.cost });
+    }
+    const w = r.watcher;
+    if (w) {
+      for (const m of w.merged) if (m.at >= since) add(m.issue, { issue: m.issue, title: title(r, m.issue), outcome: "merged", reason: "", prUrl: m.prUrl || "", at: m.at, ...stats(r, m.issue) });
+      for (const m of w.noChange) if (m.at >= since) add(m.issue, { issue: m.issue, title: title(r, m.issue), outcome: "no change", reason: m.reason, prUrl: "", at: m.at, ...stats(r, m.issue) });
+      for (const m of w.failed) if (m.at >= since) add(m.issue, { issue: m.issue, title: title(r, m.issue), outcome: "failed", reason: m.reason, prUrl: m.prUrl || "", at: m.at, ...stats(r, m.issue) });
+    }
+    // A watcher record of a failed run that is now running again is stale.
+    const live = new Set([...running, ...waiting.map((x) => x.run)].map((x) => Number(String(x.key).slice(1))));
+    const finished = [...byIssue.values()].filter((f) => !live.has(f.issue)).sort((a, b) => b.at - a.at);
+    return { running, waiting, finished, idle: !running.length && !waiting.length };
+  }
+  function stats(r, issue) { const x = r.runs.get("#" + issue); return x && x.start !== undefined ? { elapsed: x.end - x.start, cost: x.cost } : {}; }
+  /** Queue rows from the latest "queue: #1 (high, bug) · #2" note, minus issues already started, plus blocked ones. */
+  function queue(r) {
+    const started = new Set([...r.runs.keys()]);
+    const rows = [];
+    const body = r.queueText.replace(/^queue:\s*/, "");
+    for (const part of body.split(" · ")) {
+      const m = /^#(\d+)(?: \(([^)]*)\))?/.exec(part.trim());
+      if (!m || started.has("#" + m[1])) continue;
+      const issue = Number(m[1]);
+      rows.push({ issue, tags: m[2] ? m[2].split(", ") : [], blockedOn: r.blocked.get(issue) });
+    }
+    for (const [issue, b] of r.blocked) if (!rows.some((x) => x.issue === issue) && !(r.runs.get("#" + issue) || {}).stage) rows.push({ issue, tags: [], blockedOn: b });
+    return rows;
+  }
+  function shepherd(r) {
+    const rows = new Map(r.shepherd);
+    if (r.watcher) for (const s of r.watcher.shepherd) rows.set(s.pr, s);
+    return [...rows.values()];
+  }
+  /** Tab label: status dot kind plus a count ("2 running", "1 failed", "idle"). */
+  function tab(r, now) {
+    const g = groups(r, now);
+    const failed = g.finished.filter((f) => f.outcome === "failed").length;
+    if (g.running.length) return { kind: "working", icon: "●", label: g.running.length + " running" };
+    if (g.waiting.length) return { kind: "waiting", icon: "◐", label: g.waiting.length + " waiting for merge" };
+    if (failed) return { kind: "failed", icon: "✕", label: failed + " failed" };
+    return { kind: "idle", icon: "○", label: "idle" };
+  }
+  /** Spend windows with their fill and level: warn from 80%, full from 100%. */
+  function spend(r) {
+    const b = r.spend;
+    if (!b) return undefined;
+    let est = 0;
+    for (const x of r.runs.values()) if (!x.done && x.est !== undefined) est += x.est;
+    const win = (label, w) => {
+      const spent = w.spentUsd + est;
+      const frac = w.capUsd !== undefined && w.capUsd > 0 ? spent / w.capUsd : undefined;
+      return { label, spent, cap: w.capUsd, frac, level: frac === undefined ? "" : frac >= 1 ? "full" : frac >= 0.8 ? "warn" : "", estimated: est > 0 };
+    };
+    return { windows: [win("today", b.day), win("30 days", b.month)], pausedUntil: b.pausedUntil && b.pausedUntil > Date.now() ? b.pausedUntil : undefined };
+  }
+  function idle(r, now) {
+    const since = day0(now);
+    const g = groups(r, now);
+    const merged = g.finished.filter((f) => f.outcome === "merged");
+    const all = r.watcher ? r.watcher.merged : [];
+    const last = all.length ? all[all.length - 1] : undefined;
+    return { nextPassAt: r.watcher && r.watcher.nextPassAt, spentToday: r.spend ? r.spend.day.spentUsd : undefined, mergedToday: merged.length, lastMerge: last ? { issue: last.issue, prUrl: last.prUrl, at: last.at } : merged[0] ? { issue: merged[0].issue, prUrl: merged[0].prUrl, at: merged[0].at } : undefined };
+  }
+  const watcherLive = (r, now) => !!r.watcher && ([...r.runs.values()].some((x) => !x.done) || (r.watcher.nextPassAt !== undefined && r.watcher.nextPassAt > now - 60000));
+  return { STAGES, TRACK, newRepo, ingest, track, groups, queue, shepherd, tab, spend, idle, watcherLive };
+})();
+</script>
 <script>
-const STAGES = ["setup", "audit", "implement", "review", "verify", "PR", "waiting for merge", "merged", "done", "failed"];
 const repos = new Map();
 const closed = new Set();
 const main = document.getElementById("main");
 const tabs = document.getElementById("tabs");
-const conn = document.getElementById("conn");
-const clock = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s >= 60 ? Math.floor(s / 60) + "m" + String(s % 60).padStart(2, "0") + "s" : s + "s"; };
+const open = new Set(); // "repo\0key" of runs whose log is shown
+const clock = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s >= 3600 ? Math.floor(s / 3600) + "h" + String(Math.floor(s / 60) % 60).padStart(2, "0") + "m" : s >= 60 ? Math.floor(s / 60) + "m" + String(s % 60).padStart(2, "0") + "s" : s + "s"; };
+const usd = (n) => "$" + n.toFixed(2);
+const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour12: false });
+const tokens = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
 const selected = () => decodeURIComponent(location.hash.slice(1));
-function key(e) { return e.issue !== undefined ? "#" + e.issue : e.task !== undefined ? "task " + e.task : "run"; }
-function getRepo(name) {
-  let r = repos.get(name);
-  if (r) return r;
-  const tab = document.createElement("div");
-  tab.className = "tab";
-  tab.innerHTML = '<span class="dot"></span><span class="name"></span><span class="x" title="close tab">×</span>';
-  tab.querySelector(".name").textContent = name;
-  tab.onclick = () => { location.hash = encodeURIComponent(name); };
-  tab.querySelector(".x").onclick = (ev) => {
-    ev.stopPropagation();
-    closed.add(name);
-    r.tab.remove(); r.pane.remove(); repos.delete(name);
-    if (selected() === name) location.hash = "";
-    render();
-  };
-  const pane = document.createElement("div");
-  pane.className = "pane";
-  tabs.appendChild(tab);
-  main.appendChild(pane);
-  const budget = document.createElement("div");
-  budget.className = "budget";
-  pane.appendChild(budget);
-  r = { name, tab, pane, issues: new Map(), budget, spend: undefined };
-  repos.set(name, r);
-  return r;
+function h(tag, props, ...kids) {
+  const el = document.createElement(tag);
+  if (props) for (const [k, v] of Object.entries(props)) if (v !== undefined && v !== "") (k === "class" ? (el.className = v) : k === "onclick" ? (el.onclick = v) : el.setAttribute(k, v));
+  for (const k of kids.flat()) if (k !== undefined && k !== null && k !== false) el.append(k);
+  return el;
 }
-function status(r) {
-  let working = false, waiting = false, failed = false;
-  for (const i of r.issues.values()) {
-    if (i.stage === "failed") failed = true;
-    else if (!i.done) { if (i.stage === "waiting for merge") waiting = true; else working = true; }
+const span = (cls, text) => h("span", { class: cls }, text);
+const link = (url, text) => (url ? h("a", { href: url, target: "_blank", rel: "noreferrer" }, text) : "");
+const num = (key) => String(key).replace(/^#/, "");
+function runCost(x) { return x.est !== undefined ? "~" + usd(x.cost + x.est) : usd(x.cost) + (x.tokens ? " · " + tokens(x.tokens) + " tok" : ""); }
+function head(x, now) {
+  return h("div", { class: "row" }, span("title", (String(x.key).startsWith("#") ? "#" + num(x.key) + " " : x.key + " ") + (x.title || "")));
+}
+function runCard(repo, x, now) {
+  const id = repo.name + "\0" + x.key;
+  const card = h("div", { class: "card" + (open.has(id) ? " open" : "") });
+  const btn = h("button", { class: "show", type: "button", "aria-expanded": String(open.has(id)), onclick: () => { open.has(id) ? open.delete(id) : open.add(id); render(); } }, open.has(id) ? "Hide log" : "Show log");
+  const feed = h("div", { class: "feed", "data-id": id }, x.log.map((l) => h("div", { class: l.kind }, span("ts", hhmm(l.t)), l.text)));
+  card.append(head(x, now),
+    h("ol", { class: "track", "aria-label": "stages" }, Model.track(x.stage).map((s) => h("li", { class: s.state }, (s.state === "done" ? "✓ " : s.state === "current" ? "● " : "○ ") + s.name, s.state === "current" ? span("sr", " (current)") : ""))),
+    h("div", { class: "row muted" }, x.round !== undefined ? span("", "round " + x.round + (x.role ? " · " + x.role : "")) : "", x.model ? span("", x.model) : "", span("", x.start ? clock(now - x.start) : ""), span("", runCost(x)), btn),
+    h("div", { class: "log" }, h("div", { class: "muted" }, x.logPath ? "log: " + x.logPath : ""), feed));
+  return card;
+}
+function panelList(name, items, emptyText) {
+  return h("div", { class: "card" }, h("h2", null, name), items.length ? h("ul", { class: "plain" }, items.map((i) => h("li", null, i))) : span("muted", emptyText));
+}
+function renderPane(r, now) {
+  const g = Model.groups(r, now);
+  const pane = h("div", { class: "pane sel" });
+  const main = h("div");
+  const sp = Model.spend(r);
+  if (sp) {
+    const card = h("div", { class: "card" });
+    card.append(h("div", { class: "row" }, sp.windows.map((w) => span("", w.label + " " + (w.estimated ? "~" : "") + usd(w.spent) + (w.cap !== undefined ? " / " + usd(w.cap).replace(/\.00$/, "") + " (" + Math.round(w.frac * 100) + "%)" + (w.level === "full" ? " ✕ cap reached" : w.level === "warn" ? " ⚠ near cap" : "") : " (no cap)")))));
+    for (const w of sp.windows) if (w.frac !== undefined) card.append(h("div", { class: "bar " + w.level, role: "img", "aria-label": w.label + " " + Math.round(w.frac * 100) + "% of cap" }, h("i", { style: "width:" + Math.min(100, w.frac * 100) + "%" })));
+    if (sp.pausedUntil) card.append(span("muted", "no new issues until " + new Date(sp.pausedUntil).toLocaleString()));
+    main.append(card);
   }
-  return working ? "working" : waiting ? "waiting" : failed ? "failed" : "idle";
+  if (g.idle && !g.finished.length) {
+    const i = Model.idle(r, now);
+    main.append(h("div", { class: "idle" }, h("h1", null, "Nothing queued. Watching."),
+      h("div", { class: "muted" }, "next pass " + (i.nextPassAt ? (i.nextPassAt > now ? "in " + clock(i.nextPassAt - now) : "now") : "unknown")),
+      h("div", { class: "muted" }, "today's spend " + (i.spentToday !== undefined ? usd(i.spentToday) : "unknown") + " · merged today " + i.mergedToday),
+      h("div", { class: "muted" }, "last merge ", i.lastMerge ? ["#" + i.lastMerge.issue + " ", link(i.lastMerge.prUrl, "PR"), " " + hhmm(i.lastMerge.at)] : "none")));
+  }
+  if (g.running.length) main.append(h("section", null, h("h2", null, "Running (" + g.running.length + ")"), g.running.map((x) => runCard(r, x, now))));
+  if (g.waiting.length) main.append(h("section", null, h("h2", null, "Waiting for merge (" + g.waiting.length + ")"), g.waiting.map((w) => h("div", { class: "card" }, h("div", { class: "row" }, span("title", "#" + num(w.run.key) + " " + w.run.title), span("muted", "◐ auto-merge armed"), span("muted", "CI " + w.ci), link(w.prUrl, "PR"))))));
+  if (g.finished.length) main.append(h("section", null, h("h2", null, "Finished today (" + g.finished.length + ")"), g.finished.map((f) => h("div", { class: "card" }, h("div", { class: "row" },
+    span(f.outcome === "failed" ? "bad" : "ok", f.outcome === "failed" ? "✕ failed" : f.outcome === "merged" ? "✓ merged" : "✓ " + f.outcome), span("title", "#" + f.issue + " " + f.title), link(f.prUrl, "PR"),
+    f.reason ? span("muted", f.reason) : "", f.elapsed !== undefined ? span("muted", clock(f.elapsed)) : "", f.cost !== undefined ? span("muted", usd(f.cost)) : "")))));
+  const w = r.watcher;
+  const side = h("div", { class: "side" },
+    panelList("Queue", Model.queue(r).map((q) => [span("", "#" + q.issue + " "), q.tags.length ? span("muted", "(" + q.tags.join(", ") + ") ") : "", q.blockedOn ? span("warn", "◐ blocked on #" + q.blockedOn.number) : ""]), "empty"),
+    panelList("Shepherd", Model.shepherd(r).map((s) => [link(s.prUrl, "PR #" + s.pr) || span("", "PR #" + s.pr), span("", " " + s.action), s.detail ? span("muted", " · " + s.detail) : ""]), "no open PRs"),
+    panelList("Watcher", w ? [["version " + w.version], ["uptime " + clock(now - w.startedAt)], ["parallel " + w.parallel], ["next pass " + (w.nextPassAt ? (w.nextPassAt > now ? "in " + clock(w.nextPassAt - now) : "now") : "running")]] : [], "not reporting"));
+  pane.append(h("div", { class: "cols" }, main, side));
+  return pane;
 }
 function render() {
+  const now = Date.now();
   document.getElementById("empty").style.display = repos.size ? "none" : "";
   let sel = selected();
   if (!repos.has(sel)) sel = repos.keys().next().value;
-  for (const r of repos.values()) {
-    const s = status(r);
-    r.tab.querySelector(".dot").className = "dot " + s;
-    r.tab.title = s === "waiting" ? "waiting for merge" : s;
-    r.tab.classList.toggle("sel", r.name === sel);
-    r.pane.classList.toggle("sel", r.name === sel);
+  tabs.replaceChildren(...[...repos.values()].map((r) => {
+    const t = Model.tab(r.model, now);
+    return h("div", { class: "tab" + (r.name === sel ? " sel" : ""), title: t.label, onclick: () => { location.hash = encodeURIComponent(r.name); } },
+      span("dot " + t.kind, t.icon), span("name", r.name), span("muted", t.label),
+      h("span", { class: "x", title: "close tab", onclick: (ev) => { ev.stopPropagation(); closed.add(r.name); repos.delete(r.name); render(); } }, "×"));
+  }));
+  // Remember each log's scroll: only a feed that was at the bottom keeps following new lines.
+  const scroll = new Map();
+  for (const f of main.querySelectorAll(".feed")) scroll.set(f.dataset.id, { top: f.scrollTop, bottom: f.scrollTop + f.clientHeight >= f.scrollHeight - 20 });
+  for (const p of main.querySelectorAll(".pane")) p.remove();
+  const r = repos.get(sel);
+  if (r) {
+    main.append(renderPane(Object.assign(r.model, { name: r.name }), now));
+    for (const f of main.querySelectorAll(".feed")) {
+      const was = scroll.get(f.dataset.id);
+      f.scrollTop = !was || was.bottom ? f.scrollHeight : was.top;
+    }
   }
+  const all = [...repos.values()].map((x) => x.model);
+  const working = all.some((m) => Model.groups(m, now).running.length);
+  document.getElementById("status").textContent = connected ? (working ? "● working" : "○ idle") : "✕ disconnected";
+  const live = all.filter((m) => Model.watcherLive(m, now)).length;
+  document.getElementById("watchers").textContent = live + (live === 1 ? " watcher" : " watchers");
 }
+let connected = false;
+document.getElementById("addr").textContent = location.host + " · read-only";
 window.addEventListener("hashchange", render);
-function get(r, k) {
-  let i = r.issues.get(k);
-  if (i) return i;
-  const el = document.createElement("div");
-  el.className = "issue";
-  el.innerHTML = '<div class="head"><b></b><span class="stage"></span><span class="round muted"></span><span class="time muted"></span><span class="cost muted"></span><span class="pr"></span></div>' +
-    '<div class="detail"><div class="muted logpath"></div><div class="feed"></div></div>';
-  el.querySelector(".head").onclick = () => el.classList.toggle("open");
-  el.querySelector("b").textContent = k;
-  r.pane.appendChild(el);
-  i = { el, start: undefined, end: undefined, cost: 0, est: undefined, tokens: 0, feed: el.querySelector(".feed"), done: false, stage: "" };
-  r.issues.set(k, i);
-  return i;
-}
-function line(i, cls, text) {
-  const d = document.createElement("div");
-  d.className = cls;
-  d.textContent = text;
-  const stick = i.feed.scrollTop + i.feed.clientHeight >= i.feed.scrollHeight - 20;
-  i.feed.appendChild(d);
-  if (stick) i.feed.scrollTop = i.feed.scrollHeight;
-}
-const usd = (n) => "$" + n.toFixed(2);
-const tokens = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
-// Exact cost of finished agent calls, plus a marked estimate of the call in flight (replaced, never summed, once its result arrives).
-function costText(i) {
-  if (i.est !== undefined) return "~" + usd(i.cost + i.est);
-  return usd(i.cost) + (i.tokens ? " · " + tokens(i.tokens) + " tok" : "");
-}
-function renderBudget(r) {
-  const b = r.spend;
-  if (!b) { r.budget.replaceChildren(); return; }
-  let est = 0;
-  for (const i of r.issues.values()) if (!i.done && i.est !== undefined) est += i.est;
-  const mark = est > 0 ? "~" : "";
-  const parts = [["today", b.day, 1], ["30 days", b.month, 1]].map(([label, w]) => {
-    const spent = w.spentUsd + est;
-    return label + " " + mark + usd(spent) + (w.capUsd !== undefined ? " / " + usd(w.capUsd).replace(/\.00$/, "") : " (no cap)");
-  });
-  const head = document.createElement("div");
-  head.textContent = parts.join(" · ");
-  const kids = [head];
-  for (const w of [b.day, b.month]) {
-    if (w.capUsd === undefined) continue;
-    const frac = (w.spentUsd + est) / w.capUsd;
-    const bar = document.createElement("div");
-    bar.className = "bar" + (frac >= 1 ? " full" : frac >= 0.8 ? " warn" : "");
-    const fill = document.createElement("i");
-    fill.style.width = Math.min(100, frac * 100) + "%";
-    bar.appendChild(fill);
-    kids.push(bar);
-  }
-  if (b.pausedUntil && b.pausedUntil > Date.now()) {
-    const p = document.createElement("div");
-    p.className = "muted";
-    p.textContent = "no new issues until " + new Date(b.pausedUntil).toLocaleString();
-    kids.push(p);
-  }
-  r.budget.replaceChildren(...kids);
-}
-function onEvent(m) {
-  if (closed.has(m.repo)) return;
-  const e = m.event;
-  const r = getRepo(m.repo);
-  if (e.type === "budget") { r.spend = e.budget; renderBudget(r); return; }
-  const i = get(r, key(e));
-  i.start ??= e.at;
-  i.end = e.at;
-  const q = (s) => i.el.querySelector(s);
-  if (e.round !== undefined) q(".round").textContent = "round " + e.round + (e.role ? " " + e.role : "");
-  if (e.type === "stage") {
-    const s = q(".stage");
-    s.textContent = e.name + (e.model ? " · " + e.model : "");
-    s.title = "stage " + (STAGES.indexOf(e.name) + 1) + " of " + STAGES.length + ": " + STAGES.join(" → ");
-    s.className = "stage " + (e.name === "merged" || e.name === "done" ? "merged" : e.name === "failed" ? "failed" : "");
-    i.stage = e.name;
-    i.done = e.name === "merged" || e.name === "done" || e.name === "failed";
-    line(i, "stagel", "— " + e.name + (e.model ? " · " + e.model : "") + (e.text ? " (" + e.text + ")" : "") + (e.reason ? ": " + e.reason : ""));
-  } else if (e.type === "meta") {
-    if (e.logPath) q(".logpath").textContent = "log: " + e.logPath;
-    if (e.url) { const a = document.createElement("a"); a.href = e.url; a.textContent = "PR"; a.target = "_blank"; a.rel = "noreferrer"; q(".pr").replaceChildren(a); }
-  } else if (e.type === "toolCall") line(i, "tool", "▸ " + e.name);
-  else if (e.type === "text") line(i, "txt", e.text || "");
-  else if (e.type === "usage") { i.est = e.estCostUsd; i.tokens = e.tokens ? e.tokens.input + e.tokens.output + e.tokens.cacheRead + e.tokens.cacheWrite : 0; }
-  else if (e.type === "result") { i.cost += e.costUsd || 0; i.est = undefined; i.tokens = 0; line(i, "res", "result" + (e.costUsd ? " $" + e.costUsd.toFixed(2) : "")); }
-  if (e.type === "stage" && i.done) { i.est = undefined; i.tokens = 0; }
-  q(".cost").textContent = costText(i);
-  renderBudget(r);
-  render();
-}
-setInterval(() => { for (const r of repos.values()) for (const i of r.issues.values()) if (i.start && !i.done) i.el.querySelector(".time").textContent = clock(Date.now() - i.start); }, 1000);
-function tick() { for (const r of repos.values()) for (const i of r.issues.values()) if (i.start && i.done) i.el.querySelector(".time").textContent = clock(i.end - i.start); }
-function open() {
+let timer;
+const later = () => { clearTimeout(timer); timer = setTimeout(render, 100); };
+function connect() {
   const ws = new WebSocket("ws://" + location.host + "/events" + location.search);
-  ws.onopen = () => (conn.textContent = "live");
-  ws.onmessage = (m) => { onEvent(JSON.parse(m.data)); tick(); };
-  ws.onclose = () => (conn.textContent = "disconnected");
+  ws.onopen = () => { connected = true; later(); };
+  ws.onmessage = (m) => {
+    const d = JSON.parse(m.data);
+    if (closed.has(d.repo)) return;
+    let r = repos.get(d.repo);
+    if (!r) { r = { name: d.repo, model: Model.newRepo() }; repos.set(d.repo, r); }
+    Model.ingest(r.model, d.event);
+    later();
+  };
+  ws.onclose = () => { connected = false; render(); };
 }
-open();
+// The clock tick leaves the page alone while the user is selecting text.
+setInterval(() => { const sel = getSelection(); if (!sel || sel.isCollapsed) render(); }, 1000);
+connect();
 </script>
 </body>
 </html>
