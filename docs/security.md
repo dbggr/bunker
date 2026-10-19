@@ -55,6 +55,8 @@ Public repos let anyone write an issue or a comment, and the issue text becomes 
 
 `bunker ui` binds `127.0.0.1` only, with no option to change that, and rejects foreign `Host` and `Origin` headers (DNS rebinding). The page is read-only: nothing can start, stop or alter a run. Publishing requires the random token in `~/.config/bunker/ui.token` (mode 0600); browsers never see it.
 
+The hub's history files (`$XDG_STATE_HOME/bunker/hub/<owner>_<repo>.jsonl`, default `~/.local/state/bunker/hub/`) hold redacted events only, are written with mode 600 in a directory of mode 700, and stay on the machine. Nothing leaves 127.0.0.1.
+
 ## Verify runs in the sandbox
 
 Agent-written code is executed by `verify`, and by the optional `check` command (a typecheck whose output goes to the reviewer), which runs isolated in the same way. By default that happens in the same sandbox as the agent, not on the host with your credentials, but with no network and no Claude credentials (and no GitHub tokens), since it runs code the agent wrote. Setting `verify_network = true` in `.bunker/config.toml` opts back in to the network and Claude credentials, for verify commands that need them. `--verify-on-host` opts out of the sandbox: it runs with no GitHub or Claude tokens in its environment, but otherwise as you; only use it for repos where you'd run the code yourself anyway. The `--step-timeout` limit applies to host verify too: a hung command is killed (with its child processes) and the run fails as `idle-timeout`.

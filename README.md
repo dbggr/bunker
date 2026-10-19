@@ -41,7 +41,7 @@ bunker status        # what it's doing, what merged, and why anything failed
 
 ## What else it does
 
-Unattended `bunker watch` with `--parallel` runs and spend caps; a PR shepherd that fixes red CI and resolves conflicts; Manual-merge mode; `bunker status` and a live `bunker ui`; context/spec files and per-role skills; `bunker audit` and `bunker triage` for finding and checking work. See [Concepts](docs/concepts.md).
+Unattended `bunker watch` with `--parallel` runs and spend caps; a PR shepherd that fixes red CI and resolves conflicts; Manual-merge mode; `bunker status` and a live `bunker ui` (runs by state, audit cards, history across restarts); context/spec files and per-role skills; `bunker audit` and `bunker triage` for finding and checking work. See [Concepts](docs/concepts.md).
 
 ## Safety
 

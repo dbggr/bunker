@@ -101,4 +101,12 @@ describe("services docs (#411)", () => {
     for (const s of ["[services.database]", "prepare", "internal network", "Security trade-off", "throwaway"]) expect(concepts).toContain(s);
     for (const s of ["[services.<name>]", "healthcheck", "prepare "]) expect(cli).toContain(s);
   });
+
+  test("the docs describe the hub's runs by state and its history files (#489)", async () => {
+    const [concepts, sec, readme] = await Promise.all(["docs/concepts.md", "docs/security.md", "README.md"].map(read));
+    expect(concepts).toContain("## Live view (`bunker ui`)");
+    for (const s of ["Running", "Waiting for merge", "Finished today", "Queue", "Shepherd", "Watcher", "audit card", "XDG_STATE_HOME", "hub/<owner>_<repo>.jsonl", "2000", "7 days", "delete its file"]) expect(concepts).toContain(s);
+    for (const s of ["XDG_STATE_HOME", "mode 600", "redacted"]) expect(sec).toContain(s);
+    expect(readme).toContain("history across restarts");
+  });
 });

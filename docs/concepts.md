@@ -77,9 +77,20 @@ Outcomes: `idle-timeout` (an agent went quiet, or setup/verify ran too long; wor
 
 Every issue run writes a redacted log to `<repo>/.bunker/runs/<N>-<timestamp>.log` with agent, setup and verify output. The terminal is quiet by default: stage lines, one live progress line on a TTY, and a summary per step. On a failure the last 40 lines and the log path are shown. `--verbose` (or `BUNKER_VERBOSE=1`) streams everything.
 
-## Live view
+## Live view (`bunker ui`)
 
-`bunker ui` serves a page on `127.0.0.1:4321` with one tab per repo: stage, round, time, cost, PR link and feed per issue. Runs publish to it automatically when it is reachable; `--ui` starts one for the run if none is up. See [security.md](security.md).
+One hub per machine serves the live view on `127.0.0.1:4321`. Every watcher started with `--ui` publishes to it; the first one starts the hub and the others find it. Runs also publish when a hub is already reachable. The page has one tab per repo (a status dot and a count such as "2 running" or "idle"), and each tab groups runs by state:
+- **Running**: one card per run with the stage track (setup, implement, review, verify, PR; an audit has setup, audit, filing), round, time, cost, PR link and a feed.
+- **Waiting for merge**: PRs with auto-merge armed, with the CI state the shepherd last reported.
+- **Finished today**: merged, failed and audit runs. An audit card lists the issues it filed.
+
+A sidebar shows the **Queue** (next up, and issues waiting on a blocker), the **Shepherd** (open bunker PRs and the last action on each) and the **Watcher** (version, uptime, parallelism, time to the next pass). When nothing is queued or running, an idle panel shows the next pass, spend today, merges today and the last merge. A spend card shows today and the last 30 days against the cap in effect, with a warning from 80% and a pause notice when the cap is reached. Every issue and PR reference is a link.
+
+The view is read-only. The URL carries an access key (`?k=...`) that the page and its socket need; `bunker ui` and `--ui` print it. See [security.md](security.md).
+
+### History
+
+The hub keeps each repo's events in `$XDG_STATE_HOME/bunker/hub/<owner>_<repo>.jsonl` (default `~/.local/state/bunker/hub/`) and replays them when it starts, so the view survives a restart. It keeps at most 2000 events per repo and 7 days; older events are dropped when the hub starts. To clear one repo, delete its file and restart the hub (a running hub still holds the events in memory).
 
 ## Parallel queue
 

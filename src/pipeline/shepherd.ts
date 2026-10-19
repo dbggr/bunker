@@ -551,10 +551,22 @@ export function createShepherd(o: ShepherdOptions) {
     }
   };
 
+  const updateBranch = async (pr: BunkerPr): Promise<ShepherdEntry> => {
+    const r = await gh`gh api -X PUT repos/{owner}/{repo}/pulls/${pr.number}/update-branch -f expected_head_sha=${pr.headSha}`;
+    if (r.exitCode !== 0) return entry(pr, "failed", `could not update the branch: ${r.stderr.toString().trim()}`);
+    note(pr, `updated the branch to ${pr.base}`);
+    return entry(pr, "updated-branch");
+  };
+
   const handle = async (pr: BunkerPr): Promise<ShepherdEntry> => {
     await resolveOwn();
     const skip = skipReason(pr);
-    if (skip) return entry(pr, "skipped", skip);
+    if (skip) {
+      // Updating the branch changes no PR content, so a review-gated PR still gets it (but no code fixes).
+      const reviewGated = pr.labels.includes(REVIEW_LABEL) && !pr.labels.includes(FAILED_LABEL) && !pr.isDraft;
+      if (reviewGated && pr.mergeState === "BEHIND" && pr.mergeable !== "CONFLICTING") return updateBranch(pr);
+      return entry(pr, "skipped", skip);
+    }
     if (pr.mergeable === "CONFLICTING" || pr.mergeState === "DIRTY") return resolveConflict(pr);
     const { checks, error } = await checksFor(pr);
     const failed = checks.filter((c) => c.bucket === "fail");
@@ -562,10 +574,7 @@ export function createShepherd(o: ShepherdOptions) {
     const reviews = await pendingReviews(pr);
     if (reviews.length) return addressReview(pr, reviews);
     if (pr.mergeState === "BEHIND") {
-      const r = await gh`gh api -X PUT repos/{owner}/{repo}/pulls/${pr.number}/update-branch -f expected_head_sha=${pr.headSha}`;
-      if (r.exitCode !== 0) return entry(pr, "failed", `could not update the branch: ${r.stderr.toString().trim()}`);
-      note(pr, `updated the branch to ${pr.base}`);
-      return entry(pr, "updated-branch");
+      return updateBranch(pr);
     }
     if (error) return entry(pr, "waiting", `could not read the required checks: ${error}`);
     if (!checks.length) return entry(pr, "waiting", "no required check reported on the PR");
