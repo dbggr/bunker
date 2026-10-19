@@ -39,6 +39,7 @@ if (cmd === "pr list") {
   console.log(JSON.stringify(s.prs.map((p) => ({ ...p, comments: [...(p.comments || []), ...(s.comments[p.number] || []).map((body) => ({ body }))], labels: [...(p.labels || []), ...(s.labels[p.number] || []).map((name) => ({ name }))] }))));
 } else if (cmd === "pr checks") {
   const checks = s.checks[n] || [];
+  if (s.checkError) fail(s.checkError);
   console.log(JSON.stringify(checks));
   process.exit(checks.some((c) => c.bucket === "fail") ? 1 : checks.some((c) => c.bucket === "pending") ? 8 : 0);
 } else if (cmd === "run view") {
@@ -170,6 +171,18 @@ describe("pure helpers", () => {
 });
 
 describe("shepherd pass", () => {
+  test("checks gh cannot read are a visible waiting decision, and every decision is a run-log note", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs = [prJson(5, "fix/7-thing", sha)];
+    w.state.checkError = "no required checks reported on the 'fix/7-thing' branch";
+    w.save();
+    const events: any[] = [];
+    const p = await shepherd(w, fakeAgent("true"), { onEvent: (e: any) => events.push(e) }).pass();
+    expect(p.entries[0]).toMatchObject({ action: "waiting", detail: expect.stringContaining("no required checks reported") });
+    expect(events.some((e) => e.type === "note" && e.issue === 7 && /PR #5: waiting.*no required checks reported/.test(e.text))).toBe(true);
+  });
+
   test("green: nothing to do, nothing pushed, never merges", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });

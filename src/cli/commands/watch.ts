@@ -247,6 +247,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   };
 
   const shepherd = shepherdOn ? createShepherd({ cwd, agent: opts.agent, ...(opts.reviewer ? { reviewer: opts.reviewer } : {}), sandbox: opts.sandbox, ...(opts.setup ? { setup: opts.setup } : {}), ...(opts.verify ? { verify: opts.verify } : {}), ...(opts.verifyOnHost ? { verifyOnHost: true } : {}), ...(opts.verifyNetwork ? { verifyNetwork: true } : {}), ...(opts.idleTimeoutMs ? { idleTimeoutMs: opts.idleTimeoutMs } : {}), ...(opts.completionTimeoutMs ? { completionTimeoutMs: opts.completionTimeoutMs } : {}), ...(opts.stepTimeoutMs ? { stepTimeoutMs: opts.stepTimeoutMs } : {}), ...(opts.onEvent ? { onEvent: opts.onEvent } : {}), notify, ...(mention ? { mention } : {}) }) : undefined;
+  const lastDecision = new Map<number, string>();
   let lastSweep = -Infinity;
   const SWEEP_EVERY_MS = 60 * 60_000;
   /** One shepherd pass: resumes whatever the open PRs need, whether this watcher or an earlier one opened them. Returns how many merged. */
@@ -264,7 +265,12 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       record(p.usage.costUsd);
       summary.spentUsd += p.usage.costUsd;
     }
+    status.shepherd(p.entries.map((e) => ({ issue: e.issue, pr: e.pr, prUrl: e.url, action: e.action, ...(e.detail ? { detail: e.detail.split("\n")[0]! } : {}) })));
     for (const e of p.entries) {
+      // Quiet decisions (skipped, waiting, green) are logged when they change, so a stalled PR shows without a line per pass.
+      const line = `bunker: shepherd: PR #${e.pr} ${e.action}${e.detail ? ` (${e.detail.split("\n")[0]})` : ""}`;
+      if (["skipped", "waiting", "green"].includes(e.action) && lastDecision.get(e.pr) !== line) log(line);
+      lastDecision.set(e.pr, line);
       if (e.action === "gave-up") {
         summary.failed++;
         status.failed({ issue: e.issue, status: "gave-up", reason: e.detail ?? "gave up", prUrl: e.url });
