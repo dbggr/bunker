@@ -219,7 +219,7 @@ function runCard(repo, x, now) {
   const id = repo.name + "\0" + x.key;
   const card = h("div", { class: "card" + (open.has(id) ? " open" : "") });
   const btn = h("button", { class: "show", type: "button", "aria-expanded": String(open.has(id)), onclick: () => { open.has(id) ? open.delete(id) : open.add(id); render(); } }, open.has(id) ? "Hide log" : "Show log");
-  const feed = h("div", { class: "feed" }, x.log.map((l) => h("div", { class: l.kind }, span("ts", hhmm(l.t)), l.text)));
+  const feed = h("div", { class: "feed", "data-id": id }, x.log.map((l) => h("div", { class: l.kind }, span("ts", hhmm(l.t)), l.text)));
   card.append(head(x, now),
     h("ol", { class: "track", "aria-label": "stages" }, Model.track(x.stage).map((s) => h("li", { class: s.state }, (s.state === "done" ? "✓ " : s.state === "current" ? "● " : "○ ") + s.name, s.state === "current" ? span("sr", " (current)") : ""))),
     h("div", { class: "row muted" }, x.round !== undefined ? span("", "round " + x.round + (x.role ? " · " + x.role : "")) : "", x.model ? span("", x.model) : "", span("", x.start ? clock(now - x.start) : ""), span("", runCost(x)), btn),
@@ -272,11 +272,17 @@ function render() {
       span("dot " + t.kind, t.icon), span("name", r.name), span("muted", t.label),
       h("span", { class: "x", title: "close tab", onclick: (ev) => { ev.stopPropagation(); closed.add(r.name); repos.delete(r.name); render(); } }, "×"));
   }));
+  // Remember each log's scroll: only a feed that was at the bottom keeps following new lines.
+  const scroll = new Map();
+  for (const f of main.querySelectorAll(".feed")) scroll.set(f.dataset.id, { top: f.scrollTop, bottom: f.scrollTop + f.clientHeight >= f.scrollHeight - 20 });
   for (const p of main.querySelectorAll(".pane")) p.remove();
   const r = repos.get(sel);
   if (r) {
     main.append(renderPane(Object.assign(r.model, { name: r.name }), now));
-    for (const f of main.querySelectorAll(".feed")) f.scrollTop = f.scrollHeight;
+    for (const f of main.querySelectorAll(".feed")) {
+      const was = scroll.get(f.dataset.id);
+      f.scrollTop = !was || was.bottom ? f.scrollHeight : was.top;
+    }
   }
   const all = [...repos.values()].map((x) => x.model);
   const working = all.some((m) => Model.groups(m, now).running.length);
@@ -302,7 +308,8 @@ function connect() {
   };
   ws.onclose = () => { connected = false; render(); };
 }
-setInterval(render, 1000);
+// The clock tick leaves the page alone while the user is selecting text.
+setInterval(() => { const sel = getSelection(); if (!sel || sel.isCollapsed) render(); }, 1000);
 connect();
 </script>
 </body>
