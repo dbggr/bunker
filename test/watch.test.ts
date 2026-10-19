@@ -663,6 +663,30 @@ describe("runWatch() shepherd stage", () => {
     expect(await Bun.file(join(root, "gh.log")).text()).toContain("issue edit 1 --remove-label bunker:queued");
   });
 
+  test("a PR that lands while a run is in flight is noticed on the shepherd timer, not after the run", async () => {
+    const { repo, root } = await setup([[2, "Second", "2026-02-01T00:00:00Z"]]);
+    const head = (await Bun.$`git -C ${repo} rev-parse HEAD`.text()).trim();
+    await Bun.write(join(root, "prlist.json"), JSON.stringify([bunkerPr(1)]));
+    await Bun.write(join(root, "prlist-next.json"), "[]");
+    await Bun.write(join(root, "prview.json"), JSON.stringify({ state: "MERGED", mergeCommit: { oid: head }, headRefOid: head, baseRefName: "main", files: [] }));
+    const ctl = new AbortController();
+    const lines: string[] = [];
+    const done = runWatch({ ...base, shepherd: true, shepherdEveryMs: 100, cwd: repo, agent: fakeAgent({ slow: 4 }), signal: ctl.signal, log: (l) => lines.push(l) });
+    const logPath = join(root, "gh.log");
+    const t0 = Date.now();
+    let landed = false;
+    while (Date.now() - t0 < 30_000 && !landed) {
+      await Bun.sleep(100);
+      landed = existsSync(logPath) && (await Bun.file(logPath).text()).includes("issue edit 1 --remove-label bunker:queued");
+    }
+    const finishedEarly = lines.some((l) => /pass 1 /.test(l));
+    ctl.abort();
+    const s = await done;
+    expect(landed).toBe(true);
+    expect(finishedEarly).toBe(false);
+    expect(s.merged).toBe(1);
+  });
+
   describe("reconciling PRs that finished while no watcher was looking", () => {
     const hist = (issue: number, over: object) => ({ ...bunkerPr(issue), state: "MERGED", mergedAt: new Date(Date.now() - 3_600_000).toISOString(), closedAt: new Date(Date.now() - 3_600_000).toISOString(), ...over });
     const start = async (history: object[], pre?: (repo: string) => void) => {
