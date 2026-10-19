@@ -2,6 +2,7 @@ import { $ } from "bun";
 import { waitForMerge } from "../../github/branches.ts";
 import { neutralise } from "../../core/redact.ts";
 import { addPrLabel, AWAITING_REVIEW_LABEL, ensureLabel, REVIEW_LABEL } from "../../github/labels.ts";
+import { requiredCheck } from "../../core/required-check.ts";
 import { emit, emitStage } from "../../core/events.ts";
 import { tailLines } from "../../core/output.ts";
 import { isSensitivePath } from "../../worktree/steering.ts";
@@ -96,15 +97,18 @@ export function publishIssue(ctx: IssueRunContext, input: PublishInput): Promise
     }
 
     // Without a required status check GitHub merges an already-mergeable PR the moment auto-merge is armed.
-    // Reads the repository ruleset endpoint only; a failed or unreadable lookup refuses too.
-    const rules = await $`gh api repos/{owner}/{repo}/rules/branches/${defaultBranch}`.cwd(worktree).env(env).nothrow().quiet();
-    if (rules.exitCode !== 0) return fail("merge-failed", { ...opened, error: `could not read the required status checks of ${defaultBranch}, so bunker will not arm auto-merge (gh api exit ${rules.exitCode}):\n${rules.stderr.toString().trim()}` });
-    let hasRequiredCheck = false;
-    try {
-      const list = JSON.parse(rules.stdout.toString()) as { type?: string; parameters?: { required_status_checks?: unknown[] } }[];
-      hasRequiredCheck = list.some((r) => r.type === "required_status_checks" && (r.parameters?.required_status_checks?.length ?? 0) > 0);
-    } catch {}
-    if (!hasRequiredCheck) return fail("merge-failed", { ...opened, error: `${defaultBranch} has no required status check in its rulesets, so bunker will not arm auto-merge (the PR would merge immediately, gated only by the agent reviewer). Require a status check on ${defaultBranch} (\`bunker doctor\` checks this).` });
+    // Checks rulesets and classic branch protection; a failed or unreadable lookup refuses too.
+    const read = async (path: string) => {
+      const r = await $`gh api ${path}`.cwd(worktree).env(env).nothrow().quiet();
+      return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
+    };
+    const gate = await requiredCheck(
+      () => read(`repos/{owner}/{repo}/rules/branches/${defaultBranch}`),
+      () => read(`repos/{owner}/{repo}/branches/${defaultBranch}/protection/required_status_checks`),
+    );
+    if (gate.rulesFailed) return fail("merge-failed", { ...opened, error: `could not read the required status checks of ${defaultBranch}, so bunker will not arm auto-merge (gh api exit ${gate.rulesFailed.code}):\n${gate.rulesFailed.err.trim()}` });
+    if (gate.state === "unreadable") return fail("merge-failed", { ...opened, error: `could not read the classic branch protection of ${defaultBranch} with the run's token (it needs Administration: read on the repo), so bunker will not arm auto-merge. Grant that permission, or require the check through a ruleset instead:\n${gate.detail}` });
+    if (gate.state === "none") return fail("merge-failed", { ...opened, error: `${defaultBranch} has no required status check in its rulesets or branch protection, so bunker will not arm auto-merge (the PR would merge immediately, gated only by the agent reviewer). Require a status check on ${defaultBranch} (\`bunker doctor\` checks this).` });
 
     // GitHub merges once the required checks pass (and refuses if they fail), so bunker never reads CI.
     // No --delete-branch: gh would also switch/delete the local branch, which fails in a worktree.
