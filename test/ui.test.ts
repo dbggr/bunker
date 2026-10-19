@@ -484,6 +484,52 @@ describe("hub page model", () => {
     expect(M.repoLinks("")).toBeUndefined();
   });
 
+  test("refs: #N and PR #N link for an owner/repo tab and stay plain for a folder-name tab", async () => {
+    const M = await load();
+    expect(M.slug("dbggr/bunker")).toBe("dbggr/bunker");
+    for (const bad of ["bunker", "a/b/c", "a/", "/b", "a b/c", ""]) expect(M.slug(bad)).toBe("");
+    expect(M.refs("fixes #12, see PR #34", "dbggr/bunker")).toEqual([
+      { text: "fixes " },
+      { text: "#12", url: "https://github.com/dbggr/bunker/issues/12" },
+      { text: ", see " },
+      { text: "PR #34", url: "https://github.com/dbggr/bunker/pull/34" },
+    ]);
+    expect(M.refs("fixes #12, see PR #34", M.slug("bunker"))).toEqual([{ text: "fixes #12, see PR #34" }]);
+    expect(M.refs("fixes #12", "")).toEqual([{ text: "fixes #12" }]);
+  });
+
+  test("refs: word boundaries, URLs and code-like tokens are not double-linked", async () => {
+    const M = await load();
+    const links = (t: string, slug = "o/r") => M.refs(t, slug).filter((s: any) => s.url).map((s: any) => s.text);
+    expect(links("abc#12")).toEqual([]);
+    expect(links("#12abc")).toEqual([]);
+    expect(links("&#39; x#1 `a#2`")).toEqual([]);
+    expect(links("see http://example.com/a#12 and #7")).toEqual(["#7"]);
+    expect(links("xPR #3")).toEqual(["#3"]);
+    expect(links("(#5)")).toEqual(["#5"]);
+    expect(M.refs("see https://github.com/a/b/issues/9.", "o/r")).toEqual([
+      { text: "see " },
+      { text: "#9", url: "https://github.com/a/b/issues/9" },
+      { text: "." },
+    ]);
+    expect(M.refs("https://github.com/a/b/pull/10", "")).toEqual([{ text: "PR #10", url: "https://github.com/a/b/pull/10" }]);
+    expect(links("https://github.com/a/b/commit/1 #4")).toEqual(["#4"]);
+  });
+
+  test("waiting row status keeps the CI state", async () => {
+    const M = await load();
+    expect(M.waitingStatus("armed")).toBe("auto-merge armed");
+    expect(M.waitingStatus("waiting: CI pending")).toBe("auto-merge armed · waiting: CI pending");
+    const html = await Bun.file(new URL("../src/ui/ui.html", import.meta.url)).text();
+    expect(html).toContain("Model.waitingStatus(w.ci)");
+  });
+
+  test("the page builds links as elements and never uses innerHTML", async () => {
+    const html = await Bun.file(new URL("../src/ui/ui.html", import.meta.url)).text();
+    expect(html).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML/);
+    expect(html).toContain("noreferrer");
+  });
+
   test("page uses no external assets and spells status with icons", async () => {
     const html = await Bun.file(new URL("../src/ui/ui.html", import.meta.url)).text();
     expect(html).not.toMatch(/https?:\/\/(?!127)|@import|<link/);
