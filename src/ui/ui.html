@@ -161,7 +161,11 @@ const Model = (() => {
       const text = e.text || "";
       if (e.issue === undefined && /^queue:/.test(text)) { r.queueText = text; return; }
       const pr = e.issue !== undefined ? /^PR #(\d+): ([\s\S]*)$/.exec(text) : null;
-      if (pr) r.shepherd.set(Number(pr[1]), { issue: e.issue, pr: Number(pr[1]), action: "note", detail: pr[2].split("\n")[0] });
+      if (pr) {
+        const first = pr[2].split("\n")[0];
+        const st = /^(waiting|green|fixed-ci|updated-branch|resolved-conflict|addressed-review|gave-up|failed|skipped)(?:$|:\s*|\s+)(.*)$/.exec(first);
+        r.shepherd.set(Number(pr[1]), { issue: e.issue, pr: Number(pr[1]), action: st ? st[1] : "note", detail: st ? st[2] : first });
+      }
       const bl = /^blocked by #(\d+): (.*)$/.exec(text);
       if (bl && e.issue !== undefined) r.blocked.set(e.issue, { number: Number(bl[1]), title: bl[2] });
       const live = [...r.runs.values()].filter((x) => !x.done);
@@ -266,10 +270,14 @@ const Model = (() => {
     for (const [issue, b] of r.blocked) if (!rows.some((x) => x.issue === issue) && !(r.runs.get("#" + issue) || {}).stage) rows.push({ issue, tags: [], blockedOn: b });
     return rows;
   }
-  function shepherd(r) {
-    const rows = new Map(r.shepherd);
-    if (r.watcher) for (const s of r.watcher.shepherd) rows.set(s.pr, s);
-    return [...rows.values()];
+  /** Open PRs: the watcher snapshot is the truth when present, else shepherd notes minus finished runs. Links fall back to the tab's owner/repo. */
+  function shepherd(r, name) {
+    let rows;
+    if (r.watcher) rows = r.watcher.shepherd.map((s) => ({ ...s }));
+    else rows = [...r.shepherd.values()].filter((s) => { const x = r.runs.get("#" + s.issue); return !(x && (x.stage === "merged" || x.stage === "failed")); }).map((s) => ({ ...s }));
+    const slug = /^[\w.-]+\/[\w.-]+$/.test(name || "") ? name : "";
+    if (slug) for (const s of rows) if (!s.prUrl) s.prUrl = "https:" + "//github.com/" + slug + "/pull/" + s.pr;
+    return rows;
   }
   /** Tab label: status dot kind plus a count ("2 running", "1 failed", "idle"). */
   function tab(r, now) {
@@ -420,7 +428,7 @@ function renderPane(r, now) {
       ...queued.map((x, n) => h("div", { class: "q" }, span("pos", String(n + 1)), span("num", "#" + x.issue), h("span", { class: "grow" }, x.tags.map(tagEl)))),
       ...(blocked.length ? [h("div", { class: "blocked" }, blocked.map((x) => h("div", null, "#" + x.issue + " waiting on #" + x.blockedOn.number + " (blocked)")))] : []),
     ], "empty"),
-    sideCard("Shepherd · open PRs", Model.shepherd(r).map((s) => h("div", { class: "shep" },
+    sideCard("Shepherd · open PRs", Model.shepherd(r, r.name).map((s) => h("div", { class: "shep" },
       h("div", { class: "top" }, link(s.prUrl, "PR #" + s.pr) || span("mono", "PR #" + s.pr), span("badge " + String(s.action).replace(/[^a-z-]/g, ""), s.action)),
       s.detail ? span("note", s.detail) : "")), "no open bunker PRs"),
     sideCard("Watcher", w ? [h("dl", { class: "kv" },
