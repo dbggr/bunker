@@ -79,10 +79,16 @@ async function analyze(runsDir: string, repo: string) {
   const ciByBranch = new Map<string, WfRun[]>();
   for (const r of ci) ciByBranch.set(r.headBranch, [...(ciByBranch.get(r.headBranch) ?? []), r]);
 
-  const reverts = (await $`git log --format=%h%x09%s ${since ? [`--since=${since}`] : []} origin/main`.nothrow().text()).split("\n").filter((l) => /\trevert/i.test(l));
+  // Per repo: this checkout's git history says nothing about the other soak repos. One JSON object per line (--paginate would concatenate arrays).
+  const commitsFile = join(cacheDir, "main-commits.jsonl");
+  if (!existsSync(commitsFile)) {
+    const q = ".[] | {sha, subject: (.commit.message | split(\"\\n\")[0])}";
+    await Bun.write(commitsFile, await $`gh api --paginate ${`repos/${repo}/commits?sha=main&per_page=100${since ? `&since=${since}` : ""}`} --jq ${q}`.text());
+  }
+  const reverts = readFileSync(commitsFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { sha: string; subject: string }).filter((c) => /^revert/i.test(c.subject)).map((c) => `${c.sha.slice(0, 7)}\t${c.subject}`);
   const mainRuns = (await gh<MainRun[]>("main-ci", ["run", "list", "-R", repo, "--branch", "main", "--limit", "1000", "--json", "conclusion,headSha,createdAt"])).filter((r) => r.createdAt >= since);
   const redShas = mainRuns.filter((r) => r.conclusion === "failure").map((r) => r.headSha);
-  const wrong = wrongMergedPrs(prs, redShas, reverts);
+  const wrong = wrongMergedPrs(prs, redShas, reverts.map((l) => l.split("\t")[1]!));
 
   // ---- runs (one log per runIssue attempt), awaiting-merge settled from the PR ----
   const prByNumber = new Map(prs.map((p) => [p.number, p]));
@@ -93,6 +99,7 @@ async function analyze(runsDir: string, repo: string) {
     .map((r) => resolveRun(r, prByNumber, wrong))
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 
+  for (const r of runs) if (r.status === "awaiting-merge") console.error(`warning: ${repo} #${r.issue} awaiting-merge ${r.prNumber === undefined ? "has no PR url in its log" : `PR #${r.prNumber} is open or not in the PR list`}; left out of the rates`);
   const issueNums = [...new Set([...runs.map((r) => r.issue), ...bunkerPrs.map((p) => Number(/Closes #(\d+)/i.exec(p.body)?.[1] ?? 0)).filter(Boolean)])].sort((a, b) => a - b);
   const requeues = new Map<number, number>(); // times a human re-added `bunker` after the first
   const failedLabels = new Map<number, number>();
