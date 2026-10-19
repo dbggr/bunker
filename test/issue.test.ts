@@ -1287,6 +1287,16 @@ describe("runIssue() handoff to the shepherd", () => {
     expect(await Bun.file(join(r.worktree, ".git")).exists()).toBe(true);
   });
 
+  test("emits the waiting for merge stage with the PR url when it ends awaiting-merge", async () => {
+    const { repo } = await setup(issue(), "never");
+    const events: BunkerEvent[] = [];
+    await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: "true", merge: true, handoff: true, ciPollMs: 10, onEvent: (e: BunkerEvent) => events.push(e) });
+    const w = events.filter((e) => e.type === "stage" && e.name === "waiting for merge");
+    expect(w).toHaveLength(1);
+    expect(w[0]!.text).toBe("https://github.com/o/r/pull/99");
+    expect(events.some((e) => e.type === "stage" && e.name === "merged")).toBe(false);
+  });
+
   test("an arming failure is still a failure", async () => {
     const { repo } = await setup(issue(), "fail");
     const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: "true", merge: true, handoff: true });
@@ -1302,6 +1312,13 @@ describe("runIssue() manual-merge mode", () => {
     expect(r.prUrl).toBe("https://github.com/o/r/pull/99");
     expect(await Bun.file(editLog).text()).toContain("api -X POST repos/{owner}/{repo}/issues/99/labels -f labels[]=bunker:awaiting-review");
     expect(await Bun.file(mergeLog).exists()).toBe(false);
+  });
+
+  test("emits the awaiting review stage", async () => {
+    const { repo } = await setup(issue(), "ff");
+    const events: BunkerEvent[] = [];
+    await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), manual: true, onEvent: (e: BunkerEvent) => events.push(e) });
+    expect(events.filter((e) => e.type === "stage" && e.name === "awaiting review")).toHaveLength(1);
   });
 
   test("can not be combined with merge", async () => {

@@ -274,6 +274,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       if (e.action === "gave-up") {
         summary.failed++;
         status.failed({ issue: e.issue, status: "gave-up", reason: e.detail ?? "gave up", prUrl: e.url });
+        emit(opts.onEvent, { type: "stage", issue: e.issue, name: "failed", text: "gave-up", reason: e.detail ?? "gave up" });
       }
       if (["fixed-ci", "updated-branch", "resolved-conflict", "addressed-review", "gave-up", "failed"].includes(e.action)) log(`bunker: shepherd: PR #${e.pr} ${e.action}${e.detail ? ` (${e.detail.split("\n")[0]})` : ""}`);
     }
@@ -283,6 +284,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
         // Like the one-shot run: keep the worktree and branch for a human to look at.
         summary.failed++;
         status.failed({ issue: m.issue, status: "merge-unverified", reason: m.unverified, prUrl: m.url });
+        emit(opts.onEvent, { type: "stage", issue: m.issue, name: "failed", text: "merge-unverified", reason: m.unverified });
         log(`bunker: shepherd: PR #${m.pr} ${m.unverified.split("\n")[0]}`);
         notify(`bunker: PR #${m.pr} merge unverified`, m.unverified);
         continue;
@@ -290,6 +292,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       landed++;
       summary.merged++;
       status.merged({ issue: m.issue, prUrl: m.url });
+      emit(opts.onEvent, { type: "stage", issue: m.issue, name: "merged" });
       await clearLanded(m.issue, cwd, env);
       await cleanMerged(cwd, env, m.branch);
     }

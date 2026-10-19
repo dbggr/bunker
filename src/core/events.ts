@@ -8,7 +8,7 @@ export type StreamEvent =
   | { type: "usage"; id?: string; model?: string; tokens: Tokens }
   | { type: "result"; text: string; usage?: { costUsd: number; durationMs: number } };
 
-export type Stage = "setup" | "audit" | "implement" | "review" | "verify" | "PR" | "waiting for merge" | "merged" | "done" | "failed";
+export type Stage = "setup" | "audit" | "implement" | "review" | "verify" | "PR" | "waiting for merge" | "awaiting review" | "merged" | "done" | "failed";
 
 /** Progress from a run. `name` is the stage, or the tool call (e.g. "Edit src/cli.ts"). */
 export interface BunkerEvent {

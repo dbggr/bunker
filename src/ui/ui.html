@@ -140,7 +140,7 @@
 <script id="model">
 // Pure state and view-model code: no DOM, so tests can load it on its own.
 const Model = (() => {
-  const STAGES = ["setup", "audit", "implement", "review", "verify", "PR", "waiting for merge", "merged", "done", "failed"];
+  const STAGES = ["setup", "audit", "implement", "review", "verify", "PR", "waiting for merge", "awaiting review", "merged", "done", "failed"];
   const TRACK = ["setup", "implement", "review", "verify", "PR", "merge"];
   const day0 = (now) => new Date(now).setHours(0, 0, 0, 0);
   const isDone = (s) => s === "merged" || s === "done" || s === "failed";
@@ -191,15 +191,25 @@ const Model = (() => {
   }
   /** The six-step track with each step done, current or todo. */
   function track(stage) {
-    const at = stage === "setup" || stage === "audit" ? 0 : stage === "implement" ? 1 : stage === "review" ? 2 : stage === "verify" ? 3 : stage === "PR" ? 4 : stage === "waiting for merge" ? 5 : -1;
+    const at = stage === "setup" || stage === "audit" ? 0 : stage === "implement" ? 1 : stage === "review" ? 2 : stage === "verify" ? 3 : stage === "PR" ? 4 : stage === "waiting for merge" || stage === "awaiting review" ? 5 : -1;
     const all = stage === "merged" || stage === "done";
     return TRACK.map((name, n) => ({ name, state: all || n < at ? "done" : n === at ? "current" : "todo" }));
   }
   const title = (r, issue, fallback) => (r.runs.get("#" + issue) || {}).title || fallback || "";
   function groups(r, now) {
-    const runs = [...r.runs.values()];
-    const running = runs.filter((x) => !x.done && x.stage !== "waiting for merge");
-    const waiting = runs.filter((x) => !x.done && x.stage === "waiting for merge").map((x) => {
+    const w = r.watcher;
+    // The watcher's merged/failed record after a run started finishes it, even if the stage event was missed (replay, restart).
+    const latest = new Map();
+    if (w) for (const m of [...w.merged.map((m) => [m, "merged"]), ...w.failed.map((m) => [m, "failed"])]) { const o = latest.get(m[0].issue); if (!o || m[0].at >= o.at) latest.set(m[0].issue, { at: m[0].at, outcome: m[1], reason: m[0].reason || "" }); }
+    const healed = (x) => { const h = latest.get(Number(String(x.key).slice(1))); return !!h && x.start !== undefined && h.at >= x.start; };
+    const runs = [...r.runs.values()].map((x) => {
+      if (x.done || !String(x.key).startsWith("#") || !healed(x)) return x;
+      const h = latest.get(Number(String(x.key).slice(1)));
+      return { ...x, done: true, stage: h.outcome, end: h.at, reason: h.reason, est: undefined };
+    });
+    const isWaiting = (x) => x.stage === "waiting for merge" || x.stage === "awaiting review";
+    const running = runs.filter((x) => !x.done && !isWaiting(x));
+    const waiting = runs.filter((x) => !x.done && isWaiting(x)).map((x) => {
       const n = Number(String(x.key).slice(1));
       const sh = [...r.shepherd.values()].find((s) => s.issue === n);
       return { run: x, ci: sh ? sh.action + (sh.detail ? ": " + sh.detail : "") : "armed", prUrl: x.url };
@@ -212,7 +222,6 @@ const Model = (() => {
       const issue = Number(String(x.key).slice(1));
       add(issue, { issue, title: x.title, outcome: x.stage === "failed" ? "failed" : "merged", reason: x.reason, prUrl: x.url, at: x.end, elapsed: x.end - x.start, cost: x.cost });
     }
-    const w = r.watcher;
     if (w) {
       for (const m of w.merged) if (m.at >= since) add(m.issue, { issue: m.issue, title: title(r, m.issue), outcome: "merged", reason: "", prUrl: m.prUrl || "", at: m.at, ...stats(r, m.issue) });
       for (const m of w.noChange) if (m.at >= since) add(m.issue, { issue: m.issue, title: title(r, m.issue), outcome: "no change", reason: m.reason, prUrl: "", at: m.at, ...stats(r, m.issue) });
