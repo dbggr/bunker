@@ -55,6 +55,8 @@ export interface WatchStatusFile {
   pid: number;
   version: string;
   startedAt: number;
+  /** The spend caps the watcher is running with (flags over config). */
+  caps?: SpendCaps;
   current: CurrentRun[];
   merged: MergedRun[];
   noChange: NoChangeRun[];
@@ -64,7 +66,7 @@ export interface WatchStatusFile {
 }
 
 /** Keeps the status file current for a watcher; every change is written straight away. */
-export function createStatusRecorder(dir: string, init: { pid: number; version: string }) {
+export function createStatusRecorder(dir: string, init: { pid: number; version: string; caps?: SpendCaps }) {
   const file = join(dir, STATUS_FILE);
   const state: WatchStatusFile = { ...init, startedAt: Date.now(), current: [], merged: [], noChange: [], failed: [], shepherd: [] };
   const save = () => {
@@ -134,6 +136,7 @@ function readStatusFile(dir: string): WatchStatusFile | undefined {
     pid: raw.pid,
     version: typeof raw.version === "string" ? raw.version : "unknown",
     startedAt: raw.startedAt,
+    ...(raw.caps && typeof raw.caps === "object" ? { caps: { ...(typeof raw.caps.day === "number" ? { day: raw.caps.day } : {}), ...(typeof raw.caps.month === "number" ? { month: raw.caps.month } : {}) } } : {}),
     current: Array.isArray(raw.current) ? raw.current : [],
     merged: Array.isArray(raw.merged) ? raw.merged : [],
     noChange: Array.isArray(raw.noChange) ? raw.noChange : [],
@@ -180,7 +183,8 @@ export interface StatusOptions {
 }
 
 /** Read-only snapshot of the watcher, its runs, the queue and the spend. */
-export async function collectStatus({ repo, caps = {}, queue, blocked, alive, now = Date.now() }: StatusOptions): Promise<StatusReport> {
+export async function collectStatus({ repo, caps: configCaps = {}, queue, blocked, alive, now = Date.now() }: StatusOptions): Promise<StatusReport> {
+  let caps = configCaps;
   const dir = join(repo, ".bunker");
   let lockPid: number | undefined;
   try {
@@ -197,6 +201,8 @@ export async function collectStatus({ repo, caps = {}, queue, blocked, alive, no
     ...(pid === undefined ? {} : { pid }),
     ...(mine ? { version: mine.version, startedAt: mine.startedAt, ...(isAlive ? { uptimeMs: now - mine.startedAt } : {}) } : {}),
   };
+  // the running watcher's own caps (e.g. --max-cost-day) beat what config.toml says
+  if (isAlive && mine?.caps) caps = mine.caps;
   const queued = queue ? await queue().catch(() => undefined) : undefined;
   const blockedIssues = blocked ? await blocked().catch(() => undefined) : undefined;
   const spendFile = join(dir, "watch-spend.json");

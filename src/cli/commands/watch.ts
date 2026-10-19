@@ -130,7 +130,11 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   if (stale.length) log(`bunker: cleared a stale bunker:in-progress from ${stale.map((n) => `#${n}`).join(", ")}`);
   if (cleanOnStart) await runClean({ cwd: repo, yes: true, auto: true, ...(logsDays === undefined ? {} : { logsDays }) });
 
-  const status = createStatusRecorder(dir, { pid: process.pid, version: pkg.version });
+  const caps: SpendCaps = {
+    ...(maxCostDayUsd === undefined ? {} : { day: maxCostDayUsd }),
+    ...(maxCostMonthUsd === undefined ? {} : { month: maxCostMonthUsd }),
+  };
+  const status = createStatusRecorder(dir, { pid: process.pid, version: pkg.version, caps });
   const userOnEvent = opts.onEvent;
   opts.onEvent = (e) => {
     status.event(e);
@@ -153,10 +157,6 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       }
     });
 
-  const caps: SpendCaps = {
-    ...(maxCostDayUsd === undefined ? {} : { day: maxCostDayUsd }),
-    ...(maxCostMonthUsd === undefined ? {} : { month: maxCostMonthUsd }),
-  };
   const capped = () => exceededCaps(spendFile, caps);
   /** The spend against the caps, for the hub: exact costs only. */
   const publishBudget = () => emit(opts.onEvent, { type: "budget", budget: budgetSnapshot(spendFile, caps) });
