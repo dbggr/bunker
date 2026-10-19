@@ -27,7 +27,7 @@ import { applyIdentity, identityKind } from "../github/identity.ts";
 import { parseGithubRemote } from "./commands/doctor.ts";
 import { redact } from "../core/redact.ts";
 import { createProgress, emit, type BunkerEvent } from "../core/events.ts";
-import { connectHub, defaultHubPort, hubReachable, readToken, repoId, startHub, viewUrlFor, type Hub, type Publisher } from "../ui/ui.ts";
+import { connectHub, defaultHubPort, hubHistoryDir, hubReachable, readToken, repoId, startHub, viewUrlFor, type Hub, type Publisher } from "../ui/ui.ts";
 import { COMMAND_HELP, HELP } from "./commands/help.ts";
 import { MODES, resolveMode, type Mode } from "./modes.ts";
 import { options } from "../core/options.ts";
@@ -243,7 +243,7 @@ let publisher: Publisher | undefined;
 if (values.ui || values.audit || values.queue || values.issue !== undefined) {
   try {
     if (values.ui && !(await hubReachable(uiPort, readToken()))) {
-      hub = startHub({ port: uiPort, token: readToken() });
+      hub = startHub({ port: uiPort, token: readToken(), historyDir: hubHistoryDir() });
     }
     if (values.ui || (await hubReachable(uiPort, readToken()))) {
       publisher = await connectHub({ port: hub?.server.port ?? uiPort, repo: await repoId(), token: readToken() });

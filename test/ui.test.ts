@@ -278,3 +278,60 @@ describe("hub replay of cost events", () => {
     late.ws.close();
   });
 });
+
+describe("hub history on disk", () => {
+  const dir = () => mkdtempSync(join(tmpdir(), "bunker-hub-"));
+  const replayed = async (h: Hub) => {
+    const { ws, messages } = await connect(h.viewUrl);
+    await Bun.sleep(100);
+    ws.close();
+    return messages;
+  };
+  const post = (h: Hub, repo: string, event: any) => publish(h.url, { repo, event }, TOKEN);
+
+  test("a restart restores runs, budget and finished states; files are 0600 and redacted", async () => {
+    const historyDir = dir();
+    hub = startHub({ port: 0, token: TOKEN, historyDir });
+    await post(hub, "o/r", { type: "budget", spent: 1 });
+    await post(hub, "o/r", { type: "budget", spent: 2 });
+    await post(hub, "o/r", { type: "usage", issue: 1, task: "a", cost: 1 });
+    await post(hub, "o/r", { type: "result", issue: 1, task: "a", text: "key ghp_abcdefghijklmnopqrstuvwxyz0123456789 done" });
+    await hub.stop();
+    const file = join(historyDir, "o_r.jsonl");
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(readFileSync(file, "utf8")).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123456789");
+    hub = startHub({ port: 0, token: TOKEN, historyDir });
+    const msgs = await replayed(hub);
+    expect(msgs.map((m) => m.event.type)).toEqual(["budget", "result"]);
+    expect(msgs[0].event.spent).toBe(2);
+    expect(msgs.every((m) => m.repo === "o/r")).toBe(true);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  test("caps hold on replay and the file is compacted", async () => {
+    const historyDir = dir();
+    hub = startHub({ port: 0, token: TOKEN, historyDir });
+    for (let i = 0; i < 8; i++) await post(hub, "o/r", { type: "log", n: i });
+    await hub.stop();
+    hub = startHub({ port: 0, token: TOKEN, historyDir, historyLimit: 3 });
+    expect((await replayed(hub)).map((m) => m.event.n)).toEqual([5, 6, 7]);
+    expect(readFileSync(join(historyDir, "o_r.jsonl"), "utf8").trim().split("\n")).toHaveLength(3);
+  });
+
+  test("events older than the age limit are dropped", async () => {
+    const historyDir = dir();
+    const line = (t: number, n: number) => JSON.stringify({ t, repo: "o/r", event: { type: "log", n } });
+    await Bun.write(join(historyDir, "o_r.jsonl"), [line(Date.now() - 8 * 86_400_000, 1), line(Date.now() - 1000, 2)].join("\n") + "\n");
+    hub = startHub({ port: 0, token: TOKEN, historyDir });
+    expect((await replayed(hub)).map((m) => m.event.n)).toEqual([2]);
+    expect(readFileSync(join(historyDir, "o_r.jsonl"), "utf8").trim().split("\n")).toHaveLength(1);
+  });
+
+  test("a corrupt line is skipped, not fatal", async () => {
+    const historyDir = dir();
+    const good = (n: number) => JSON.stringify({ t: Date.now(), repo: "o/r", event: { type: "log", n } });
+    await Bun.write(join(historyDir, "o_r.jsonl"), [good(1), "{not json", '{"t":1}', good(2)].join("\n") + "\n");
+    hub = startHub({ port: 0, token: TOKEN, historyDir });
+    expect((await replayed(hub)).map((m) => m.event.n)).toEqual([1, 2]);
+  });
+});

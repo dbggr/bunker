@@ -1,6 +1,6 @@
 import type { Server } from "bun";
 import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { redact } from "../core/redact.ts";
@@ -35,12 +35,22 @@ export function defaultHubPort(): number {
 export const HISTORY_LIMIT = 2000;
 /** Most distinct repos the hub keeps history for; the least recently active is evicted first. */
 export const REPO_LIMIT = 100;
+/** Events older than this are dropped from the on-disk history. */
+export const HISTORY_MAX_AGE_MS = 7 * 86_400_000;
 export const TOKEN_PATH = join(homedir(), ".config", "bunker", "ui.token");
 
 /** Redacts every string field of an event. */
 function clean(e: BunkerEvent): BunkerEvent {
   return Object.fromEntries(Object.entries(e).map(([k, v]) => [k, typeof v === "string" ? redact(v) : v])) as unknown as BunkerEvent;
 }
+
+/** Where the hub keeps its per-repo JSONL history: $XDG_STATE_HOME/bunker/hub (default ~/.local/state/bunker/hub). */
+export function hubHistoryDir(): string {
+  return join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "bunker", "hub");
+}
+
+/** File name for a repo's history; the repo id itself is stored in every line. */
+const historyFile = (dir: string, repo: string) => join(dir, `${repo.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_")}.jsonl`);
 
 /** The publish token; created (0600) on first use. Browsers never get it. */
 export function readToken(path = TOKEN_PATH): string {
@@ -94,10 +104,63 @@ export const viewUrlFor = (port: number, token: string) => `http://${HOST}:${por
  * The shared live view. Always binds to loopback; there is no option to change that.
  * The page and socket are read-only; the one write is POST /publish, which needs the token.
  */
-export function startHub({ port = defaultHubPort(), token, historyLimit = HISTORY_LIMIT, repoLimit = REPO_LIMIT }: { port?: number; token: string; historyLimit?: number; repoLimit?: number }): Hub {
+export function startHub({ port = defaultHubPort(), token, historyLimit = HISTORY_LIMIT, repoLimit = REPO_LIMIT, historyDir, maxAgeMs = HISTORY_MAX_AGE_MS }: { port?: number; token: string; historyLimit?: number; repoLimit?: number; historyDir?: string; maxAgeMs?: number }): Hub {
   // Replayed to late clients; capped per repo so one busy repo can't evict the rest.
-  const history = new Map<string, { seq: number; msg: string; kind?: string | undefined }[]>();
+  const history = new Map<string, { seq: number; msg: string; t: number; kind?: string | undefined }[]>();
   let seq = 0;
+
+  /** Adds an already-cleaned event to the in-memory history, applying the caps. Returns the entry. */
+  const add = (repo: string, ev: any, msg: string, t: number) => {
+    const list = history.get(repo) ?? [];
+    // A late page needs only the latest usage per run and the latest budget; keeping every one would push results out of the history.
+    const kind = ev.type === "budget" ? "budget" : ev.type === "usage" || ev.type === "result" ? `run:${ev.issue}:${ev.task}` : undefined;
+    if (kind) for (let n = list.length - 1; n >= 0; n--) if (list[n]!.kind === (ev.type === "budget" ? "budget" : kind)) list.splice(n, 1);
+    // Re-insert so Map order runs from least to most recently active.
+    history.delete(repo);
+    history.set(repo, list);
+    while (history.size > repoLimit) {
+      const evicted = history.keys().next().value!;
+      history.delete(evicted);
+      if (historyDir) rmSync(historyFile(historyDir, evicted), { force: true });
+    }
+    const entry = { seq: seq++, msg, t, ...(ev.type === "budget" || ev.type === "usage" ? { kind } : {}) };
+    list.push(entry);
+    if (list.length > historyLimit) list.splice(0, list.length - historyLimit);
+    return list;
+  };
+  const lineOf = (repo: string, e: { msg: string; t: number }) => JSON.stringify({ t: e.t, repo, event: JSON.parse(e.msg).event }) + "\n";
+  const compact = (repo: string) => {
+    const file = historyFile(historyDir!, repo);
+    writeFileSync(file, (history.get(repo) ?? []).map((e) => lineOf(repo, e)).join(""), { mode: 0o600 });
+    chmodSync(file, 0o600);
+  };
+  const appended = new Map<string, number>();
+
+  if (historyDir) {
+    try {
+      mkdirSync(historyDir, { recursive: true, mode: 0o700 });
+      const cutoff = Date.now() - maxAgeMs;
+      const rows: { t: number; repo: string; event: any }[] = [];
+      const files = readdirSync(historyDir).filter((f) => f.endsWith(".jsonl"));
+      for (const f of files) {
+        for (const line of readFileSync(join(historyDir, f), "utf8").split("\n")) {
+          try {
+            const r = JSON.parse(line);
+            if (typeof r?.t === "number" && typeof r.repo === "string" && r.repo && r.event && typeof r.event.type === "string" && r.t >= cutoff) rows.push(r);
+          } catch {}
+        }
+      }
+      rows.sort((a, b) => a.t - b.t);
+      // Replayed through the same path as live events, and cleaned again so nothing unredacted survives.
+      for (const r of rows) add(r.repo, r.event, JSON.stringify({ repo: r.repo, event: clean(r.event) }), r.t);
+      // Compact: rewrite what survived the caps, drop files left with nothing.
+      for (const f of files) rmSync(join(historyDir, f), { force: true });
+      for (const repo of history.keys()) compact(repo);
+    } catch {
+      // History is a convenience; an unreadable directory must not stop the hub.
+    }
+  }
+
   const server = Bun.serve({
     hostname: HOST,
     port,
@@ -124,17 +187,23 @@ export function startHub({ port = defaultHubPort(), token, historyLimit = HISTOR
         }
         const repo = redact(body.repo);
         const msg = JSON.stringify({ repo, event: clean(body.event) });
-        const list = history.get(repo) ?? [];
-        // A late page needs only the latest usage per run and the latest budget; keeping every one would push results out of the history.
-        const ev = body.event;
-        const kind = ev.type === "budget" ? "budget" : ev.type === "usage" || ev.type === "result" ? `run:${ev.issue}:${ev.task}` : undefined;
-        if (kind) for (let n = list.length - 1; n >= 0; n--) if (list[n]!.kind === (ev.type === "budget" ? "budget" : kind)) list.splice(n, 1);
-        // Re-insert so Map order runs from least to most recently active.
-        history.delete(repo);
-        history.set(repo, list);
-        while (history.size > repoLimit) history.delete(history.keys().next().value!);
-        list.push({ seq: seq++, msg, ...(ev.type === "budget" || ev.type === "usage" ? { kind } : {}) });
-        if (list.length > historyLimit) list.splice(0, list.length - historyLimit);
+        const list = add(repo, body.event, msg, Date.now());
+        if (historyDir) {
+          try {
+            const file = historyFile(historyDir, repo);
+            mkdirSync(historyDir, { recursive: true, mode: 0o700 });
+            const fresh = !existsSync(file);
+            appendFileSync(file, lineOf(repo, list[list.length - 1]!), { mode: 0o600 });
+            if (fresh) chmodSync(file, 0o600);
+            // Keep the file near the in-memory size.
+            const n = (appended.get(repo) ?? 0) + 1;
+            appended.set(repo, n);
+            if (n > historyLimit) {
+              compact(repo);
+              appended.set(repo, 0);
+            }
+          } catch {}
+        }
         server.publish("events", msg);
         return new Response(null, { status: 204 });
       }
