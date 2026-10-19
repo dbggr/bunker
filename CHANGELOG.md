@@ -2,6 +2,7 @@
 
 ## v0.9.1 - 2026-10-19
 
+- ui: hub visuals to match the concept (#469)
 - ui: hub redesign (runs by state, stage track, queue/shepherd/watcher panels) (#465)
 - ui: keep hub history across restarts (#464)
 - fix(merge): verify the PR's own added lines landed instead of comparing whole files (#463)
