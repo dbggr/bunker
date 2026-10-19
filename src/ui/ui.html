@@ -198,18 +198,13 @@ const Model = (() => {
     if (i.log.length > 1000) i.log.splice(0, i.log.length - 1000);
   }
   /** The six-step track with each step done, current or todo. */
-<<<<<<< HEAD
-  function track(stage) {
-    const at = stage === "setup" || stage === "audit" ? 0 : stage === "implement" ? 1 : stage === "review" ? 2 : stage === "verify" ? 3 : stage === "PR" ? 4 : stage === "waiting for merge" || stage === "awaiting review" ? 5 : -1;
-=======
   function track(stage, kind) {
     if (kind === "audit") {
       const n = AUDIT_TRACK.indexOf(stage);
       const all = stage === "done";
       return AUDIT_TRACK.map((name, k) => ({ name, state: all || k < n ? "done" : k === n ? "current" : "todo" }));
     }
-    const at = stage === "setup" || stage === "audit" ? 0 : stage === "implement" ? 1 : stage === "review" ? 2 : stage === "verify" ? 3 : stage === "PR" ? 4 : stage === "waiting for merge" ? 5 : -1;
->>>>>>> 79c810f543eeb5891193969548f009489b49a2fa
+    const at = stage === "setup" || stage === "audit" ? 0 : stage === "implement" ? 1 : stage === "review" ? 2 : stage === "verify" ? 3 : stage === "PR" ? 4 : stage === "waiting for merge" || stage === "awaiting review" ? 5 : -1;
     const all = stage === "merged" || stage === "done";
     return TRACK.map((name, n) => ({ name, state: all || n < at ? "done" : n === at ? "current" : "todo" }));
   }
