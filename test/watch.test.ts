@@ -63,6 +63,7 @@ async function setup(issues: [number, string, string][]) {
     `#!/bin/sh
 echo "$*" >> "${root}/gh.log"
 if [ "$1" = "api" ]; then case "$*" in *"/rules/branches/"*) echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]'; exit 0;; *graphql*|*renamed*) exit 0;; *created_at*) n=$(echo "$*" | sed 's|.*issues/\\([0-9]*\\)/events.*|\\1|'); if [ -f "${root}/labeled-at-$n" ]; then cat "${root}/labeled-at-$n"; else echo 2020-01-01T00:00:00Z; fi; exit 0;; *"/events"*) [ -f "${root}/events-fail" ] && { echo "api down" >&2; exit 1; }; echo owner; exit 0;; *"/permission"*) if [ -f "${root}/perm" ]; then cat "${root}/perm"; else echo admin; fi; exit 0;; esac; fi
+if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--state closed"; then if [ -f "${root}/closed.json" ]; then cat "${root}/closed.json"; else echo '[]'; fi; exit 0; fi
 if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker:in-progress"; then if [ -f "${root}/inprogress.json" ]; then cat "${root}/inprogress.json"; else echo '[]'; fi; exit 0; fi
 if [ "$1 $2" = "issue list" ]; then
   printf '['; sep=''
@@ -656,6 +657,16 @@ describe("runWatch() shepherd stage", () => {
     const s = await runWatch({ ...base, shepherd: true, cwd: repo, agent: fakeAgent(), signal: ctl.signal, log: (l) => { if (/pass 2 /.test(l)) ctl.abort(); } });
     expect(s.merged).toBe(1);
     expect(await Bun.file(join(root, "gh.log")).text()).toContain("issue edit 1 --remove-label bunker:queued");
+  });
+
+  test("a closed issue still carrying bunker:queued is cleared even if the shepherd never saw its PR open, once per hour", async () => {
+    const { repo, root } = await setup([]);
+    await Bun.write(join(root, "closed.json"), JSON.stringify([{ number: 41 }]));
+    const ctl = new AbortController();
+    await runWatch({ ...base, shepherd: true, cwd: repo, agent: fakeAgent(), signal: ctl.signal, log: (l) => { if (/pass 3 /.test(l)) ctl.abort(); } });
+    const gh = await Bun.file(join(root, "gh.log")).text();
+    expect(gh).toContain("issue edit 41 --remove-label bunker:queued --remove-label bunker:in-progress");
+    expect(gh.match(/--state closed/g)?.length).toBe(1);
   });
 
   test("manual-merge mode: PRs end labelled bunker:awaiting-review with a notification, nothing is armed or merged", async () => {

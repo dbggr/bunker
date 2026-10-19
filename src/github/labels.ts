@@ -90,3 +90,25 @@ export async function clearLanded(issue: number, cwd: string, env: Env): Promise
   await unqueue(issue, cwd, env);
   await clearInProgress(issue, cwd, env);
 }
+
+/**
+ * Closed issues that still carry `bunker:queued` (their PR auto-merged while no watcher was looking, e.g. across a restart) get it,
+ * and `bunker:in-progress`, removed in one `gh issue edit` each. Stateless, so it catches what the shepherd's in-memory view of open PRs
+ * misses. Handles at most 100 issues per call (a bigger backlog drains over repeated sweeps). Returns the issues cleared.
+ */
+export async function sweepClosedQueued(cwd: string, env: Env): Promise<number[]> {
+  const list = await $`gh issue list --label ${QUEUED_LABEL} --state closed --limit 100 --json number`.cwd(cwd).env(env).nothrow().quiet();
+  if (list.exitCode !== 0) return [];
+  let numbers: number[];
+  try {
+    numbers = (JSON.parse(list.stdout.toString() || "[]") as { number?: unknown }[]).flatMap((i) => (typeof i?.number === "number" ? [i.number] : []));
+  } catch {
+    return [];
+  }
+  const cleared: number[] = [];
+  for (const n of numbers) {
+    const r = await $`gh issue edit ${n} --remove-label ${QUEUED_LABEL} --remove-label ${IN_PROGRESS_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
+    if (r.exitCode === 0) cleared.push(n);
+  }
+  return cleared;
+}

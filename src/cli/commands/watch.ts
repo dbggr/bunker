@@ -18,7 +18,7 @@ import { cleanMerged, createShepherd } from "../../pipeline/shepherd.ts";
 import { runQueue, type QueueEntry, type QueueOptions } from "../../pipeline/queue.ts";
 import { countWaiting } from "../../github/queue.ts";
 import { latestBunkerLabeledAt } from "../../github/labeler.ts";
-import { clearLanded, ensureLabel, FAILED_LABEL, unqueue } from "../../github/labels.ts";
+import { clearLanded, ensureLabel, sweepClosedQueued, FAILED_LABEL, unqueue } from "../../github/labels.ts";
 import { noNotify, type Notify } from "../../core/notify.ts";
 
 export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult" | "onRefused" | "handoff"> {
@@ -245,9 +245,17 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   };
 
   const shepherd = shepherdOn ? createShepherd({ cwd, agent: opts.agent, ...(opts.reviewer ? { reviewer: opts.reviewer } : {}), sandbox: opts.sandbox, ...(opts.setup ? { setup: opts.setup } : {}), ...(opts.verify ? { verify: opts.verify } : {}), ...(opts.verifyOnHost ? { verifyOnHost: true } : {}), ...(opts.verifyNetwork ? { verifyNetwork: true } : {}), ...(opts.idleTimeoutMs ? { idleTimeoutMs: opts.idleTimeoutMs } : {}), ...(opts.completionTimeoutMs ? { completionTimeoutMs: opts.completionTimeoutMs } : {}), ...(opts.stepTimeoutMs ? { stepTimeoutMs: opts.stepTimeoutMs } : {}), ...(opts.onEvent ? { onEvent: opts.onEvent } : {}), notify, ...(mention ? { mention } : {}) }) : undefined;
+  let lastSweep = -Infinity;
+  const SWEEP_EVERY_MS = 60 * 60_000;
   /** One shepherd pass: resumes whatever the open PRs need, whether this watcher or an earlier one opened them. Returns how many merged. */
   const shepherdPass = async (): Promise<number> => {
     if (!shepherd || stopped()) return 0;
+    // A PR that merged before this process saw it open (auto-merge, a restart) never reaches `p.merged`: on startup, then hourly, sweep
+    // closed issues that kept their labels.
+    if (Date.now() - lastSweep >= SWEEP_EVERY_MS) {
+      lastSweep = Date.now();
+      for (const n of await sweepClosedQueued(cwd, env)) log(`bunker: cleared bunker:queued from closed #${n}`);
+    }
     const p = await shepherd.pass();
     if (p.error) log(`bunker: shepherd: ${p.error}`);
     if (p.usage?.costUsd) {

@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkLabeler } from "../src/github/labeler.ts";
-import { hasQueuedLabel, isQueuedLabel, markInProgress, unqueue, clearLanded } from "../src/github/labels.ts";
+import { sweepClosedQueued, hasQueuedLabel, isQueuedLabel, markInProgress, unqueue, clearLanded } from "../src/github/labels.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -90,5 +90,36 @@ describe("clearLanded", () => {
     const log = await g.log();
     expect(log).toContain("issue edit 5 --remove-label bunker:queued");
     expect(log).toContain("issue edit 5 --remove-label bunker:in-progress");
+  });
+});
+
+describe("sweepClosedQueued()", () => {
+  async function gh(list: string, exit = 0) {
+    const root = await mkdtemp(join(tmpdir(), "bunker-sweep-"));
+    dirs.push(root);
+    await Bun.write(join(root, "gh"), `#!/bin/sh\necho "$*" >> "${root}/log"\nif [ "$1 $2" = "issue list" ]; then echo '${list}'; exit ${exit}; fi\nexit 0\n`);
+    await chmod(join(root, "gh"), 0o755);
+    return { env: { ...process.env, PATH: `${root}:${process.env.PATH}` } as Record<string, string>, log: () => Bun.file(join(root, "log")).text() };
+  }
+
+  test("removes bunker:queued and bunker:in-progress from each closed queued issue", async () => {
+    const g = await gh('[{"number":41},{"number":42}]');
+    expect(await sweepClosedQueued(process.cwd(), g.env)).toEqual([41, 42]);
+    const log = await g.log();
+    expect(log).toContain("--state closed");
+    expect(log).toContain("issue edit 41 --remove-label bunker:queued --remove-label bunker:in-progress");
+    expect(log).toContain("issue edit 42 --remove-label bunker:queued --remove-label bunker:in-progress");
+  });
+
+  test("returns [] when gh issue list fails", async () => {
+    const g = await gh("[]", 1);
+    expect(await sweepClosedQueued(process.cwd(), g.env)).toEqual([]);
+    expect(await g.log()).not.toContain("issue edit");
+  });
+
+  test("returns [] on malformed JSON", async () => {
+    const g = await gh("not json");
+    expect(await sweepClosedQueued(process.cwd(), g.env)).toEqual([]);
+    expect(await g.log()).not.toContain("issue edit");
   });
 });
