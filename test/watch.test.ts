@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, type Agent, type Sandbox } from "../src/index.ts";
@@ -76,6 +76,7 @@ if [ "$1 $2" = "issue view" ]; then cat "${root}/issue-$3.json"; exit 0; fi
 if [ "$1 $2" = "issue edit" ] && [ -f "${root}/edit-fails" ]; then echo "network down" >&2; exit 1; fi
 if [ "$1 $2" = "issue edit" ]; then case "$*" in *in-progress*|*"--remove-label bunker:failed"*) exit 0;; esac; rm -f "${root}/q/$3.json"; exit 0; fi
 if [ "$1 $2" = "issue comment" ]; then shift 3; echo "COMMENT: $*" >> "${root}/comments.log"; exit 0; fi
+if [ "$1 $2" = "pr list" ] && echo "$*" | grep -q -- "--state all"; then if [ -f "${root}/history.json" ]; then cat "${root}/history.json"; else echo '[]'; fi; exit 0; fi
 if [ "$1 $2" = "pr list" ] && [ -f "${root}/prlist.json" ]; then cat "${root}/prlist.json"; [ -f "${root}/prlist-next.json" ] && mv "${root}/prlist-next.json" "${root}/prlist.json"; exit 0; fi
 if [ "$1 $2" = "pr checks" ]; then echo "unknown flag: --json" >&2; exit 1; fi
 if [ "$1 $2" = "pr comment" ]; then exit 0; fi
@@ -660,6 +661,46 @@ describe("runWatch() shepherd stage", () => {
     const s = await runWatch({ ...base, shepherd: true, cwd: repo, agent: fakeAgent(), signal: ctl.signal, log: (l) => { if (/pass 2 /.test(l)) ctl.abort(); } });
     expect(s.merged).toBe(1);
     expect(await Bun.file(join(root, "gh.log")).text()).toContain("issue edit 1 --remove-label bunker:queued");
+  });
+
+  describe("reconciling PRs that finished while no watcher was looking", () => {
+    const hist = (issue: number, over: object) => ({ ...bunkerPr(issue), state: "MERGED", mergedAt: new Date(Date.now() - 3_600_000).toISOString(), closedAt: new Date(Date.now() - 3_600_000).toISOString(), ...over });
+    const start = async (history: object[], pre?: (repo: string) => void) => {
+      const { repo, root } = await setup([]);
+      await Bun.write(join(root, "history.json"), JSON.stringify(history));
+      pre?.(repo);
+      const ctl = new AbortController();
+      await runWatch({ ...base, shepherd: true, cwd: repo, agent: fakeAgent(), signal: ctl.signal, log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); } });
+      return JSON.parse(await Bun.file(join(repo, ".bunker", "watch-status.json")).text());
+    };
+
+    test("a PR merged before the start is recorded as merged at its merge time", async () => {
+      const mergedAt = new Date(Date.now() - 7_200_000).toISOString();
+      const st = await start([hist(1, { mergedAt })]);
+      expect(st.merged).toEqual([expect.objectContaining({ issue: 1, prUrl: "https://github.com/o/r/pull/41", at: Date.parse(mergedAt) })]);
+    });
+
+    test("a PR closed unmerged is recorded as failed with the reason", async () => {
+      const st = await start([hist(2, { state: "CLOSED", mergedAt: null })]);
+      expect(st.failed).toEqual([expect.objectContaining({ issue: 2, status: "closed-unmerged", reason: expect.stringMatching(/closed without merging/) })]);
+      expect(st.merged).toEqual([]);
+    });
+
+    test("PRs older than seven days, and issues whose PR is still open, are left alone", async () => {
+      const old = new Date(Date.now() - 8 * 86_400_000).toISOString();
+      const st = await start([hist(3, { mergedAt: old, closedAt: old }), hist(4, { state: "OPEN", mergedAt: null, closedAt: null })]);
+      expect(st.merged).toEqual([]);
+      expect(st.failed).toEqual([]);
+    });
+
+    test("an issue is not recorded twice when the file already has its merge", async () => {
+      const mergedAt = new Date(Date.now() - 7_200_000).toISOString();
+      const st = await start([hist(1, { mergedAt })], (repo) => {
+        mkdirSync(join(repo, ".bunker"), { recursive: true });
+        writeFileSync(join(repo, ".bunker", "watch-status.json"), JSON.stringify({ pid: 1, version: "x", startedAt: 1, current: [], merged: [{ issue: 1, at: Date.parse(mergedAt) }], noChange: [], failed: [], shepherd: [] }));
+      });
+      expect(st.merged).toHaveLength(1);
+    });
   });
 
   describe("stage events for PRs the shepherd sees finish", () => {

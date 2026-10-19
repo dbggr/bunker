@@ -14,6 +14,8 @@ import pkg from "../../../package.json" with { type: "json" };
 import { runAudit } from "../../pipeline/audit.ts";
 import { runTriage } from "../../pipeline/triage.ts";
 import type { Agent } from "../../agents/agent.ts";
+import { listRecentPrOutcomes } from "../../github/prs.ts";
+import { HISTORY_MS } from "./status.ts";
 import { cleanMerged, createShepherd } from "../../pipeline/shepherd.ts";
 import { runQueue, type QueueEntry, type QueueOptions } from "../../pipeline/queue.ts";
 import { countWaiting } from "../../github/queue.ts";
@@ -250,6 +252,25 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   const lastDecision = new Map<number, string>();
   let lastSweep = -Infinity;
   const SWEEP_EVERY_MS = 60 * 60_000;
+  let reconcileDue = true;
+  /**
+   * Records PRs that merged or closed while no watcher saw them open (before a restart): the shepherd only reports the ones it watched
+   * close, and a page replaying older history needs a merged/failed record to finish such a run.
+   */
+  const reconcileFinished = async () => {
+    const outcomes = await listRecentPrOutcomes(cwd, env, Date.now() - HISTORY_MS);
+    if (!outcomes) return;
+    const known = status.snapshot();
+    for (const o of outcomes) {
+      if (known.merged.some((m) => m.issue === o.issue && m.at >= o.at)) continue;
+      if (o.outcome === "merged") {
+        status.merged({ issue: o.issue, prUrl: o.url, at: o.at });
+      } else {
+        if (known.failed.some((f) => f.issue === o.issue && f.at >= o.at) || known.merged.some((m) => m.issue === o.issue && m.at >= o.at)) continue;
+        status.failed({ issue: o.issue, status: "closed-unmerged", reason: `PR #${o.pr} was closed without merging`, prUrl: o.url, at: o.at });
+      }
+    }
+  };
   /** One shepherd pass: resumes whatever the open PRs need, whether this watcher or an earlier one opened them. Returns how many merged. */
   const shepherdPass = async (): Promise<number> => {
     if (!shepherd || stopped()) return 0;
@@ -258,6 +279,10 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     if (Date.now() - lastSweep >= SWEEP_EVERY_MS) {
       lastSweep = Date.now();
       for (const n of await sweepClosedQueued(cwd, env)) log(`bunker: cleared bunker:queued from closed #${n}`);
+    }
+    if (reconcileDue) {
+      reconcileDue = false;
+      await reconcileFinished();
     }
     const p = await shepherd.pass();
     if (p.error) log(`bunker: shepherd: ${p.error}`);

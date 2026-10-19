@@ -249,6 +249,22 @@ test("the status recorder shows which verify attempt a run is on", () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+describe("createStatusRecorder() persistence", () => {
+  test("merged and failed records from the last seven days survive a restart; older ones do not", () => {
+    const dir = mkdtempSync(join(tmpdir(), "bunker-status-"));
+    const a = createStatusRecorder(dir, { pid: 1, version: "x" });
+    a.merged({ issue: 1, at: Date.now() - 86_400_000 });
+    a.merged({ issue: 2, at: Date.now() - 8 * 86_400_000 });
+    a.failed({ issue: 3, status: "closed-unmerged", reason: "r" });
+    const seen: any[] = [];
+    createStatusRecorder(dir, { pid: 2, version: "x" }, (w) => seen.push(w));
+    const file = JSON.parse(readFileSync(join(dir, "watch-status.json"), "utf8"));
+    expect(file.merged.map((m: any) => m.issue)).toEqual([1]);
+    expect(file.failed.map((m: any) => m.issue)).toEqual([3]);
+    expect(seen[0].merged).toHaveLength(1);
+  });
+});
+
 describe("createStatusRecorder() change feed", () => {
   test("publishes the watcher snapshot with parallel and the next pass", () => {
     const dir = mkdtempSync(join(tmpdir(), "bunker-status-"));
