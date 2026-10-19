@@ -86,7 +86,8 @@ watch:
                              blocked comments @-mention notify.github_user (default: the repo owner, if a user account)
   --max-cost-day <usd>       stop starting issues once this much (notional USD, as \`claude -p\` reports it) was spent in a rolling 24 h,
                              then sleep until the window frees up; kept in .bunker/watch-spend.json (default: no cap).
-                             Also max_cost_day in ~/.config/bunker/config.toml
+                             Also watch.max_cost_day in .bunker/config.toml, else max_cost_day in ~/.config/bunker/config.toml
+                             (the flag beats both; the repo's value beats the user's)
   --max-cost-month <usd>     same for a rolling 30 days (default: no cap; config.toml: max_cost_month)
   --audit-every <days>       also run audit at most once per this many days, kept in .bunker/watch-state.json (default off; 30 is a good value)
   --triage-every <hours>     also run triage at most once per this many hours, comment and close only (default off)

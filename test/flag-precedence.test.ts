@@ -1,5 +1,5 @@
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
-import { resolveCiTimeout, resolveParallel, resolveWatchSettings } from "../src/core/settings.ts";
+import { capSources, capsFrom, resolveCiTimeout, resolveParallel, resolveWatchSettings } from "../src/core/settings.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -34,6 +34,27 @@ describe("watch settings: CLI flag over config.toml", () => {
 
   test("a flag beats the user-level spend caps file too", () => {
     expect(resolveWatchSettings({ "max-cost-day": "4" }, cfg, { day: 50 }).caps.day).toBe(4);
+  });
+
+  test("the repo's watch caps beat the user-level spend caps file (#482)", () => {
+    expect(resolveWatchSettings({}, cfg, { day: 20, month: 500 }).caps).toEqual({ day: 10, month: 100 });
+  });
+
+  test("the user-level caps apply where the repo sets none, per window", () => {
+    expect(resolveWatchSettings({}, { max_cost_day: 10 }, { day: 20, month: 500 }).caps).toEqual({ day: 10, month: 500 });
+    expect(resolveWatchSettings({}, {}, { day: 20 }).caps).toEqual({ day: 20 });
+  });
+
+  test("capSources says where each window's cap comes from, for doctor", () => {
+    expect(capSources(cfg, { day: 20 })).toEqual({ day: "repo", month: "repo" });
+    expect(capSources({ max_cost_day: 10 }, { month: 500 })).toEqual({ day: "repo", month: "user" });
+    expect(capSources({}, {})).toEqual({});
+  });
+
+  test("status and watch merge caps the same way: flag, then repo, then user", () => {
+    expect(capsFrom(cfg, { day: 20, month: 500 })).toEqual({ day: 10, month: 100 });
+    expect(capsFrom({}, { day: 20 })).toEqual({ day: 20 });
+    expect(capsFrom({ max_cost_month: 70 }, {})).toEqual({ month: 70 });
   });
 
   test("invalid flag values are rejected rather than falling back to config", () => {

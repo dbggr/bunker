@@ -143,7 +143,7 @@ keep working the queue unattended (implies --merge)
 | `--interval <min>` | minutes to sleep when no work is waiting | 10 |
 | `--for <duration>` | stop starting new issues after this long, e.g. 5h, 90m, 2h30m | until Ctrl-C |
 | `--no-notify` | no desktop notifications (notify-send / osascript) for: paused on the usage limit, spend cap reached, an issue failed or blocked, a pass that merged, watch stopped or crashed. Failed / blocked comments @-mention notify.github_user (default: the repo owner, if a user account) |  |
-| `--max-cost-day <usd>` | stop starting issues once this much (notional USD, as `claude -p` reports it) was spent in a rolling 24 h, then sleep until the window frees up; kept in .bunker/watch-spend.json. Also max_cost_day in ~/.config/bunker/config.toml | no cap |
+| `--max-cost-day <usd>` | stop starting issues once this much (notional USD, as `claude -p` reports it) was spent in a rolling 24 h, then sleep until the window frees up; kept in .bunker/watch-spend.json. Also watch.max_cost_day in .bunker/config.toml, else max_cost_day in ~/.config/bunker/config.toml (the flag beats both; the repo's value beats the user's) | no cap |
 | `--max-cost-month <usd>` | same for a rolling 30 days (config.toml: max_cost_month) | no cap |
 | `--audit-every <days>` | also run audit at most once per this many days, kept in .bunker/watch-state.json (30 is a good value) | off |
 | `--triage-every <hours>` | also run triage at most once per this many hours, comment and close only | off |
@@ -321,8 +321,8 @@ bunker clean --yes --logs 14
 | skills.reviewer | skill directories for the reviewer role only |  | .bunker/config.toml |
 | watch.interval | minutes to sleep between bunker watch passes | 10 | .bunker/config.toml |
 | watch.parallel | issues bunker watch works at once | 1 | .bunker/config.toml |
-| watch.max_cost_day | USD cap per rolling 24h for bunker watch |  | .bunker/config.toml |
-| watch.max_cost_month | USD cap per rolling 30 days for bunker watch |  | .bunker/config.toml |
+| watch.max_cost_day | USD cap per rolling 24h for bunker watch; overrides the user-level max_cost_day, the flag overrides both |  | .bunker/config.toml |
+| watch.max_cost_month | USD cap per rolling 30 days for bunker watch; overrides the user-level max_cost_month, the flag overrides both |  | .bunker/config.toml |
 | watch.audit_every | days between periodic bunker audit runs in bunker watch |  | .bunker/config.toml |
 | watch.triage_every | hours between periodic `bunker triage` runs in bunker watch (comment and close only) |  | .bunker/config.toml |
 | merge.mode | "manual": PRs stay open for a human to merge; bunker keeps them green (also written `merge = "manual"`) | auto | .bunker/config.toml |
@@ -331,8 +331,8 @@ bunker clean --yes --logs 14
 | notify.enabled | desktop notifications from bunker watch (notify-send / osascript) | true | .bunker/config.toml |
 | notify.github_user | login @-mentioned when an issue becomes bunker:failed / bunker-blocked (default: the repo owner, if a user) |  | .bunker/config.toml |
 | allow_labelers | GitHub logins also accepted as `bunker:queued` labelers (same as repeatable --allow-labeler); user-level only, a repo file cannot widen its own gate. e.g. `["login"]` | none | ~/.config/bunker/config.toml |
-| max_cost_day | USD cap per rolling 24 h (same as --max-cost-day) | no cap | ~/.config/bunker/config.toml |
-| max_cost_month | USD cap per rolling 30 days (same as --max-cost-month) | no cap | ~/.config/bunker/config.toml |
+| max_cost_day | USD cap per rolling 24 h (same as --max-cost-day); a repo's watch.max_cost_day overrides it | no cap | ~/.config/bunker/config.toml |
+| max_cost_month | USD cap per rolling 30 days (same as --max-cost-month); a repo's watch.max_cost_month overrides it | no cap | ~/.config/bunker/config.toml |
 | `[services.<name>]` | a service (e.g. Postgres) started for each verify attempt and removed afterwards; verify reaches it at the host name &lt;name> and nothing else on the network. Keys: image (required), env (table of strings), healthcheck (shell command run in the service; verify waits until it exits 0). Each attempt gets fresh containers on its own internal network, so parallel runs share nothing. Needs the docker or podman sandbox. verify runs agent-written code that can talk to the services: keep their credentials throwaway, never real ones. With services, verify joins their internal network, so verify_network adds the Claude credentials but no internet. Example: `[services.database] image = "postgres:18-alpine" healthcheck = "pg_isready -U app"` | none | .bunker/config.toml |
 | `.bunker/copy` | legacy, same as copy in config.toml: gitignored files to copy from your checkout into each worktree before setup (e.g. .env): one path or glob per line, `#` comments; directories are copied recursively, missing paths warn. Paths outside the repo (`..`, absolute) are rejected. Copied files are never committed (a commit that includes one fails the run) and the values of copied .env* files are redacted from output. Library option: copyToWorktree: string[] overrides the file | none | .bunker/copy |
 

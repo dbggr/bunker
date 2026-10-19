@@ -11,6 +11,18 @@ const positive = (raw: unknown) => {
 };
 
 /** --interval, --max-cost*, --audit-every, --triage-every over [watch] in config.toml. `fileCaps` are the user-level caps, which a flag also beats. */
+/** Spend caps from config, the more specific winning per window: the repo's `[watch]` caps over the user-level ones (#482). Flags go on top in resolveWatchSettings. */
+export function capsFrom(watch: Pick<RepoConfig["watch"], "max_cost_day" | "max_cost_month">, fileCaps: { day?: number; month?: number }): { day?: number; month?: number } {
+  return { ...fileCaps, ...(watch.max_cost_day === undefined ? {} : { day: watch.max_cost_day }), ...(watch.max_cost_month === undefined ? {} : { month: watch.max_cost_month }) };
+}
+
+/** Where capsFrom took each window's cap: the repo's `[watch]`, the user-level file, or (absent) nowhere. */
+export function capSources(watch: Pick<RepoConfig["watch"], "max_cost_day" | "max_cost_month">, fileCaps: { day?: number; month?: number }): { day?: "repo" | "user"; month?: "repo" | "user" } {
+  const from = (repo: number | undefined, user: number | undefined) => (repo !== undefined ? ("repo" as const) : user !== undefined ? ("user" as const) : undefined);
+  const day = from(watch.max_cost_day, fileCaps.day), month = from(watch.max_cost_month, fileCaps.month);
+  return { ...(day ? { day } : {}), ...(month ? { month } : {}) };
+}
+
 export function resolveWatchSettings(values: Flags, watch: RepoConfig["watch"], fileCaps: { day?: number; month?: number }) {
   let intervalMin = watch.interval ?? 10;
   if (values.interval !== undefined) {
@@ -18,7 +30,7 @@ export function resolveWatchSettings(values: Flags, watch: RepoConfig["watch"], 
     if (n === undefined) throw new FlagError("--interval must be a positive number of minutes");
     intervalMin = n;
   }
-  const caps: { day?: number; month?: number } = { ...(watch.max_cost_day === undefined ? {} : { day: watch.max_cost_day }), ...(watch.max_cost_month === undefined ? {} : { month: watch.max_cost_month }), ...fileCaps };
+  const caps = capsFrom(watch, fileCaps);
   for (const [k, raw, flag] of [["day", values["max-cost-day"], "--max-cost-day"], ["month", values["max-cost-month"], "--max-cost-month"]] as const) {
     if (raw === undefined) continue;
     const n = positive(raw);
