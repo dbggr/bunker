@@ -106,8 +106,7 @@ export const viewUrlFor = (port: number, token: string) => `http://${HOST}:${por
  */
 export function startHub({ port = defaultHubPort(), token, historyLimit = HISTORY_LIMIT, repoLimit = REPO_LIMIT, historyDir, maxAgeMs = HISTORY_MAX_AGE_MS }: { port?: number; token: string; historyLimit?: number; repoLimit?: number; historyDir?: string; maxAgeMs?: number }): Hub {
   // Replayed to late clients; capped per repo so one busy repo can't evict the rest.
-  const history = new Map<string, { seq: number; msg: string; kind?: string | undefined }[]>();
-  const times = new Map<object, number>();
+  const history = new Map<string, { seq: number; msg: string; t: number; kind?: string | undefined }[]>();
   let seq = 0;
 
   /** Adds an already-cleaned event to the in-memory history, applying the caps. Returns the entry. */
@@ -124,13 +123,12 @@ export function startHub({ port = defaultHubPort(), token, historyLimit = HISTOR
       history.delete(evicted);
       if (historyDir) rmSync(historyFile(historyDir, evicted), { force: true });
     }
-    const entry = { seq: seq++, msg, ...(ev.type === "budget" || ev.type === "usage" ? { kind } : {}) };
-    times.set(entry, t);
+    const entry = { seq: seq++, msg, t, ...(ev.type === "budget" || ev.type === "usage" ? { kind } : {}) };
     list.push(entry);
     if (list.length > historyLimit) list.splice(0, list.length - historyLimit);
     return list;
   };
-  const lineOf = (repo: string, e: { msg: string }) => JSON.stringify({ t: times.get(e), repo, event: JSON.parse(e.msg).event }) + "\n";
+  const lineOf = (repo: string, e: { msg: string; t: number }) => JSON.stringify({ t: e.t, repo, event: JSON.parse(e.msg).event }) + "\n";
   const compact = (repo: string) => {
     const file = historyFile(historyDir!, repo);
     writeFileSync(file, (history.get(repo) ?? []).map((e) => lineOf(repo, e)).join(""), { mode: 0o600 });
