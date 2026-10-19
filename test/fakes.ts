@@ -40,6 +40,7 @@ case "$*" in
   "api repos/o/r/collaborators/me/permission"*) f permission.json;;
   "api repos/o/r/issues?per_page=1") f issues.json;;
   "api repos/o/r/pulls?per_page=1") f pulls.json;;
+  "api repos/o/r/actions/runs?per_page=1") f actions.json;;
   "api repos/o/r/branches/main") f branch.json;;
   "api repos/o/r --method PATCH"*) if [ -f "$d/patch-err.txt" ]; then cat "$d/patch-err.txt" >&2; exit 1; fi; echo '{}';;
   "api repos/o/r/rulesets --method POST"*) if [ -f "$d/ruleset-err.txt" ]; then cat "$d/ruleset-err.txt" >&2; exit 1; fi; echo '{"id":1}';;
@@ -61,6 +62,7 @@ esac`,
     "issues.json": "[]",
     "permission.json": "admin",
     "pulls.json": "[]",
+    "actions.json": "{}",
     "branch.json": "{}",
     "labels.json": JSON.stringify(["bunker:queued", "bunker:in-progress", "bunker:failed", "bunker:review", "discovered", "bunker-blocked", "priority:high", "priority:medium", "priority:low"].map((name) => ({ name }))),
     "protection.json": "",

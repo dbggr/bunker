@@ -62,7 +62,7 @@ async function setup(issues: [number, string, string][]) {
     join(bin, "gh"),
     `#!/bin/sh
 echo "$*" >> "${root}/gh.log"
-if [ "$1" = "api" ]; then case "$*" in *"/rules/branches/"*) echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]'; exit 0;; *graphql*|*renamed*) exit 0;; *created_at*) n=$(echo "$*" | sed 's|.*issues/\\([0-9]*\\)/events.*|\\1|'); if [ -f "${root}/labeled-at-$n" ]; then cat "${root}/labeled-at-$n"; else echo 2020-01-01T00:00:00Z; fi; exit 0;; *"/events"*) [ -f "${root}/events-fail" ] && { echo "api down" >&2; exit 1; }; echo owner; exit 0;; *"/permission"*) if [ -f "${root}/perm" ]; then cat "${root}/perm"; else echo admin; fi; exit 0;; esac; fi
+if [ "$1" = "api" ]; then case "$*" in *"/actions/runs?"*) if [ -f "${root}/runs.json" ]; then cat "${root}/runs.json"; exit 0; fi; echo "HTTP 404: no runs" >&2; exit 1;; *"/actions/runs/"*"/jobs"*) cat "${root}/jobs.json"; exit 0;; *"/actions/jobs/"*"/logs"*) echo "3 failures"; exit 0;; *"/commits/"*"/status"*) echo '{"statuses":[]}'; exit 0;; *"/check-runs"*) echo "HTTP 403: Resource not accessible by personal access token" >&2; exit 1;; *"/rules/branches/"*) echo '[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"test"}]}}]'; exit 0;; *graphql*|*renamed*) exit 0;; *created_at*) n=$(echo "$*" | sed 's|.*issues/\\([0-9]*\\)/events.*|\\1|'); if [ -f "${root}/labeled-at-$n" ]; then cat "${root}/labeled-at-$n"; else echo 2020-01-01T00:00:00Z; fi; exit 0;; *"/events"*) [ -f "${root}/events-fail" ] && { echo "api down" >&2; exit 1; }; echo owner; exit 0;; *"/permission"*) if [ -f "${root}/perm" ]; then cat "${root}/perm"; else echo admin; fi; exit 0;; esac; fi
 if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--state closed"; then if [ -f "${root}/closed.json" ]; then cat "${root}/closed.json"; else echo '[]'; fi; exit 0; fi
 if [ "$1 $2" = "issue list" ] && echo "$*" | grep -q -- "--label bunker:in-progress"; then if [ -f "${root}/inprogress.json" ]; then cat "${root}/inprogress.json"; else echo '[]'; fi; exit 0; fi
 if [ "$1 $2" = "issue list" ]; then
@@ -78,9 +78,8 @@ if [ "$1 $2" = "issue edit" ]; then case "$*" in *in-progress*|*"--remove-label 
 if [ "$1 $2" = "issue comment" ]; then shift 3; echo "COMMENT: $*" >> "${root}/comments.log"; exit 0; fi
 if [ "$1 $2" = "pr list" ] && [ -f "${root}/prlist.json" ]; then cat "${root}/prlist.json"; [ -f "${root}/prlist-next.json" ] && mv "${root}/prlist-next.json" "${root}/prlist.json"; exit 0; fi
 if [ "$1 $2" = "pr checks" ]; then echo "unknown flag: --json" >&2; exit 1; fi
-if [ "$1 $2" = "run view" ]; then echo "3 failures"; exit 0; fi
 if [ "$1 $2" = "pr comment" ]; then exit 0; fi
-if [ "$1 $2" = "pr view" ] && echo "$*" | grep -q statusCheckRollup; then if [ -f "${root}/rollup.json" ]; then cat "${root}/rollup.json"; exit 0; fi; echo "HTTP 404: no rollup" >&2; exit 1; fi
+if [ "$1 $2" = "pr view" ] && echo "$*" | grep -q statusCheckRollup; then echo "GraphQL: Resource not accessible by personal access token" >&2; exit 1; fi
 if [ "$1 $2" = "pr view" ] && [ -f "${root}/prview.json" ]; then cat "${root}/prview.json"; exit 0; fi
 if [ "$1 $2" = "label create" ]; then exit 0; fi
 if [ "$1 $2" = "issue create" ]; then echo "https://github.com/o/r/issues/100"; exit 0; fi
@@ -666,8 +665,9 @@ describe("runWatch() shepherd stage", () => {
   test("an issue logging 'already has an open PR' still gets a shepherd pass; a red required check that --required does not report reaches fixRed", async () => {
     const { repo, root } = await setup(three.slice(0, 1));
     await Bun.write(join(root, "prlist.json"), JSON.stringify([bunkerPr(1)]));
-    // The fake gh's ruleset requires "test"; gh 2.46 has no `pr checks --json`, as on PR #53: checks come from the statusCheckRollup.
-    await Bun.write(join(root, "rollup.json"), JSON.stringify({ statusCheckRollup: [{ name: "other", status: "COMPLETED", conclusion: "SUCCESS", detailsUrl: "" }, { name: "test", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/o/r/actions/runs/77/job/1" }] }));
+    // The fake gh's ruleset requires "test"; the token has no Checks permission (check-runs and the PR rollup are 403): CI comes from the Actions runs.
+    await Bun.write(join(root, "runs.json"), JSON.stringify({ workflow_runs: [{ id: 77, name: "CI", status: "completed", conclusion: "failure", html_url: "https://github.com/o/r/actions/runs/77" }] }));
+    await Bun.write(join(root, "jobs.json"), JSON.stringify({ jobs: [{ id: 1, name: "other", status: "completed", conclusion: "success", html_url: "https://github.com/o/r/actions/runs/77/job/2" }, { id: 1, name: "test", status: "completed", conclusion: "failure", html_url: "https://github.com/o/r/actions/runs/77/job/1" }] }));
     const ctl = new AbortController();
     const prompts: string[] = [];
     const events: any[] = [];
@@ -675,9 +675,9 @@ describe("runWatch() shepherd stage", () => {
     const gh = await Bun.file(join(root, "gh.log")).text();
     expect(events.some((e) => e.type === "note" && /#1 already has an open PR/.test(e.text))).toBe(true);
     expect(prompts).toHaveLength(0);
-    expect(gh).toContain("pr view 41 --json statusCheckRollup");
-    expect(gh).not.toContain("pr checks");
-    expect(gh).toContain("run view 77 --log-failed");
+    expect(gh).toContain("actions/runs?head_sha=");
+    expect(gh).not.toMatch(/pr checks|statusCheckRollup|check-runs/);
+    expect(gh).toContain("actions/jobs/1/logs");
   });
 
   test("every shepherd decision is logged and kept in watch-status.json, including a PR whose checks it cannot read", async () => {

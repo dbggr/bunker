@@ -102,6 +102,10 @@ interface Check {
   name: string;
   bucket: string;
   link: string;
+  /** The Actions job id, when the check is a job (its log is read by id). */
+  job?: string;
+  /** Another name a required context may use for this check ("workflow / job"). */
+  alias?: string;
 }
 
 const fence = (text: string) => {
@@ -168,27 +172,50 @@ export function createShepherd(o: ShepherdOptions) {
   const entry = (pr: BunkerPr, action: ShepherdAction, detail?: string): ShepherdEntry => ({ pr: pr.number, url: pr.url, issue: pr.issue, action, ...(detail ? { detail: redact(detail) } : {}) });
 
   /**
-   * The PR's check runs and commit statuses from `gh pr view --json statusCheckRollup`: it works on every gh version (`gh pr checks`
-   * has no `--json` before 2.50) and needs only the read access to the PR that the token already has, unlike the Checks REST endpoints.
+   * The PR's CI state from the Actions runs of its head commit (and their jobs, whose names are what rulesets require) plus the
+   * commit's legacy statuses. Fine-grained tokens have no Checks permission, so `gh pr checks`, the PR's statusCheckRollup and
+   * `commits/{sha}/check-runs` all answer 403; the Actions endpoints (Actions: read) and the status endpoint do not.
    * Entries are mapped to the buckets `gh pr checks` used (pass, fail, pending, cancel).
    */
   const checkRuns = async (pr: BunkerPr): Promise<{ checks: Check[]; error?: string }> => {
-    const r = await gh`gh pr view ${pr.number} --json statusCheckRollup`;
-    let rollup: any;
-    try {
-      rollup = JSON.parse(r.stdout.toString()).statusCheckRollup;
-    } catch {}
-    if (r.exitCode !== 0 || !Array.isArray(rollup)) return { checks: [], error: r.stderr.toString().trim().split("\n")[0] || `gh pr view exited ${r.exitCode} without a check rollup` };
-    const checks: Check[] = [];
-    for (const c of rollup) {
-      const name = c?.name ?? c?.context; // CheckRun | StatusContext
-      if (!name) continue;
-      const done = String(c.conclusion ?? "").toUpperCase();
-      const state = String(c.state ?? "").toUpperCase();
-      const bucket = done
-        ? ["SUCCESS", "NEUTRAL", "SKIPPED"].includes(done) ? "pass" : done === "CANCELLED" ? "cancel" : "fail"
-        : state === "SUCCESS" ? "pass" : state === "FAILURE" || state === "ERROR" ? "fail" : "pending";
-      checks.push({ name, bucket, link: c.detailsUrl ?? c.targetUrl ?? "" });
+    const read = async (path: string): Promise<{ value: any } | { error: string }> => {
+      const r = await gh`gh api ${path}`;
+      if (r.exitCode !== 0) return { error: r.stderr.toString().trim().split("\n")[0] || `gh api exited ${r.exitCode}` };
+      try {
+        return { value: JSON.parse(r.stdout.toString()) };
+      } catch {
+        return { error: `gh api ${path} did not answer JSON` };
+      }
+    };
+    const bucketOf = (status: unknown, conclusion: unknown) => {
+      const done = String(conclusion ?? "").toLowerCase();
+      if (status !== undefined && String(status).toLowerCase() !== "completed") return "pending";
+      if (!done) return "pending";
+      return ["success", "neutral", "skipped"].includes(done) ? "pass" : done === "cancelled" ? "cancel" : "fail";
+    };
+    const runs = await read(`repos/{owner}/{repo}/actions/runs?head_sha=${pr.headSha}&per_page=100`);
+    if ("error" in runs) return { checks: [], error: runs.error };
+    const byName = new Map<string, Check & { run: number }>();
+    // Oldest first, so a re-run (a newer run of the same job) replaces the earlier result.
+    const list: any[] = (Array.isArray(runs.value?.workflow_runs) ? runs.value.workflow_runs : []).slice().sort((x: any, y: any) => Number(x.id) - Number(y.id));
+    for (const run of list) {
+      const jobs = await read(`repos/{owner}/{repo}/actions/runs/${run.id}/jobs?per_page=100`);
+      if ("error" in jobs) return { checks: [], error: jobs.error };
+      const jl: any[] = Array.isArray(jobs.value?.jobs) ? jobs.value.jobs : [];
+      if (!jl.length) {
+        // A run without jobs (queued, or failed to start) still counts under its workflow name.
+        if (run.name) byName.set(run.name, { name: run.name, bucket: bucketOf(run.status, run.conclusion), link: run.html_url ?? "", run: run.id });
+        continue;
+      }
+      for (const j of jl) if (j?.name) byName.set(j.name, { name: j.name, bucket: bucketOf(j.status, j.conclusion), link: j.html_url ?? run.html_url ?? "", job: String(j.id), ...(run.name ? { alias: `${run.name} / ${j.name}` } : {}), run: run.id });
+    }
+    const checks: Check[] = [...byName.values()].map(({ run: _run, ...c }) => c);
+    const st = await read(`repos/{owner}/{repo}/commits/${pr.headSha}/status`);
+    if ("error" in st) return { checks: [], error: st.error };
+    for (const c of Array.isArray(st.value?.statuses) ? st.value.statuses : []) {
+      if (!c?.context) continue;
+      const state = String(c.state ?? "").toLowerCase();
+      checks.push({ name: c.context, bucket: state === "success" ? "pass" : state === "failure" || state === "error" ? "fail" : "pending", link: c.target_url ?? "" });
     }
     return { checks };
   };
@@ -213,30 +240,47 @@ export function createShepherd(o: ShepherdOptions) {
     return [...out];
   };
 
-  /** The PR's checks narrowed to the contexts the base branch requires; when those can't be read, every check counts. */
+  /**
+   * The PR's checks narrowed to the contexts the base branch requires; when those can't be read, every check counts.
+   * A required context with no run or status yet is pending (CI has not started), never failed.
+   */
   const checksFor = async (pr: BunkerPr): Promise<{ checks: Check[]; error?: string }> => {
     const all = await checkRuns(pr);
-    if (all.error || !all.checks.length) return all;
+    if (all.error) return all;
     const contexts = await requiredContexts(pr);
-    return { checks: contexts.length ? all.checks.filter((c) => contexts.includes(c.name)) : all.checks };
+    if (!contexts.length) return all;
+    const checks = all.checks.filter((c) => contexts.includes(c.name) || (c.alias !== undefined && contexts.includes(c.alias)));
+    for (const ctx of contexts) if (!all.checks.some((c) => c.name === ctx || c.alias === ctx)) checks.push({ name: ctx, bucket: "pending", link: "" });
+    return { checks };
   };
 
-  /** The failed jobs' logs, or why they can't be read (usually: the token lacks Actions: read). */
+  /** The failed jobs' logs (`actions/jobs/{id}/logs`), or why they can't be read (usually: the token lacks Actions: read). */
   const failureLog = async (failed: Check[]): Promise<{ ok: true; text: string } | { ok: false; why: string }> => {
     const texts: string[] = [];
     let why = "";
-    const runs = new Set<string>();
-    for (const c of failed) {
-      const id = /\/actions\/runs\/(\d+)/.exec(c.link ?? "")?.[1];
-      if (!id) {
-        why ||= `check ${c.name} is not a GitHub Actions run, so there is no log to read`;
-        continue;
-      }
-      if (runs.has(id)) continue;
-      runs.add(id);
-      const log = await gh`gh run view ${id} --log-failed`;
-      if (log.exitCode !== 0) why ||= `could not read the log of run ${id}: ${log.stderr.toString().trim()}`;
+    const seen = new Set<string>();
+    const jobLog = async (id: string) => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      const log = await gh`gh api repos/{owner}/{repo}/actions/jobs/${id}/logs`;
+      if (log.exitCode !== 0) why ||= `could not read the log of job ${id}: ${log.stderr.toString().trim()}`;
       else texts.push(log.stdout.toString());
+    };
+    for (const c of failed) {
+      const job = c.job ?? /\/job\/(\d+)/.exec(c.link ?? "")?.[1];
+      const run = /\/actions\/runs\/(\d+)/.exec(c.link ?? "")?.[1];
+      if (job) await jobLog(job);
+      else if (run) {
+        // A status that points at a run: read the log of the run's failed jobs.
+        const r = await gh`gh api repos/{owner}/{repo}/actions/runs/${run}/jobs?per_page=100`;
+        let jobs: any[] = [];
+        try {
+          jobs = JSON.parse(r.stdout.toString()).jobs ?? [];
+        } catch {}
+        const bad = jobs.filter((j) => j?.conclusion === "failure");
+        if (r.exitCode !== 0 || !bad.length) why ||= `could not find a failed job in run ${run}: ${r.stderr.toString().trim()}`;
+        for (const j of bad) await jobLog(String(j.id));
+      } else why ||= `check ${c.name} is not a GitHub Actions job, so there is no log to read`;
     }
     return texts.length ? { ok: true, text: tailLines(texts.join("\n"), 400).slice(-30_000) } : { ok: false, why: why || "no failing check had a log" };
   };
