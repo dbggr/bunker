@@ -144,6 +144,12 @@ export const SECTIONS: Section[] = [
         example: "bunker status --json",
       },
       {
+        cmd: "mcp",
+        summary: "stdio MCP server: manage local watches (systemd user units) from Claude",
+        rows: [["`bunker mcp`", "stdio MCP server over systemd user units `bunker-watch@<repo>.service` (the template is installed on the first `start_watch`). Tools: `list_watches` (unit state, repo, current run), `start_watch`, `stop_watch`, `restart_watch`, `watch_logs` (last N lines), `spend` (today/month against the caps), `queue_issue` (adds `bunker:queued`; refused at or over the daily spend cap). It never starts, stops or alters a run through the hub"]],
+        example: "claude mcp add bunker -- bunker mcp",
+      },
+      {
         cmd: "ui",
         summary: "shared live view: one tab per repo",
         rows: [["`--port <n>`", "hub port to use", "4321"]],

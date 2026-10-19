@@ -104,6 +104,13 @@ if (positionals.length === 1 && positionals[0] === "status") {
   await statusCommand(values);
 }
 
+// `bunker mcp`: a stdio MCP server that manages local watches (systemd user units).
+if (positionals.length === 1 && positionals[0] === "mcp") {
+  const { serveStdio } = await import("../mcp/server.ts");
+  await serveStdio();
+  process.exit(0);
+}
+
 // `bunker clean`: dry run unless --yes.
 if (positionals.length === 1 && positionals[0] === "clean") {
   await cleanCommand(values);
