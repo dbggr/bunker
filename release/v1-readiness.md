@@ -6,7 +6,7 @@ What v1.0.0 promises, how close bunker is, and what would prove it, from raw evi
   - every run log in `.bunker/runs` (142 logs, 2026-10-16 18:02Z to 2026-10-18 01:22Z)
   - GitHub's history of this repo: 151 PRs, 132 CI runs on `main`, issue label events
   - the cost recorded in each run's `result` events
-- **Snapshot:** the numbers below were taken at 2026-10-18 01:22Z, before the soak; re-running gives newer ones (GitHub answers are cached, so pass `--refresh`). Soak numbers wait for #454: the script currently counts runs that end `awaiting-merge` (auto-merge armed, merged later by GitHub) as failures. Soak status is in section 4.
+- **Snapshot:** the numbers in sections 1, 2 and 4's "Measured" column were taken at 2026-10-18 01:22Z, before the soak; re-running gives newer ones (GitHub answers are cached, so pass `--refresh`). Soak numbers come from `bun scripts/v1-readiness.ts --since 2026-10-18T23:57:25Z --refresh` (fixed in #454 to count `awaiting-merge` runs whose PR merged); the first reading is in section 4.
 - **Reproduce:**
   - `bun scripts/v1-readiness.ts` (add `--since 2026-10-17T12:00:00Z` for the recent window, `--json` for raw numbers)
   - `bun scripts/mutate-gates.ts` for the gate mutation table
@@ -109,7 +109,8 @@ Pointing bunker at repos it wasn't built on (a private Symfony library, a privat
 - **Started** 2026-10-18T23:57:25Z with v0.9.0 watchers, daytime `bunker watch`. **Ends** 2026-11-01 at the earliest, if the bar below holds the whole window.
 - **Repos:** bunker; a private Symfony library (setup in `backend/`, PHPUnit needs Postgres, gated by CI); a private Node/Bun tool. The public bunary-dev packages (core, http, cli, orm, auth) were onboarded during the window and have run audits through bunker; they count from when they joined, not from the soak start.
 - **Interventions so far** (count against the bar): re-queueing a failed hello-world issue after the private library's broken first config; clearing `bunker:failed` on the private library's stuck PR after the shepherd fixes (#441/#446/#447/#450) landed; restarting watchers to pick up those fixes. The private library's ruleset was also recreated by hand after #425.
-- **Measuring:** `scripts/v1-readiness.ts --since 2026-10-18T23:57:25Z --refresh` per repo, once #454 counts `awaiting-merge` runs whose PR merged as merged and can report several repos at once.
+- **Measuring:** `bun scripts/v1-readiness.ts --since 2026-10-18T23:57:25Z --refresh`, per repo with `--runs <repo>/.bunker/runs --repo <owner/name>` (several of each give one report per repo plus a combined row, #454). The escapes row counts wrong merges only; add section 3's escapes by hand.
+- **First reading (bunker repo only, day 1, 2026-10-19 ~05:30Z):** wrong merges 0 · unattended success 11 / 13 (85%, bar ≥ 90%) · merged on the first finished attempt 10 / 11 · interventions per merged issue 0.00 · cost per merged issue $0.72. Partial: one day, one repo, and escapes not yet added from section 3 (several of this week's are bunker-merged code, so that row is above 5%). Full per-repo tables at the midpoint (~2026-10-25) and the end.
 
 Thresholds over a **14-day `--watch` soak** on bunker itself plus at least one repo bunker wasn't built on (core or a private repo), measured by `scripts/v1-readiness.ts --since <soak start>`:
 
@@ -200,7 +201,7 @@ From `bun scripts/mutate-gates.ts`: each gate is broken on its own, then the sui
 | #337 test hygiene guard | **done** | the bar: escapes |
 | #286 bot identity | **done** (PR #389) | changes token setup; the repo is public now |
 | #411 sandbox services for verify (Postgres, Redis) | **done** | repos whose tests need a database can verify in the sandbox instead of leaving it to CI |
-| #454 soak measurement (`awaiting-merge` runs, several repos) | **open** | needed to measure the bar |
+| #454 soak measurement (`awaiting-merge` runs, several repos) | **done** (PR #457) | needed to measure the bar |
 | #283 PR shepherd | **done** | not opt-in: `bunker watch` runs it on every pass |
 | #317 skills | **done** | additive config |
 | #327 live cost + budget in the hub | **done** (#359) | UI only |
@@ -208,4 +209,4 @@ From `bun scripts/mutate-gates.ts`: each gate is broken on its own, then the sui
 | #289 demo video | after 1.0 | by design |
 | #280 session fork | **done** (#353) | shipped as `fork()` on a run result |
 
-**Order:** the contract and the bar items above are done, and the soak started 2026-10-18T23:57:25Z (section 4). Next: #454 so the soak can be measured, then the benchmark, chaos and red-team checks during the window; tag 1.0.0 when the bar holds for the whole window. Open 1.0 work is tracked in the [v1.0.0 milestone](https://github.com/dbggr/bunker/milestone/1).
+**Order:** the contract and the bar items above are done, the soak started 2026-10-18T23:57:25Z and can be measured (#454; first reading in section 4). Next: the benchmark, chaos and red-team checks during the window, per-repo tables at the midpoint; tag 1.0.0 when the bar holds for the whole window. Open 1.0 work is tracked in the [v1.0.0 milestone](https://github.com/dbggr/bunker/milestone/1).
