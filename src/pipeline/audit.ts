@@ -66,11 +66,14 @@ const AUDIT_FORMAT =
   'End your answer with <audit>{"issues": [{"title": "short title", "body": "body with acceptance criteria as a checklist", "severity": "high|medium|low"}]}</audit>: ' +
   SEVERITY_HELP + " Valid JSON (escape quotes and newlines in strings), with an empty array if there is nothing to report. Only the last <audit> in your answer counts.";
 
-export function auditPrompt(maxIssues: number, focus?: string): string {
+export function auditPrompt(maxIssues: number, focus?: string, openTitles: string[] = []): string {
   return (
     "Audit this repository. Read the code, tests and docs, and find the most valuable concrete improvements: " +
     "bugs, missing tests, gaps against the docs, risky behaviour, or missing features. Do not change any files or commit.\n\n" +
     (focus ? `Focus on: ${focus}\n\n` : "") +
+    (openTitles.length
+      ? `These issues are already open; do not report them or anything that overlaps with them:\n${openTitles.slice(0, 200).map((t) => `- ${t.replace(/\s+/g, " ").slice(0, 200)}`).join("\n")}\n\n`
+      : "") +
     `Report at most ${maxIssues} improvements, most valuable first. ${AUDIT_FORMAT} ` +
     "Each must be specific and actionable on its own."
   );
@@ -106,9 +109,12 @@ async function auditRun({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, fo
 
   const baseSha = await fetchDefaultBranch(repo, env, token, "audit");
 
-  const open = await $`gh issue list --state open --limit 1000 --json number,title`.cwd(repo).env(env).nothrow().quiet();
-  if (open.exitCode !== 0) throw new Error(`gh issue list failed:\n${open.stderr}`);
-  const existing = new Set((JSON.parse(open.stdout.toString()) as { title: string }[]).map((i) => norm(i.title)));
+  const listOpen = async (): Promise<string[]> => {
+    const open = await $`gh issue list --state open --limit 1000 --json number,title`.cwd(repo).env(env).nothrow().quiet();
+    if (open.exitCode !== 0) throw new Error(`gh issue list failed:\n${open.stderr}`);
+    return (JSON.parse(open.stdout.toString()) as { title: string }[]).map((i) => i.title);
+  };
+  const openTitles = await listOpen();
 
   const worktree = join(tmpdir(), `bunker-audit-${crypto.randomUUID().slice(0, 8)}`);
   const add = await $`git -C ${repo} worktree add -q --detach ${worktree} ${baseSha}`.nothrow().quiet();
@@ -124,7 +130,7 @@ async function auditRun({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, fo
     if (prep?.timedOut) throw new IdleTimeout(timeoutMessage("setup", prep.timedOut, timeouts));
     if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${prep.stdout.slice(-2000)}`);
     emitStage({ onEvent, role: "auditor" }, "audit", undefined, modelLabel(agent));
-    const base = auditPrompt(maxIssues, focus);
+    const base = auditPrompt(maxIssues, focus, openTitles);
     const usages: (Usage | undefined)[] = [];
     let prompt = base;
     for (let k = 0; ; k++) {
@@ -149,6 +155,8 @@ async function auditRun({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, fo
   emitStage({ onEvent, role: "auditor" }, "filing");
   const result: AuditResult = { filed: [], skipped: [], notFiled: [], ...(usage ? { usage } : {}) };
   const fresh: FollowUp[] = [];
+  // The agent runs for minutes: re-read the open issues so ones filed meanwhile (e.g. by a second audit) count.
+  const existing = new Set((await listOpen()).concat(openTitles).map(norm));
   for (const b of issues) {
     if (existing.has(norm(b.title))) result.skipped.push(b.title);
     else fresh.push(b);

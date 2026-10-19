@@ -140,6 +140,30 @@ describe("runAudit()", () => {
     expect((await $`git -C ${repo} worktree list`.text()).trim().split("\n")).toHaveLength(1);
   });
 
+  test("skips a title another audit filed while this one was running", async () => {
+    const { repo, createLog } = await setup();
+    const openFile = join(repo, "..", "open.json");
+    const agent: Agent = {
+      command() {
+        // Another audit files "Racing" while the agent works.
+        const open = JSON.stringify([{ number: 7, title: "Racing" }]);
+        return ["sh", "-c", `printf '%s' '${open}' > "${openFile}"; cat <<'EOF'\n${blocks("racing", "Other")}\nEOF`];
+      },
+    };
+    const r = await runAudit({ cwd: repo, agent, sandbox: noSandbox() });
+    expect(r.skipped).toEqual(["racing"]);
+    expect(r.filed).toEqual([{ number: 101, title: "Other" }]);
+    expect((await Bun.file(createLog).text()).split("\n")).not.toContain("racing");
+  });
+
+  test("tells the agent which issues are already open", async () => {
+    const { repo } = await setup(["Subprocess timeouts missing"]);
+    const seen: { prompt?: string } = {};
+    await runAudit({ cwd: repo, agent: fakeAgent(blocks(), seen), sandbox: noSandbox() });
+    expect(seen.prompt).toContain("Subprocess timeouts missing");
+    expect(seen.prompt).toMatch(/already open/i);
+  });
+
   test("audits origin's default branch via a private ref, not the shared FETCH_HEAD", async () => {
     const { repo } = await setup();
     await runAudit({ cwd: repo, agent: fakeAgent(block("A")), sandbox: noSandbox() });
