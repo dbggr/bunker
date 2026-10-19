@@ -167,15 +167,30 @@ export function createShepherd(o: ShepherdOptions) {
 
   const entry = (pr: BunkerPr, action: ShepherdAction, detail?: string): ShepherdEntry => ({ pr: pr.number, url: pr.url, issue: pr.issue, action, ...(detail ? { detail: redact(detail) } : {}) });
 
-  /** Required checks of the PR; their `fail` bucket is what the shepherd reacts to. Exit codes mean pending/failing, so only the JSON counts. */
-  const requiredChecks = async (pr: BunkerPr): Promise<{ checks: Check[]; error?: string }> => {
-    const r = await gh`gh pr checks ${pr.number} --required --json name,bucket,link`;
+  /**
+   * The PR's check runs and commit statuses from `gh pr view --json statusCheckRollup`: it works on every gh version (`gh pr checks`
+   * has no `--json` before 2.50) and needs only the read access to the PR that the token already has, unlike the Checks REST endpoints.
+   * Entries are mapped to the buckets `gh pr checks` used (pass, fail, pending, cancel).
+   */
+  const checkRuns = async (pr: BunkerPr): Promise<{ checks: Check[]; error?: string }> => {
+    const r = await gh`gh pr view ${pr.number} --json statusCheckRollup`;
+    let rollup: any;
     try {
-      const list = JSON.parse(r.stdout.toString()) as Check[];
-      if (Array.isArray(list)) return { checks: list };
+      rollup = JSON.parse(r.stdout.toString()).statusCheckRollup;
     } catch {}
-    const error = r.stderr.toString().trim().split("\n")[0] || `gh pr checks exited ${r.exitCode} without output`;
-    return { checks: [], error };
+    if (r.exitCode !== 0 || !Array.isArray(rollup)) return { checks: [], error: r.stderr.toString().trim().split("\n")[0] || `gh pr view exited ${r.exitCode} without a check rollup` };
+    const checks: Check[] = [];
+    for (const c of rollup) {
+      const name = c?.name ?? c?.context; // CheckRun | StatusContext
+      if (!name) continue;
+      const done = String(c.conclusion ?? "").toUpperCase();
+      const state = String(c.state ?? "").toUpperCase();
+      const bucket = done
+        ? ["SUCCESS", "NEUTRAL", "SKIPPED"].includes(done) ? "pass" : done === "CANCELLED" ? "cancel" : "fail"
+        : state === "SUCCESS" ? "pass" : state === "FAILURE" || state === "ERROR" ? "fail" : "pending";
+      checks.push({ name, bucket, link: c.detailsUrl ?? c.targetUrl ?? "" });
+    }
+    return { checks };
   };
 
   /** Contexts the base branch requires, from rulesets and classic protection (either may be unreadable with the run's token). */
@@ -198,22 +213,12 @@ export function createShepherd(o: ShepherdOptions) {
     return [...out];
   };
 
-  /**
-   * `gh pr checks --required` reports nothing when the requirement lives in a ruleset or classic branch protection it does not map.
-   * Then the PR's full check list is narrowed to the contexts the base branch requires; when those can't be read either, every check counts.
-   */
+  /** The PR's checks narrowed to the contexts the base branch requires; when those can't be read, every check counts. */
   const checksFor = async (pr: BunkerPr): Promise<{ checks: Check[]; error?: string }> => {
-    const req = await requiredChecks(pr);
-    if (!req.error && req.checks.length) return req;
-    const r = await gh`gh pr checks ${pr.number} --json name,bucket,link`;
-    let all: Check[] = [];
-    try {
-      const list = JSON.parse(r.stdout.toString());
-      if (Array.isArray(list)) all = list;
-    } catch {}
-    if (!all.length) return req;
+    const all = await checkRuns(pr);
+    if (all.error || !all.checks.length) return all;
     const contexts = await requiredContexts(pr);
-    return { checks: contexts.length ? all.filter((c) => contexts.includes(c.name)) : all };
+    return { checks: contexts.length ? all.checks.filter((c) => contexts.includes(c.name)) : all.checks };
   };
 
   /** The failed jobs' logs, or why they can't be read (usually: the token lacks Actions: read). */

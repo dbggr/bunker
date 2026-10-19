@@ -38,11 +38,7 @@ const fail = (msg) => { process.stderr.write(msg + "\\n"); process.exit(1); };
 if (cmd === "pr list") {
   console.log(JSON.stringify(s.prs.map((p) => ({ ...p, comments: [...(p.comments || []), ...(s.comments[p.number] || []).map((body) => ({ body }))].map((c) => ({ author: { login: "bunker-bot" }, ...c })), labels: [...(p.labels || []), ...(s.labels[p.number] || []).map((name) => ({ name }))] }))));
 } else if (cmd === "pr checks") {
-  const checks = s.checks[n] || [];
-  if (s.checkError) fail(s.checkError);
-  if (s.requiredEmpty && args.includes("--required")) fail(s.requiredEmpty);
-  console.log(JSON.stringify(checks));
-  process.exit(checks.some((c) => c.bucket === "fail") ? 1 : checks.some((c) => c.bucket === "pending") ? 8 : 0);
+  fail("unknown flag: --json"); // gh 2.46 has no --json on pr checks: nothing may depend on it
 } else if (cmd === "run view") {
   if (s.logDenied) fail("HTTP 403: Resource not accessible by personal access token");
   console.log(s.logs[args[2]] || "no log");
@@ -51,6 +47,12 @@ if (cmd === "pr list") {
   write(s);
 } else if (cmd === "pr edit") {
   fail("GraphQL: Projects (classic) is being deprecated");
+} else if (cmd === "pr view" && args.includes("statusCheckRollup")) {
+  if (s.checkError) fail(s.checkError);
+  const status = { pass: { status: "COMPLETED", conclusion: "SUCCESS" }, fail: { status: "COMPLETED", conclusion: "FAILURE" }, pending: { status: "IN_PROGRESS", conclusion: "" }, cancel: { status: "COMPLETED", conclusion: "CANCELLED" } };
+  const rollup = (s.checks[n] || []).map((c) => ({ __typename: "CheckRun", name: c.name, detailsUrl: c.link, ...status[c.bucket] }));
+  for (const c of s.statuses?.[n] || []) rollup.push({ __typename: "StatusContext", context: c.name, state: c.state, targetUrl: c.link || "" });
+  console.log(JSON.stringify({ statusCheckRollup: rollup }));
 } else if (cmd === "pr view") {
   console.log(JSON.stringify({ state: (s.states || {})[n] || "OPEN", ...((s.views || {})[n] || {}) }));
 } else if (cmd === "label create" || cmd === "issue edit") {
@@ -185,11 +187,10 @@ describe("pure helpers", () => {
 });
 
 describe("shepherd pass", () => {
-  test("--required reports nothing but a ruleset requires the failing check: it still reaches fixRed", async () => {
+  test("gh pr checks --json is unavailable (gh 2.46) and a ruleset requires the failing check: it still reaches fixRed", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
     w.state.prs = [prJson(5, "fix/7-thing", sha)];
-    w.state.requiredEmpty = "no required checks reported on the 'fix/7-thing' branch";
     w.state.rules = [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "phpunit" }] } }];
     w.state.checks[5] = [{ name: "phpunit", bucket: "fail", link: "https://github.com/o/r/actions/runs/123/job/9" }, { name: "lint", bucket: "fail", link: "https://github.com/o/r/actions/runs/124/job/9" }];
     w.state.logs["123"] = "3 failures";
@@ -201,11 +202,34 @@ describe("shepherd pass", () => {
     expect(prompts[0]).not.toContain("lint");
   });
 
-  test("--required reports nothing and the protection cannot be read: the full check list decides", async () => {
+  test("a required legacy commit status that is red reaches fixRed", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
     w.state.prs = [prJson(5, "fix/7-thing", sha)];
-    w.state.requiredEmpty = "no required checks reported";
+    w.state.rules = [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "ci/legacy" }] } }];
+    w.state.checks[5] = GREEN;
+    w.state.statuses = { 5: [{ name: "ci/legacy", state: "FAILURE", link: "https://github.com/o/r/actions/runs/123/job/9" }] };
+    w.state.logs["123"] = "boom";
+    w.save();
+    const p = await shepherd(w, fakeAgent(COMMIT_FIX, [])).pass();
+    expect(p.entries[0]!.action).toBe("fixed-ci");
+  });
+
+  test("a 403 reading the checks is a visible waiting decision naming the error, and uses no Checks-permission endpoint", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs = [prJson(5, "fix/7-thing", sha)];
+    w.state.checkError = "HTTP 403: Resource not accessible by personal access token";
+    w.save();
+    const p = await shepherd(w, fakeAgent("true")).pass();
+    expect(p.entries[0]).toMatchObject({ action: "waiting", detail: expect.stringContaining("HTTP 403") });
+    expect(w.calls().some((c) => /check-runs|\/status\b|pr checks/.test(c))).toBe(false);
+  });
+
+  test("the protection cannot be read: the full check list decides", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs = [prJson(5, "fix/7-thing", sha)];
     w.state.checks[5] = RED;
     w.save();
     const prompts: string[] = [];
@@ -217,7 +241,7 @@ describe("shepherd pass", () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
     w.state.prs = [prJson(5, "fix/7-thing", sha)];
-    w.state.checkError = "no required checks reported on the 'fix/7-thing' branch";
+    w.state.checkError = "HTTP 403: no required checks reported";
     w.save();
     const events: any[] = [];
     const p = await shepherd(w, fakeAgent("true"), { onEvent: (e: any) => events.push(e) }).pass();
