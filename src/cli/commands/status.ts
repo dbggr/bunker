@@ -6,6 +6,8 @@ import type { BunkerEvent, WatcherInfo } from "../../core/events.ts";
 
 export const STATUS_FILE = "watch-status.json";
 export const LOCK_FILE = "watch.lock";
+/** How long finished runs stay in the status file (the hub's history age limit). */
+export const HISTORY_MS = 7 * DAY_MS;
 
 export interface CurrentRun {
   issue: number;
@@ -70,7 +72,11 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
   const file = join(dir, STATUS_FILE);
   const { parallel = 1, ...fileInit } = init;
   let nextPassAt: number | undefined;
-  const state: WatchStatusFile = { ...fileInit, startedAt: Date.now(), current: [], merged: [], noChange: [], failed: [], shepherd: [] };
+  // Finished runs are kept across restarts for the history window, so a page replaying older history can still finish them.
+  const kept = readStatusFile(dir);
+  const since = Date.now() - HISTORY_MS;
+  const recent = <T extends { at: number }>(xs: T[] | undefined): T[] => (xs ?? []).filter((x) => typeof x?.at === "number" && x.at >= since);
+  const state: WatchStatusFile = { ...fileInit, startedAt: Date.now(), current: [], merged: recent(kept?.merged), noChange: recent(kept?.noChange), failed: recent(kept?.failed), shepherd: [] };
   const save = () => {
     try {
       mkdirSync(dir, { recursive: true });
@@ -82,6 +88,8 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
   };
   save();
   return {
+    /** The merged and failed records as they stand. */
+    snapshot: () => ({ merged: state.merged, failed: state.failed }),
     /** When the next queue pass starts (undefined while one runs). */
     nextPass(at: number | undefined) {
       nextPassAt = at;
@@ -103,9 +111,10 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
       } else return;
       save();
     },
-    merged(r: Omit<MergedRun, "at">) {
+    /** `at` is when it really merged, for a merge found after the fact. */
+    merged(r: Omit<MergedRun, "at"> & { at?: number }) {
       state.current = state.current.filter((c) => c.issue !== r.issue);
-      state.merged.push({ ...r, at: Date.now() });
+      state.merged.push({ ...r, at: r.at ?? Date.now() });
       state.failed = state.failed.filter((f) => f.issue !== r.issue);
       save();
     },
@@ -120,10 +129,10 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
       state.shepherd = runs.map((r) => ({ ...r, at: Date.now() }));
       save();
     },
-    failed(r: Omit<FailedRun, "at">) {
+    failed(r: Omit<FailedRun, "at"> & { at?: number }) {
       state.current = state.current.filter((c) => c.issue !== r.issue);
       state.failed = state.failed.filter((f) => f.issue !== r.issue);
-      state.failed.push({ ...r, at: Date.now() });
+      state.failed.push({ ...r, at: r.at ?? Date.now() });
       save();
     },
   };

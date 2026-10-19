@@ -72,3 +72,47 @@ export async function listBunkerPrs(cwd: string, env: Env): Promise<BunkerPr[] |
     return undefined;
   }
 }
+
+/** How a bunker PR ended: merged, or closed without merging. */
+export interface PrOutcome {
+  pr: number;
+  url: string;
+  issue: number;
+  outcome: "merged" | "closed";
+  /** Epoch ms of the merge or close. */
+  at: number;
+}
+
+/**
+ * The final state of each issue's latest bunker PR that merged or closed since `sinceMs`; an issue with a PR still open is left out.
+ * Undefined when gh can't say.
+ */
+export async function listRecentPrOutcomes(cwd: string, env: Env, sinceMs: number): Promise<PrOutcome[] | undefined> {
+  const r = await $`gh pr list --state all --limit 200 --json ${FIELDS + ",state,mergedAt,closedAt"}`.cwd(cwd).env(env).nothrow().quiet();
+  if (r.exitCode !== 0) return undefined;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(r.stdout.toString() || "[]");
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(raw)) return undefined;
+  const prs = parseBunkerPrs(raw);
+  const byNumber = new Map((raw as Record<string, any>[]).map((p) => [p?.number, p]));
+  const open = new Set<number>();
+  const latest = new Map<number, PrOutcome>();
+  for (const pr of prs) {
+    const p = byNumber.get(pr.number)!;
+    if (p.state === "OPEN") {
+      open.add(pr.issue);
+      continue;
+    }
+    const merged = p.state === "MERGED";
+    const at = Date.parse(String(merged ? p.mergedAt : p.closedAt));
+    if (!merged && p.state !== "CLOSED") continue;
+    if (!Number.isFinite(at) || at < sinceMs) continue;
+    const o = latest.get(pr.issue);
+    if (!o || at > o.at) latest.set(pr.issue, { pr: pr.number, url: pr.url, issue: pr.issue, outcome: merged ? "merged" : "closed", at });
+  }
+  return [...latest.values()].filter((o) => !open.has(o.issue));
+}
