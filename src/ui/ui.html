@@ -270,13 +270,36 @@ const Model = (() => {
     for (const [issue, b] of r.blocked) if (!rows.some((x) => x.issue === issue) && !(r.runs.get("#" + issue) || {}).stage) rows.push({ issue, tags: [], blockedOn: b });
     return rows;
   }
+  /** The tab's GitHub "owner/repo", or "" for a repo that fell back to its folder name. */
+  const slug = (name) => (/^[\w.-]+\/[\w.-]+$/.test(name || "") ? name : "");
+  const GH = "https:" + "//github.com/";
+  const refUrl = (sl, kind, n) => (sl ? GH + sl + "/" + kind + "/" + n : "");
+  // One pass over free text: a GitHub issue/PR URL, any other URL (left alone), "PR #N", or a bare "#N" that is not part of a word, URL or code-like token.
+  const REFS = /(https?:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(issues|pull)\/(\d+)(?![\w/]))|(https?:\/\/[^\s<>"'`)\]]+)|((?<![\w`])PR #(\d+)(?!\w))|((?<![\w/&#`.:=-])#(\d+)(?!\w))/g;
+  /** Text split into plain and linked pieces: [{ text }, { text, url }]. Links only for a real owner/repo tab, except full GitHub URLs. */
+  function refs(text, sl) {
+    const out = [];
+    const plain = (t) => { if (!t) return; const l = out[out.length - 1]; if (l && !l.url) l.text += t; else out.push({ text: t }); };
+    let at = 0;
+    String(text == null ? "" : text).replace(REFS, (m, full, fslug, fkind, fnum, other, pr, prN, bare, bareN, off, whole) => {
+      plain(whole.slice(at, off));
+      at = off + m.length;
+      if (full) out.push({ text: (fkind === "pull" ? "PR #" : "#") + fnum, url: GH + fslug + "/" + fkind + "/" + fnum });
+      else if (pr && sl) out.push({ text: m, url: refUrl(sl, "pull", prN) });
+      else if (bare && sl) out.push({ text: m, url: refUrl(sl, "issues", bareN) });
+      else plain(m);
+      return m;
+    });
+    plain(String(text == null ? "" : text).slice(at));
+    return out;
+  }
   /** Open PRs: the watcher snapshot is the truth when present, else shepherd notes minus finished runs. Links fall back to the tab's owner/repo. */
   function shepherd(r, name) {
     let rows;
     if (r.watcher) rows = r.watcher.shepherd.map((s) => ({ ...s }));
     else rows = [...r.shepherd.values()].filter((s) => { const x = r.runs.get("#" + s.issue); return !(x && (x.stage === "merged" || x.stage === "failed")); }).map((s) => ({ ...s }));
-    const slug = /^[\w.-]+\/[\w.-]+$/.test(name || "") ? name : "";
-    if (slug) for (const s of rows) if (!s.prUrl) s.prUrl = "https:" + "//github.com/" + slug + "/pull/" + s.pr;
+    const sl = slug(name);
+    if (sl) for (const s of rows) if (!s.prUrl) s.prUrl = refUrl(sl, "pull", s.pr);
     return rows;
   }
   /** Tab label: status dot kind plus a count ("2 running", "1 failed", "idle"). */
@@ -310,7 +333,7 @@ const Model = (() => {
     return { nextPassAt: r.watcher && r.watcher.nextPassAt, spentToday: r.spend ? r.spend.day.spentUsd : undefined, mergedToday: merged.length, lastMerge: last ? { issue: last.issue, prUrl: last.prUrl, at: last.at } : merged[0] ? { issue: merged[0].issue, prUrl: merged[0].prUrl, at: merged[0].at } : undefined };
   }
   const watcherLive = (r, now) => !!r.watcher && ([...r.runs.values()].some((x) => !x.done) || (r.watcher.nextPassAt !== undefined && r.watcher.nextPassAt > now - 60000));
-  return { STAGES, TRACK, newRepo, ingest, track, groups, queue, shepherd, tab, spend, idle, watcherLive };
+  return { STAGES, TRACK, newRepo, ingest, track, groups, queue, shepherd, slug, refs, refUrl, tab, spend, idle, watcherLive };
 })();
 </script>
 <script>
@@ -334,6 +357,11 @@ function h(tag, props, ...kids) {
 }
 const span = (cls, text) => h("span", { class: cls }, text);
 const link = (url, text) => (url ? h("a", { href: url, target: "_blank", rel: "noreferrer" }, text) : "");
+/** Free text as text nodes and <a> elements (built as DOM nodes, no markup parsing); issue/PR references link when the tab is an owner/repo. */
+const rich = (text, sl) => Model.refs(text, sl).map((p) => (p.url ? link(p.url, p.text) : p.text));
+/** A reference element: an <a> keeping the element's own class when it can link, else the plain span. */
+const ref = (cls, text, url) => (url ? h("a", { class: cls, href: url, target: "_blank", rel: "noreferrer" }, text) : span(cls, text));
+const issueRef = (cls, sl, n, url) => ref(cls, "#" + n, url || Model.refUrl(sl, "issues", n));
 const num = (key) => String(key).replace(/^#/, "");
 const keyLabel = (key) => (String(key).startsWith("#") ? "#" + num(key) : String(key));
 const prNum = (url) => { const m = /\/pull\/(\d+)/.exec(url || ""); return m ? "PR #" + m[1] : "PR"; };
@@ -351,41 +379,42 @@ function spendCard(sp) {
   return card;
 }
 
-const filedLinks = (list) => list.map((f) => h("div", { class: "filed" }, span("num", "#" + f.number), link(f.url, f.title) || span("", f.title)));
+const filedLinks = (list, sl) => list.map((f) => h("div", { class: "filed" }, issueRef("num", sl, f.number, f.url), link(f.url, f.title) || span("", f.title)));
 
 function runCard(repo, x, now) {
   const id = repo.name + "\0" + x.key;
   const isOpen = open.has(id);
+  const sl = Model.slug(repo.name);
   const card = h("article", { class: "card run" + (isOpen ? " open" : "") });
   const btn = h("button", { class: "show", type: "button", "aria-expanded": String(isOpen), onclick: () => { isOpen ? open.delete(id) : open.add(id); render(); } }, isOpen ? "Hide log" : "Show log");
   const stat = [x.start ? clock(now - x.start) : "", runCost(x), x.tokens ? tokens(x.tokens) + " tok" : ""].filter(Boolean).join(" · ");
-  const feed = h("div", { class: "feed", role: "log", "aria-label": "Run log", "data-id": id }, x.log.map((l) => h("div", { class: l.kind }, span("ts", hhmm(l.t)), span("", l.text))));
+  const feed = h("div", { class: "feed", role: "log", "aria-label": "Run log", "data-id": id }, x.log.map((l) => h("div", { class: l.kind }, span("ts", hhmm(l.t)), span("", rich(l.text, sl)))));
   card.append(
-    h("div", { class: "head" }, span("num", x.kind === "audit" ? "Audit" : keyLabel(x.key)), span("title", x.kind === "audit" ? (x.title || "").replace(/^Audit:?\s*/, "") : x.title || ""), span("stat", stat)),
+    h("div", { class: "head" }, x.kind === "audit" ? span("num", "Audit") : String(x.key).startsWith("#") ? issueRef("num", sl, num(x.key)) : span("num", keyLabel(x.key)), span("title", x.kind === "audit" ? (x.title || "").replace(/^Audit:?\s*/, "") : x.title || ""), span("stat", stat)),
     h("ol", { class: "track", "aria-label": "Stages" }, Model.track(x.stage, x.kind).map((s) => h("li", { class: s.state }, span("m", s.state === "done" ? "✓" : s.state === "current" ? "●" : "○"), s.name, s.state === "current" ? span("sr", " (current)") : ""))),
     h("div", { class: "meta" }, x.round !== undefined ? span("", "round " + x.round + (x.role ? " · " + x.role : "")) : "", x.model ? span("chip", x.model) : "", span("grow", ""), btn),
-    x.kind === "audit" && x.filed.length ? h("div", { class: "filedlist", "aria-label": "Issues filed" }, filedLinks(x.filed)) : "",
+    x.kind === "audit" && x.filed.length ? h("div", { class: "filedlist", "aria-label": "Issues filed" }, filedLinks(x.filed, sl)) : "",
     h("div", { class: "log" }, x.logPath ? h("div", { class: "logpath" }, x.logPath) : "", feed));
   return card;
 }
 
 const clockIcon = () => document.getElementById("clock-icon").content.firstElementChild.cloneNode(true);
 
-function waitingRow(w) {
+function waitingRow(sl, w) {
   return h("article", { class: "card wait" },
     clockIcon(),
-    span("num", keyLabel(w.run.key)), span("title", w.run.title || ""), span("muted", "auto-merge armed" + (w.ci && w.ci !== "armed" ? " · " + w.ci : "")), link(w.prUrl, prNum(w.prUrl)));
+    issueRef("num", sl, num(w.run.key)), span("title", w.run.title || ""), span("muted", "auto-merge armed", w.ci && w.ci !== "armed" ? [" · ", rich(w.ci, sl)] : ""), link(w.prUrl, prNum(w.prUrl)));
 }
 
-function finishedList(list) {
+function finishedList(list, sl) {
   return h("div", { class: "card done-list" }, list.map((f) => {
     const failed = f.outcome === "failed";
     const st = [f.elapsed !== undefined ? clock(f.elapsed) : "", f.cost !== undefined ? usd(f.cost) : ""].filter(Boolean).join(" · ");
     return h("div", { class: "fin" },
       h("span", { class: "ico" + (failed ? " bad" : f.outcome === "no change" ? " nochange" : ""), role: "img", "aria-label": f.outcome }, failed ? "✕" : "✓"),
-      span("n", f.kind === "audit" ? "Audit" : "#" + f.issue), span("title", f.title || ""),
-      f.kind === "audit" && !failed ? h("span", { class: "note" }, f.outcome, f.filed.length ? [" · ", f.filed.map((i, n) => [n ? ", " : "", link(i.url, "#" + i.number) || "#" + i.number])] : "") :
-      failed || f.outcome === "no change" ? h("span", { class: "note" + (failed ? " bad" : ""), title: f.reason || "" }, f.reason || f.outcome) : h("span", { class: "note" }, link(f.prUrl, prNum(f.prUrl)) || "merged"),
+      f.kind === "audit" ? span("n", "Audit") : issueRef("n", sl, f.issue), span("title", f.title || ""),
+      f.kind === "audit" && !failed ? h("span", { class: "note" }, f.outcome, f.filed.length ? [" · ", f.filed.map((i, n) => [n ? ", " : "", issueRef("", sl, i.number, i.url)])] : "") :
+      failed || f.outcome === "no change" ? h("span", { class: "note" + (failed ? " bad" : ""), title: f.reason || "" }, rich(f.reason || f.outcome, sl)) : h("span", { class: "note" }, link(f.prUrl, prNum(f.prUrl)) || "merged"),
       span("st", st));
   }));
 }
@@ -396,6 +425,7 @@ function sideCard(name, kids, emptyText) {
 
 function renderPane(r, now) {
   const g = Model.groups(r, now);
+  const sl = Model.slug(r.name);
   const pane = h("div", { class: "pane sel" });
   const col = h("div", { class: "col-main" });
   const sp = Model.spend(r);
@@ -410,14 +440,14 @@ function renderPane(r, now) {
       h("div", { class: "facts" },
         h("span", null, "Today ", h("b", null, i.spentToday !== undefined ? usd(i.spentToday) : "—")),
         h("span", null, "Merged today ", h("b", null, String(i.mergedToday))),
-        h("span", null, "Last merge ", i.lastMerge ? ["#" + i.lastMerge.issue + " ", link(i.lastMerge.prUrl, prNum(i.lastMerge.prUrl)), " · " + ago(i.lastMerge.at, now)] : h("b", null, "none")))));
+        h("span", null, "Last merge ", i.lastMerge ? [issueRef("", sl, i.lastMerge.issue), " ", link(i.lastMerge.prUrl, prNum(i.lastMerge.prUrl)), " · " + ago(i.lastMerge.at, now)] : h("b", null, "none")))));
   }
   if (g.running.length) col.append(h("section", null, h("h2", null, "Running · " + g.running.length), g.running.map((x) => runCard(r, x, now))));
-  if (g.waiting.length) col.append(h("section", null, h("h2", null, "Waiting for merge · " + g.waiting.length), g.waiting.map(waitingRow)));
+  if (g.waiting.length) col.append(h("section", null, h("h2", null, "Waiting for merge · " + g.waiting.length), g.waiting.map((w) => waitingRow(sl, w))));
   if (g.finished.length) {
     const audits = g.finished.filter((f) => f.kind === "audit" && f.outcome !== "failed").length;
     const failed = g.finished.filter((f) => f.outcome === "failed").length, merged = g.finished.length - audits - failed;
-    col.append(h("section", null, h("h2", null, "Finished today · " + merged + " merged" + (audits ? " · " + audits + (audits === 1 ? " audit" : " audits") : "") + (failed ? " · " + failed + " failed" : "")), finishedList(g.finished)));
+    col.append(h("section", null, h("h2", null, "Finished today · " + merged + " merged" + (audits ? " · " + audits + (audits === 1 ? " audit" : " audits") : "") + (failed ? " · " + failed + " failed" : "")), finishedList(g.finished, sl)));
   }
   const q = Model.queue(r);
   const queued = q.filter((x) => !x.blockedOn), blocked = q.filter((x) => x.blockedOn);
@@ -425,12 +455,12 @@ function renderPane(r, now) {
   const w = r.watcher;
   const side = h("aside", { class: "col-side" },
     sideCard("Queue · next up", [
-      ...queued.map((x, n) => h("div", { class: "q" }, span("pos", String(n + 1)), span("num", "#" + x.issue), h("span", { class: "grow" }, x.tags.map(tagEl)))),
-      ...(blocked.length ? [h("div", { class: "blocked" }, blocked.map((x) => h("div", null, "#" + x.issue + " waiting on #" + x.blockedOn.number + " (blocked)")))] : []),
+      ...queued.map((x, n) => h("div", { class: "q" }, span("pos", String(n + 1)), issueRef("num", sl, x.issue), h("span", { class: "grow" }, x.tags.map(tagEl)))),
+      ...(blocked.length ? [h("div", { class: "blocked" }, blocked.map((x) => h("div", null, issueRef("", sl, x.issue), " waiting on ", issueRef("", sl, x.blockedOn.number), " (blocked)")))] : []),
     ], "empty"),
     sideCard("Shepherd · open PRs", Model.shepherd(r, r.name).map((s) => h("div", { class: "shep" },
       h("div", { class: "top" }, link(s.prUrl, "PR #" + s.pr) || span("mono", "PR #" + s.pr), span("badge " + String(s.action).replace(/[^a-z-]/g, ""), s.action)),
-      s.detail ? span("note", s.detail) : "")), "no open bunker PRs"),
+      s.detail ? span("note", rich(s.detail, sl)) : "")), "no open bunker PRs"),
     sideCard("Watcher", w ? [h("dl", { class: "kv" },
       h("dt", null, "version"), h("dd", null, w.version),
       h("dt", null, "up"), h("dd", null, clock(now - w.startedAt)),
