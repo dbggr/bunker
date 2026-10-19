@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { removedUserKeys, readUserConfigRaw, userConfigPath } from "../../core/user-config.ts";
 import { formatSpend, loadSpendCaps } from "../../core/spend.ts";
+import { capSources, capsFrom } from "../../core/settings.ts";
 import { AUTH_VARS, loadBunkerEnv } from "../../core/env.ts";
 import { DEFAULT_MODEL_LABEL, resolveModels } from "../../agents/models.ts";
 import { ConfigError, effectiveSettings, formatValue, loadRepoConfig } from "../../core/config.ts";
@@ -353,8 +354,13 @@ export async function runDoctor(opts: { cwd: string; env?: Env; fetch?: typeof g
   for (const k of removedUserKeys(userKeys)) add({ id: "config-removed-key", group: "config", label: "removed config key", ok: false, required: false, detail: `${k.old} in ${userConfigPath(env)}`, fix: `rename ${k.old} to ${k.new}` });
 
   // spend (notional USD logged by bunker watch)
-  const caps = await loadSpendCaps(env).catch(() => ({}));
-  add({ id: "spend", group: "spend", label: "spend so far", ok: true, required: false, detail: formatSpend(join(cwd, ".bunker", "watch-spend.json"), caps) });
+  // The cap watch uses without flags: the repo's [watch] caps over the user-level ones (#482).
+  const fileCaps = await loadSpendCaps(env).catch(() => ({}));
+  const watchCaps = cfg?.watch ?? {};
+  const sources = capSources(watchCaps, fileCaps);
+  const where = (w: "day" | "month") => (sources[w] === "repo" ? ".bunker/config.toml" : sources[w] === "user" ? userConfigPath(env) : undefined);
+  const from = (["day", "month"] as const).flatMap((w) => (where(w) ? [`${w} cap from ${where(w)}`] : []));
+  add({ id: "spend", group: "spend", label: "spend so far", ok: true, required: false, detail: formatSpend(join(cwd, ".bunker", "watch-spend.json"), capsFrom(watchCaps, fileCaps)) + (from.length ? ` (${from.join(", ")}; --max-cost-day/--max-cost-month override)` : "") });
 
   // storage under .bunker/ that pruning keeps in check
   for (const dir of ["runs", "sessions"]) add({ id: `${dir}-size`, group: "repo", label: `.bunker/${dir}/ size`, ok: true, required: false, detail: formatBytes(dirSize(join(cwd, ".bunker", dir))) });
