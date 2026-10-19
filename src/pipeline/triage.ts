@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { emitStage, lineHook, type OnEvent } from "../core/events.ts";
 import { runSetup } from "../worktree/admin.ts";
+import { copyIntoWorktree, copyPatterns } from "../worktree/copy.ts";
 import { IdleTimeout, agentLimits, timeoutMessage, type Timeouts, type Sandbox } from "../sandboxes/exec.ts";
 import { stdinOf, sumUsage, type Agent, type Usage } from "../agents/agent.ts";
 import { fetchDefaultBranch } from "./audit.ts";
@@ -155,6 +156,7 @@ async function triageRun({ agent, sandbox, cwd = process.cwd(), mode = "dry", li
   try {
     const hook = lineHook(agent, { onEvent, role: "auditor" });
     const ctx = { worktree, gitCommonDir };
+    await copyIntoWorktree(repo, worktree, await copyPatterns(repo));
     const prep = await runSetup(sandbox, ctx, setup, timeouts);
     if (prep?.timedOut) throw new IdleTimeout(timeoutMessage("setup", prep.timedOut, timeouts));
     if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${prep.stdout.slice(-2000)}`);

@@ -242,3 +242,17 @@ describe("sanitising filed issues", () => {
     expect(log).toContain("[REDACTED]");
   });
 });
+
+describe("runAudit() copy", () => {
+  test("copies the configured gitignored files into the worktree before setup", async () => {
+    const { repo } = await setup();
+    await Bun.write(join(repo, ".bunker/config.toml"), 'copy = ["backend/.env"]\n');
+    await Bun.write(join(repo, ".gitignore"), ".env\n");
+    await $`git -C ${repo} add -A`;
+    await $`git -C ${repo} commit -q -m cfg`;
+    await $`git -C ${repo} push -q origin main`;
+    await Bun.write(join(repo, "backend/.env"), "A=1\n");
+    const r = await runAudit({ cwd: repo, agent: fakeAgent(blocks()), sandbox: noSandbox(), setup: "test -f backend/.env" });
+    expect(r.filed).toEqual([]);
+  });
+});
