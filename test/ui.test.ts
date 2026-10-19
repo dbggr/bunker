@@ -364,6 +364,20 @@ describe("hub page model", () => {
 
   const wsnap = (o: object) => ({ type: "watcher", watcher: { version: "1", startedAt: 1, parallel: 1, merged: [], noChange: [], failed: [], shepherd: [], ...o } });
 
+  test("shepherd rows: state badge, link from owner/repo, snapshot is the source of truth", async () => {
+    const M = await load();
+    const r = M.newRepo();
+    M.ingest(r, ev({ type: "note", issue: 3, text: "PR #12: green" }));
+    M.ingest(r, ev({ type: "note", issue: 4, text: "PR #13: waiting: waiting for test" }));
+    const rows = M.shepherd(r, "dbggr/bunker");
+    expect(rows[0]).toMatchObject({ pr: 12, action: "green", detail: "", prUrl: "https://github.com/dbggr/bunker/pull/12" });
+    expect(rows[1]).toMatchObject({ pr: 13, action: "waiting", detail: "waiting for test" });
+    M.ingest(r, ev({ type: "stage", issue: 4, name: "merged" }));
+    expect(M.shepherd(r, "dbggr/bunker").map((s: any) => s.pr)).toEqual([12]);
+    M.ingest(r, ev(wsnap({ shepherd: [{ issue: 9, pr: 20, action: "green", prUrl: "http://pr/20" }] })));
+    expect(M.shepherd(r, "dbggr/bunker")).toEqual([{ issue: 9, pr: 20, action: "green", prUrl: "http://pr/20" }]);
+  });
+
   test("awaiting-merge run shows as a waiting card, then merged moves it to Finished today", async () => {
     const M = await load();
     const r = M.newRepo();
