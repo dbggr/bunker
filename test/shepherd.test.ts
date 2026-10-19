@@ -47,6 +47,12 @@ if (cmd === "pr list") {
   write(s);
 } else if (cmd === "pr edit") {
   fail("GraphQL: Projects (classic) is being deprecated");
+} else if (cmd === "pr view" && args.includes("statusCheckRollup")) {
+  if (s.checkError) fail(s.checkError);
+  const status = { pass: { status: "COMPLETED", conclusion: "SUCCESS" }, fail: { status: "COMPLETED", conclusion: "FAILURE" }, pending: { status: "IN_PROGRESS", conclusion: "" }, cancel: { status: "COMPLETED", conclusion: "CANCELLED" } };
+  const rollup = (s.checks[n] || []).map((c) => ({ __typename: "CheckRun", name: c.name, detailsUrl: c.link, ...status[c.bucket] }));
+  for (const c of s.statuses?.[n] || []) rollup.push({ __typename: "StatusContext", context: c.name, state: c.state, targetUrl: c.link || "" });
+  console.log(JSON.stringify({ statusCheckRollup: rollup }));
 } else if (cmd === "pr view") {
   console.log(JSON.stringify({ state: (s.states || {})[n] || "OPEN", ...((s.views || {})[n] || {}) }));
 } else if (cmd === "label create" || cmd === "issue edit") {
@@ -57,13 +63,6 @@ if (cmd === "pr list") {
   const path = args.find((a) => a.startsWith("repos/")) || "";
   const field = (k) => (args.find((a) => a.startsWith(k + "[]=")) || "").slice(k.length + 3);
   if (path.endsWith("/labels") && args.includes("POST")) { const k = path.split("/")[4]; (s.labels[k] = s.labels[k] || []).push(field("labels")); write(s); }
-  else if (path.includes("/check-runs")) {
-    if (s.checkError) fail(s.checkError);
-    const sha = path.split("/")[4];
-    const pr = s.prs.find((p) => p.headRefOid === sha);
-    const status = { pass: ["completed", "success"], fail: ["completed", "failure"], pending: ["in_progress", null], cancel: ["completed", "cancelled"] };
-    for (const c of (pr && s.checks[pr.number]) || []) console.log(JSON.stringify([c.name, status[c.bucket][0], status[c.bucket][1], c.link]));
-  }
   else if (path.includes("/rules/branches/")) console.log(JSON.stringify(s.rules || []));
   else if (path.includes("/protection/")) fail("HTTP 404: Not Found");
   else if (path.endsWith("/update-branch")) { if (s.updateFails) fail("HTTP 422"); }
@@ -201,6 +200,30 @@ describe("shepherd pass", () => {
     expect(p.entries[0]!.action).toBe("fixed-ci");
     expect(prompts[0]).toContain("phpunit");
     expect(prompts[0]).not.toContain("lint");
+  });
+
+  test("a required legacy commit status that is red reaches fixRed", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs = [prJson(5, "fix/7-thing", sha)];
+    w.state.rules = [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "ci/legacy" }] } }];
+    w.state.checks[5] = GREEN;
+    w.state.statuses = { 5: [{ name: "ci/legacy", state: "FAILURE", link: "https://github.com/o/r/actions/runs/123/job/9" }] };
+    w.state.logs["123"] = "boom";
+    w.save();
+    const p = await shepherd(w, fakeAgent(COMMIT_FIX, [])).pass();
+    expect(p.entries[0]!.action).toBe("fixed-ci");
+  });
+
+  test("a 403 reading the checks is a visible waiting decision naming the error, and uses no Checks-permission endpoint", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs = [prJson(5, "fix/7-thing", sha)];
+    w.state.checkError = "HTTP 403: Resource not accessible by personal access token";
+    w.save();
+    const p = await shepherd(w, fakeAgent("true")).pass();
+    expect(p.entries[0]).toMatchObject({ action: "waiting", detail: expect.stringContaining("HTTP 403") });
+    expect(w.calls().some((c) => /check-runs|\/status\b|pr checks/.test(c))).toBe(false);
   });
 
   test("the protection cannot be read: the full check list decides", async () => {

@@ -15,7 +15,7 @@ An agent runs in a container with the issue worktree and the Claude token. The c
 
 `BUNKER_GH_TOKEN` is a fine-grained token for one repository: Contents RW, Pull requests RW, Issues RW, Metadata R.
 
-- Checks and Commit statuses are absent because `--merge` leaves reading CI to GitHub auto-merge (the shepherd reads the required checks of a PR through the REST check-runs API, which needs no extra permission on a repo where your token already reads the PR).
+- Checks and Commit statuses are absent because `--merge` leaves reading CI to GitHub auto-merge (the shepherd reads the checks of a PR, check runs and legacy commit statuses alike, through `gh pr view --json statusCheckRollup`, which only needs the Pull requests read access; the Checks REST endpoints would need Checks: read, so it avoids them).
 - Actions: Read is optional. The shepherd uses it only to read the log of a failed CI job (`gh run view`, failed jobs only). Without it, a red check is handed to a human (`bunker:failed` plus a notification) instead of a fix agent. Never grant Actions: Write.
 - Workflows is absent so bunker can't change CI definitions.
 - Administration is absent so it can't alter branch protection or repo settings.

@@ -168,20 +168,27 @@ export function createShepherd(o: ShepherdOptions) {
   const entry = (pr: BunkerPr, action: ShepherdAction, detail?: string): ShepherdEntry => ({ pr: pr.number, url: pr.url, issue: pr.issue, action, ...(detail ? { detail: redact(detail) } : {}) });
 
   /**
-   * The check runs of the PR's head commit, read through the REST API: `gh pr checks --json` does not exist before gh 2.50.
-   * Runs are mapped to the buckets `gh pr checks` used (pass, fail, pending, cancel).
+   * The PR's check runs and commit statuses from `gh pr view --json statusCheckRollup`: it works on every gh version (`gh pr checks`
+   * has no `--json` before 2.50) and needs only the read access to the PR that the token already has, unlike the Checks REST endpoints.
+   * Entries are mapped to the buckets `gh pr checks` used (pass, fail, pending, cancel).
    */
   const checkRuns = async (pr: BunkerPr): Promise<{ checks: Check[]; error?: string }> => {
-    const jq = '.check_runs[] | [.name, .status, (.conclusion // ""), (.html_url // "")] | @json';
-    const r = await gh`gh api repos/{owner}/{repo}/commits/${pr.headSha}/check-runs --paginate --jq ${jq}`;
-    if (r.exitCode !== 0) return { checks: [], error: r.stderr.toString().trim().split("\n")[0] || `gh api check-runs exited ${r.exitCode}` };
+    const r = await gh`gh pr view ${pr.number} --json statusCheckRollup`;
+    let rollup: any;
+    try {
+      rollup = JSON.parse(r.stdout.toString()).statusCheckRollup;
+    } catch {}
+    if (r.exitCode !== 0 || !Array.isArray(rollup)) return { checks: [], error: r.stderr.toString().trim().split("\n")[0] || `gh pr view exited ${r.exitCode} without a check rollup` };
     const checks: Check[] = [];
-    for (const l of r.stdout.toString().split("\n").filter(Boolean)) {
-      try {
-        const [name, status, conclusion, link] = JSON.parse(l) as string[];
-        const bucket = status !== "completed" ? "pending" : ["success", "neutral", "skipped"].includes(conclusion!) ? "pass" : conclusion === "cancelled" ? "cancel" : "fail";
-        checks.push({ name: name!, bucket, link: link! });
-      } catch {}
+    for (const c of rollup) {
+      const name = c?.name ?? c?.context; // CheckRun | StatusContext
+      if (!name) continue;
+      const done = String(c.conclusion ?? "").toUpperCase();
+      const state = String(c.state ?? "").toUpperCase();
+      const bucket = done
+        ? ["SUCCESS", "NEUTRAL", "SKIPPED"].includes(done) ? "pass" : done === "CANCELLED" ? "cancel" : "fail"
+        : state === "SUCCESS" ? "pass" : state === "FAILURE" || state === "ERROR" ? "fail" : "pending";
+      checks.push({ name, bucket, link: c.detailsUrl ?? c.targetUrl ?? "" });
     }
     return { checks };
   };
