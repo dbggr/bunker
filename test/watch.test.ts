@@ -709,6 +709,19 @@ describe("runWatch() notifications", () => {
     return { notes, notify: (title: string, body: string) => void notes.push({ title, body }) };
   };
 
+  test("every notification title names the repo", async () => {
+    const { repo } = await setup(three.slice(0, 1));
+    const { notes, notify } = collect();
+    const ctl = new AbortController();
+    await runWatch({
+      ...base, cwd: repo, agent: fakeAgent({ failing: ["First"] }), notify, signal: ctl.signal,
+      log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); },
+    });
+    expect(notes.length).toBeGreaterThan(1);
+    for (const n of notes) expect(n.title).toStartWith("bunker · origin: ");
+    expect(notes.some((n) => n.title === "bunker · origin: #1 failed")).toBe(true);
+  });
+
   test("a failed issue notifies once and its comment @mentions the configured login", async () => {
     const { repo, root } = await setup(three.slice(0, 1));
     const { notes, notify } = collect();
