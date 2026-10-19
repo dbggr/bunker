@@ -598,6 +598,23 @@ describe("shepherd pass", () => {
     expect((await s.pass()).merged).toEqual([]);
   });
 
+  test("a PR that disappears from the open list and is CLOSED is reported closed, not merged", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs.push(prJson(10, "fix/7-thing", sha));
+    w.state.checks[10] = PENDING;
+    w.save();
+    const s = shepherd(w, fakeAgent(COMMIT_FIX));
+    await s.pass();
+    w.state.prs = [];
+    w.state.states[10] = "CLOSED";
+    w.save();
+    const second = await s.pass();
+    expect(second.merged).toEqual([]);
+    expect(second.closed).toEqual([{ pr: 10, url: "https://github.com/o/r/pull/10", issue: 7, branch: "fix/7-thing" }]);
+    expect((await s.pass()).closed).toEqual([]);
+  });
+
   describe("landing check of a merged PR", () => {
     /** Merges `sha` the way GitHub's squash does (its tree on main in one commit), optionally dropping `drop` from the result. */
     const land = async (w: World, sha: string, drop?: string) => {
