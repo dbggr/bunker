@@ -164,7 +164,7 @@ export interface StatusReport {
   merged: MergedRun[];
   /** Closed without a change, with the reviewed verdict's reason. */
   noChange: NoChangeRun[];
-  failed: (FailedRun & { retry: string })[];
+  failed: (FailedRun & { retry?: string })[];
   /** Latest shepherd decision per open bunker PR; empty when the watcher is not alive. */
   shepherd: (ShepherdRun & { at: number })[];
   spend: { day: { spentUsd: number; capUsd?: number }; month: { spentUsd: number; capUsd?: number } };
@@ -223,7 +223,7 @@ export async function collectStatus({ repo, caps: configCaps = {}, queue, blocke
     noChange: mine?.noChange ?? [],
     failed: (mine?.failed ?? [])
       .filter((f) => !(mine?.merged ?? []).some((m) => m.issue === f.issue && m.at >= f.at))
-      .map((f) => ({ ...f, retry: retryCommand(f.issue) })),
+      .map((f) => ({ ...f, ...(f.status === "merge-unverified" ? {} : { retry: retryCommand(f.issue) }) })),
     shepherd: isAlive && mine ? mine.shepherd : [],
     spend: { day: spend(DAY_MS, caps.day), month: spend(MONTH_MS, caps.month) },
   };
@@ -262,7 +262,7 @@ export function formatStatus(r: StatusReport): string {
   }
   out.push("", `failed: ${r.failed.length}`);
   for (const f of r.failed) {
-    out.push(`  #${f.issue} ${f.status}: ${f.reason}`, `    ${f.prUrl ?? f.logPath ?? "no PR or log"}`, `    retry: ${f.retry}`);
+    out.push(`  #${f.issue} ${f.status}: ${f.reason}`, `    ${f.prUrl ?? f.logPath ?? "no PR or log"}`, ...(f.retry ? [`    retry: ${f.retry}`] : ["    the PR merged: do not re-queue the issue, check the missing lines by hand"]));
   }
   if (r.shepherd.length) {
     out.push("", `shepherd: ${r.shepherd.length} open PR(s)`);

@@ -639,6 +639,43 @@ describe("shepherd pass", () => {
       expect(m?.unverified).not.toContain("f.txt");
     });
 
+    /** A shared.txt the PR edits at both ends while another PR edits its middle on main before the squash. */
+    const sharedFile = async (dropPrEnd: boolean) => {
+      const w = await world();
+      const lines = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"];
+      await Bun.write(join(w.repo, "shared.txt"), lines.join("\n") + "\n");
+      await $`git -C ${w.repo} add . && git -C ${w.repo} commit -q -m shared && git -C ${w.repo} push -q origin main`;
+      const sha = await w.branch("fix/7-thing", { "shared.txt": ["A", ...lines.slice(1), "pr-end"].join("\n") + "\n" });
+      w.state.prs.push(prJson(10, "fix/7-thing", sha));
+      w.state.checks[10] = PENDING;
+      w.save();
+      const s = shepherd(w, fakeAgent(COMMIT_FIX));
+      await s.pass();
+      await Bun.write(join(w.repo, "shared.txt"), lines.map((l) => (l === "e" ? "E-from-main" : l)).join("\n") + "\n");
+      await $`git -C ${w.repo} commit -q -am other && git -C ${w.repo} push -q origin main`;
+      await $`git -C ${w.repo} merge -q --squash ${sha}`;
+      if (dropPrEnd) await Bun.write(join(w.repo, "shared.txt"), (await Bun.file(join(w.repo, "shared.txt")).text()).replace("pr-end\n", ""));
+      await $`git -C ${w.repo} commit -q -am squash && git -C ${w.repo} push -q origin main`;
+      const mergeCommit = (await $`git -C ${w.repo} rev-parse HEAD`.text()).trim();
+      w.state.prs = [];
+      w.state.states[10] = "MERGED";
+      w.state.views = { 10: { mergeCommit: { oid: mergeCommit }, headRefOid: sha, baseRefName: "main" } };
+      w.save();
+      return (await s.pass()).merged;
+    };
+
+    test("main changed the same file while the PR was open → no alarm", async () => {
+      expect(await sharedFile(false)).toEqual([{ pr: 10, url: "https://github.com/o/r/pull/10", issue: 7, branch: "fix/7-thing" }]);
+    });
+
+    test("a hunk of the PR missing from a file main also changed → unverified, naming the hunk", async () => {
+      const [m] = await sharedFile(true);
+      expect(m?.unverified).toContain("shared.txt");
+      expect(m?.unverified).toContain("+ pr-end");
+      expect(m?.unverified).not.toContain("E-from-main");
+      expect(m?.unverified).not.toContain("+ A");
+    });
+
     test("no merge commit recorded → unverified rather than silently trusted", async () => {
       const w = await world();
       const [m] = await merge(w, { "f.txt": "x\n" }, undefined, { mergeCommit: null });
