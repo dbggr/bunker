@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.10.0 - 2026-10-19
+
+- feat(watch): shepherd and reconcile waiting PRs on a timer while a run is in flight (#493) (#497)
+- fix(shepherd): update the branch of a bunker:review PR that is behind (#491) (#496)
+- docs: the live view's runs by state, audit cards and history files (#489) (#495)
+- feat(ui): repo card with GitHub quick links at the top of the sidebar (#480) (#492)
+- feat(watch): a better Ctrl-C: say what is in flight, release GitHub waits, re-queue on a forced stop, summarise (#484) (#494)
+- ui: every issue and PR reference in the hub is a link (#490)
+- fix(audit): re-check open issues before filing and tell the agent what is open (#473) (#488)
+- fix(ui): shepherd panel shows the PR state, links the PR and drops merged PRs (#479) (#487)
+- chore: daily spend cap of $100 for bunker's own watcher (#486)
+- fix(watch): repo spend caps beat the user-level ones; doctor shows the cap in effect (#483)
+- fix(watch): reconcile PRs that finished before a restart and persist finished runs (#481)
+- ui: runs under bunker watch stay at 'PR' forever; waiting-for-merge and merged never reach the hub (#476)
+- feat(ui): show bunker audit progress in the hub (#474)
+- docs(changelog): add #469 to v0.9.1 (#471)
+
 ## v0.9.1 - 2026-10-19
 
 - ui: hub visuals to match the concept (#469)
