@@ -113,7 +113,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
     const mergeTurn = parallel > 1 ? (run: () => Promise<IssueResult>) => before.then(run) : undefined;
     const attempt = async (n: number): Promise<IssueResult> => {
       try {
-        return await runIssue({ ...opts, cwd, issue: q.number, ...(orderNote ? { queueOrder: orderNote } : {}), ...(mergeTurn ? { mergeTurn, attempt: n } : {}) });
+        return await runIssue({ ...opts, ...(allowLabelers ? { allowLabelers } : {}), cwd, issue: q.number, ...(orderNote ? { queueOrder: orderNote } : {}), ...(mergeTurn ? { mergeTurn, attempt: n } : {}) });
       } catch (e) {
         if (!keepGoing) throw e;
         const usage = e instanceof AgentFailure ? e.usage : undefined;

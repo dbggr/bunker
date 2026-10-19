@@ -4,6 +4,8 @@ type Env = Record<string, string>;
 
 export interface PrComment {
   body: string;
+  /** Login of the comment's author ("" when GitHub gave none). */
+  author: string;
 }
 
 /** An open pull request opened by a bunker run, with what the shepherd decides on. */
@@ -54,7 +56,7 @@ export function parseBunkerPrs(raw: unknown): BunkerPr[] {
       mergeState: String(p.mergeStateStatus ?? "UNKNOWN"),
       reviewDecision: String(p.reviewDecision ?? ""),
       autoMerge: !!p.autoMergeRequest,
-      comments: Array.isArray(p.comments) ? p.comments.map((c: any) => ({ body: String(c?.body ?? "") })) : [],
+      comments: Array.isArray(p.comments) ? p.comments.map((c: any) => ({ body: String(c?.body ?? ""), author: String(c?.author?.login ?? "") })) : [],
     });
   }
   return out;
