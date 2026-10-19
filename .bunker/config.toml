@@ -1,2 +1,6 @@
 setup = "bun install --frozen-lockfile"
 verify = "bun test && bun run typecheck"
+
+[watch]
+# daily spend cap for bunker's own watcher; beats ~/.config/bunker max_cost_day (#482)
+max_cost_day = 100
