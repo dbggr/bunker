@@ -157,8 +157,46 @@ export function createShepherd(o: ShepherdOptions) {
       const list = JSON.parse(r.stdout.toString()) as Check[];
       if (Array.isArray(list)) return { checks: list };
     } catch {}
-    // gh printed no JSON (no required check reported, a token that cannot read checks, an API error): say so rather than act as if green.
-    return { checks: [], error: r.stderr.toString().trim().split("\n")[0] || `gh pr checks exited ${r.exitCode} without output` };
+    const error = r.stderr.toString().trim().split("\n")[0] || `gh pr checks exited ${r.exitCode} without output`;
+    return { checks: [], error };
+  };
+
+  /** Contexts the base branch requires, from rulesets and classic protection (either may be unreadable with the run's token). */
+  const requiredContexts = async (pr: BunkerPr): Promise<string[]> => {
+    const out = new Set<string>();
+    const json = async (path: string) => {
+      const r = await gh`gh api ${path}`;
+      if (r.exitCode !== 0) return undefined;
+      try {
+        return JSON.parse(r.stdout.toString());
+      } catch {
+        return undefined;
+      }
+    };
+    const rules = await json(`repos/{owner}/{repo}/rules/branches/${pr.base}`);
+    for (const r of Array.isArray(rules) ? rules : []) if (r?.type === "required_status_checks") for (const c of r.parameters?.required_status_checks ?? []) if (c?.context) out.add(c.context);
+    const prot = await json(`repos/{owner}/{repo}/branches/${pr.base}/protection/required_status_checks`);
+    for (const c of prot?.contexts ?? []) out.add(c);
+    for (const c of prot?.checks ?? []) if (c?.context) out.add(c.context);
+    return [...out];
+  };
+
+  /**
+   * `gh pr checks --required` reports nothing when the requirement lives in a ruleset or classic branch protection it does not map.
+   * Then the PR's full check list is narrowed to the contexts the base branch requires; when those can't be read either, every check counts.
+   */
+  const checksFor = async (pr: BunkerPr): Promise<{ checks: Check[]; error?: string }> => {
+    const req = await requiredChecks(pr);
+    if (!req.error && req.checks.length) return req;
+    const r = await gh`gh pr checks ${pr.number} --json name,bucket,link`;
+    let all: Check[] = [];
+    try {
+      const list = JSON.parse(r.stdout.toString());
+      if (Array.isArray(list)) all = list;
+    } catch {}
+    if (!all.length) return req;
+    const contexts = await requiredContexts(pr);
+    return { checks: contexts.length ? all.filter((c) => contexts.includes(c.name)) : all };
   };
 
   /** The failed jobs' logs, or why they can't be read (usually: the token lacks Actions: read). */
@@ -431,7 +469,7 @@ export function createShepherd(o: ShepherdOptions) {
     const skip = skipReason(pr);
     if (skip) return entry(pr, "skipped", skip);
     if (pr.mergeable === "CONFLICTING" || pr.mergeState === "DIRTY") return resolveConflict(pr);
-    const { checks, error } = await requiredChecks(pr);
+    const { checks, error } = await checksFor(pr);
     const failed = checks.filter((c) => c.bucket === "fail");
     if (failed.length) return fixRed(pr, failed);
     const reviews = await pendingReviews(pr);
