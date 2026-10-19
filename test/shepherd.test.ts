@@ -515,6 +515,28 @@ describe("shepherd pass", () => {
     expect(prompts).toHaveLength(0);
   });
 
+  test("bunker:review PR behind the base → the branch is still updated, nothing else is touched", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs.push(prJson(10, "fix/7-thing", sha, { mergeStateStatus: "BEHIND", labels: [{ name: "bunker:review" }] }));
+    w.state.checks[10] = GREEN;
+    w.save();
+    const prompts: string[] = [];
+    const pass = await shepherd(w, fakeAgent(COMMIT_FIX, prompts)).pass();
+    expect(pass.entries[0]).toMatchObject({ action: "updated-branch" });
+    expect(w.calls().some((c) => c.startsWith("api -X PUT repos/{owner}/{repo}/pulls/10/update-branch"))).toBe(true);
+    expect(prompts).toHaveLength(0);
+  });
+
+  test("bunker:review PR that is not behind is still skipped", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs.push(prJson(10, "fix/7-thing", sha, { labels: [{ name: "bunker:review" }] }));
+    w.save();
+    const pass = await shepherd(w, fakeAgent(COMMIT_FIX, [])).pass();
+    expect(pass.entries[0]).toMatchObject({ action: "skipped" });
+  });
+
   test("conflict → an agent resolves it in the PR's worktree, verify runs, the changed diff is reviewed again, the merge is pushed", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "a.txt": "branch\n" });
