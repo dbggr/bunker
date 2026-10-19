@@ -8,6 +8,7 @@ export const IN_PROGRESS_LABEL = "bunker:in-progress";
 export const FAILED_LABEL = "bunker:failed";
 export const REVIEW_LABEL = "bunker:review";
 export const AWAITING_REVIEW_LABEL = "bunker:awaiting-review";
+export const BLOCKED_LABEL = "bunker-blocked";
 
 /** Only `bunker:queued` queues an issue (never `in-progress`, `failed` or `review`). */
 export const isQueuedLabel = (name: string) => name === QUEUED_LABEL;

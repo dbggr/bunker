@@ -64,6 +64,8 @@ case "$*" in
   "issue view 5 "*|"pr view 12 "*|"issue view 12 "*) echo '{"number":1}'; exit 0;;
   "issue view 404 "*|"pr view 404 "*) exit 1;;
   "issue view 7 "*) cat "${root}/issue.json"; exit 0;;
+  *graphql*|*renamed*) exit 0;;
+  *"issues/7/events"*created_at*) echo 2020-01-01T00:00:00Z; exit 0;;
   "api repos/{owner}/{repo}/issues/7"*) echo OWNER; exit 0;;
   "repo view"*) echo https://github.com/o/r; exit 0;;
   "label create"*) exit 0;;
