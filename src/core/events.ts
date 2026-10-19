@@ -12,7 +12,7 @@ export type Stage = "setup" | "audit" | "implement" | "review" | "verify" | "PR"
 
 /** Progress from a run. `name` is the stage, or the tool call (e.g. "Edit src/cli.ts"). */
 export interface BunkerEvent {
-  type: "stage" | "text" | "toolCall" | "result" | "meta" | "note" | "usage" | "budget";
+  type: "stage" | "text" | "toolCall" | "result" | "meta" | "note" | "usage" | "budget" | "watcher";
   issue?: number;
   /** Index of the task, for runAll(). */
   task?: number;
@@ -32,7 +32,10 @@ export interface BunkerEvent {
   estCostUsd?: number;
   /** On "budget": the watcher's spend against its caps (exact costs only). */
   budget?: Budget;
-  /** On "meta": the run-log path and the PR URL, once known. */
+  /** On "watcher": what the running watcher knows, for the hub. */
+  watcher?: WatcherInfo;
+  /** On "meta": the issue title, the run-log path and the PR URL, once known. */
+  title?: string;
   logPath?: string;
   url?: string;
   /** Epoch milliseconds. */
@@ -49,6 +52,19 @@ export interface Budget {
   month: BudgetWindow;
   /** Set while a cap has stopped new work: when it resumes (epoch ms). */
   pausedUntil?: number;
+}
+
+/** The watcher's state as published to the hub (a subset of `.bunker/watch-status.json`, plus the schedule). */
+export interface WatcherInfo {
+  version: string;
+  startedAt: number;
+  parallel: number;
+  /** Epoch ms of the next queue pass; absent while one is running. */
+  nextPassAt?: number;
+  merged: { issue: number; prUrl?: string; at: number }[];
+  noChange: { issue: number; verdict: string; reason: string; at: number }[];
+  failed: { issue: number; status: string; reason: string; prUrl?: string; logPath?: string; at: number }[];
+  shepherd: { issue: number; pr: number; prUrl?: string; action: string; detail?: string }[];
 }
 
 export type OnEvent = (event: BunkerEvent) => void;

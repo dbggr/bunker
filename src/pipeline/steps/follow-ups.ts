@@ -60,7 +60,7 @@ export async function fileFollowUps(ctx: IssueRunContext, result: ReviewResult, 
       await markBlocked(number, blockedBy, cwd, env, mention);
       await worktreeAdmin(repo, () => $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet());
       await worktreeAdmin(repo, () => $`git -C ${repo} branch -D ${branch}`.nothrow().quiet());
-      emit(onEvent, { type: "note", text: `blocked by #${blockedBy.number}: ${blockedBy.title}` });
+      emit(onEvent, { type: "note", issue: number, text: `blocked by #${blockedBy.number}: ${blockedBy.title}` });
       return { done: fail("blocked", { review: result, blockedBy }) };
     }
   }

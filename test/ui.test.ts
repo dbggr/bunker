@@ -335,3 +335,97 @@ describe("hub history on disk", () => {
     expect((await replayed(hub)).map((m) => m.event.n)).toEqual([1, 2]);
   });
 });
+
+describe("hub page model", () => {
+  const load = async () => {
+    const html = await Bun.file(new URL("../src/ui/ui.html", import.meta.url)).text();
+    const code = /<script id="model">([\s\S]*?)<\/script>/.exec(html)![1]!;
+    return new Function(code + "; return Model;")() as any;
+  };
+  const NOW = new Date(2026, 9, 19, 15, 0, 0).getTime();
+  const ev = (e: object) => ({ at: NOW - 60_000, ...e });
+
+  test("note events: queue order, blocked-by and shepherd text reach their panels", async () => {
+    const M = await load();
+    const r = M.newRepo();
+    M.ingest(r, ev({ type: "note", text: "queue: #5 (high, bug) · #6 · #7 (low) (re-ordered)" }));
+    M.ingest(r, ev({ type: "note", issue: 6, text: "blocked by #9: other thing" }));
+    M.ingest(r, ev({ type: "note", issue: 3, text: "PR #12: CI failing, fixing" }));
+    M.ingest(r, ev({ type: "stage", issue: 5, name: "implement" }));
+    const q = M.queue(r);
+    expect(q.map((x: any) => x.issue)).toEqual([6, 7]); // #5 started
+    expect(q[0].blockedOn).toEqual({ number: 9, title: "other thing" });
+    expect(q[1].tags).toEqual(["low"]);
+    expect(M.shepherd(r)).toEqual([{ issue: 3, pr: 12, action: "note", detail: "CI failing, fixing" }]);
+    // A watcher record of the PR wins over the note.
+    M.ingest(r, ev({ type: "watcher", watcher: { version: "1", startedAt: 1, parallel: 1, merged: [], noChange: [], failed: [], shepherd: [{ issue: 3, pr: 12, action: "waiting" }] } }));
+    expect(M.shepherd(r)[0].action).toBe("waiting");
+  });
+
+  test("a run's notes land in its log; the stage track marks done/current/todo", async () => {
+    const M = await load();
+    const r = M.newRepo();
+    M.ingest(r, ev({ type: "meta", issue: 1, title: "Fix it", logPath: "/l.log" }));
+    M.ingest(r, ev({ type: "stage", issue: 1, name: "review", model: "opus", round: 2, role: "reviewer" }));
+    M.ingest(r, ev({ type: "note", issue: 1, text: "verify passed (3 tests)" }));
+    const x = r.runs.get("#1");
+    expect(x.title).toBe("Fix it");
+    expect(x.log.map((l: any) => l.kind)).toEqual(["stage", "note"]);
+    expect(M.track("review").map((s: any) => s.state)).toEqual(["done", "done", "current", "todo", "todo", "todo"]);
+    expect(M.track("merged").every((s: any) => s.state === "done")).toBe(true);
+    expect(M.tab(r, NOW)).toMatchObject({ kind: "working", label: "1 running" });
+  });
+
+  test("finished list: today's merged/failed with reasons, merged from the run and the watcher", async () => {
+    const M = await load();
+    const r = M.newRepo();
+    M.ingest(r, ev({ type: "meta", issue: 2, title: "Two" }));
+    M.ingest(r, ev({ type: "stage", issue: 2, name: "failed", reason: "verify failed" }));
+    M.ingest(r, ev({ type: "watcher", watcher: { version: "1", startedAt: 1, parallel: 1, merged: [{ issue: 4, prUrl: "http://pr/4", at: NOW - 1000 }, { issue: 8, at: NOW - 3 * 86_400_000 }], noChange: [], failed: [{ issue: 7, status: "x", reason: "gave up", at: NOW - 2000 }], shepherd: [] } }));
+    const g = M.groups(r, NOW);
+    expect(g.finished.map((f: any) => [f.issue, f.outcome, f.reason])).toEqual([[4, "merged", ""], [7, "failed", "gave up"], [2, "failed", "verify failed"]]);
+    expect(g.idle).toBe(true);
+    expect(M.tab(r, NOW)).toMatchObject({ kind: "failed", label: "2 failed" });
+  });
+
+  test("idle state: next pass, today's spend, merged today, last merge", async () => {
+    const M = await load();
+    const r = M.newRepo();
+    expect(M.tab(r, NOW)).toMatchObject({ kind: "idle", label: "idle" });
+    M.ingest(r, ev({ type: "budget", budget: { day: { spentUsd: 1.5, capUsd: 10 }, month: { spentUsd: 3 } } }));
+    M.ingest(r, ev({ type: "watcher", watcher: { version: "1", startedAt: 1, parallel: 2, nextPassAt: NOW + 5000, merged: [{ issue: 4, prUrl: "http://pr/4", at: NOW - 1000 }], noChange: [], failed: [], shepherd: [] } }));
+    expect(M.idle(r, NOW)).toEqual({ nextPassAt: NOW + 5000, spentToday: 1.5, mergedToday: 1, lastMerge: { issue: 4, prUrl: "http://pr/4", at: NOW - 1000 } });
+    expect(M.watcherLive(r, NOW)).toBe(true);
+  });
+
+  test("spend bars: amber from 80%, red from 100%, against the cap in effect", async () => {
+    const M = await load();
+    const level = (spent: number, cap?: number) => {
+      const r = M.newRepo();
+      M.ingest(r, ev({ type: "budget", budget: { day: { spentUsd: spent, ...(cap ? { capUsd: cap } : {}) }, month: { spentUsd: 0 } } }));
+      return M.spend(r).windows[0];
+    };
+    expect(level(7.9, 10).level).toBe("");
+    expect(level(8, 10).level).toBe("warn");
+    expect(level(10, 10).level).toBe("full");
+    expect(level(5).frac).toBeUndefined();
+  });
+
+  test("page uses no external assets and spells status with icons", async () => {
+    const html = await Bun.file(new URL("../src/ui/ui.html", import.meta.url)).text();
+    expect(html).not.toMatch(/https?:\/\/(?!127)|@import|<link/);
+    for (const s of ["✓", "✕", "●", "Nothing queued. Watching.", "read-only"]) expect(html).toContain(s);
+  });
+});
+
+describe("hub keeps only the latest watcher snapshot", () => {
+  test("late pages get one watcher event", async () => {
+    hub = startHub({ port: 0, token: TOKEN });
+    for (let i = 1; i <= 3; i++) await publish(hub.url, { repo: "a/one", event: { type: "watcher", watcher: { version: String(i) }, at: i } }, TOKEN);
+    const late = await connect(hub.viewUrl);
+    await until(() => late.messages.length === 1);
+    await Bun.sleep(50);
+    expect(late.messages.map((m) => m.event.watcher.version)).toEqual(["3"]);
+    late.ws.close();
+  });
+});

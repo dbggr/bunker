@@ -60,7 +60,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   const log = (title: string, text = "") => appendFileSync(logPath, redact(`== ${title} ==\n${text.trimEnd()}\n\n`));
   log(`issue #${number}: ${issue.title}`, `branch ${branch}`);
   if (queueOrder) log("queue order", queueOrder);
-  emit(onEvent, { type: "meta", logPath });
+  emit(onEvent, { type: "meta", logPath, title: issue.title });
   const fail = (status: IssueResult["status"], extra: Partial<IssueResult> = {}): IssueResult => {
     log(`final status: ${status}`, [extra.error, extra.prUrl].filter(Boolean).join("\n"));
     if (status === "merged") emitStage({ onEvent }, "merged");
