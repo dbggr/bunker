@@ -19,7 +19,8 @@ import { runQueue, type QueueEntry, type QueueOptions } from "../../pipeline/que
 import { countWaiting } from "../../github/queue.ts";
 import { latestBunkerLabeledAt } from "../../github/labeler.ts";
 import { clearLanded, ensureLabel, sweepClosedQueued, FAILED_LABEL, unqueue } from "../../github/labels.ts";
-import { noNotify, type Notify } from "../../core/notify.ts";
+import { repoId } from "../../ui/ui.ts";
+import { noNotify, withRepo, type Notify } from "../../core/notify.ts";
 
 export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult" | "onRefused" | "handoff"> {
   /** Run the shepherd stage: a run ends when its PR is open and auto-merge armed, and every open bunker PR is kept green until it merges. Defaults to true. */
@@ -112,9 +113,10 @@ function acquireLock(file: string): () => void {
  * Works the `bunker:queued` queue with auto-merge, pass after pass, until aborted or `forMs` is up.
  * Any outcome other than `merged` relabels the issue `bunker:failed` so it is never retried by itself.
  */
-export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, triageEveryHours, auditor, maxIssues, cleanOnStart, logsDays, log = console.log, notify = noNotify, mention, shepherd: shepherdOn = true, manual, ...opts }: WatchOptions): Promise<WatchSummary> {
+export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, triageEveryHours, auditor, maxIssues, cleanOnStart, logsDays, log = console.log, notify: rawNotify = noNotify, mention, shepherd: shepherdOn = true, manual, ...opts }: WatchOptions): Promise<WatchSummary> {
   const cwd = opts.cwd ?? process.cwd();
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
+  const notify = withRepo(rawNotify, (await repoId(repo)).split("/").pop()!);
   const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
   const dir = join(repo, ".bunker");
   mkdirSync(dir, { recursive: true });

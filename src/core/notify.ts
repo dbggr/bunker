@@ -8,6 +8,11 @@ export type Notify = (title: string, body: string) => void;
 
 export const noNotify: Notify = () => {};
 
+/** Names the repo in every title (`bunker: x` becomes `bunker · repo: x`), so notifications from several watches are told apart. */
+export function withRepo(notify: Notify, repo: string): Notify {
+  return (title, body) => notify(title.startsWith("bunker:") ? `bunker · ${repo}:${title.slice("bunker:".length)}` : `bunker · ${repo}: ${title}`, body);
+}
+
 const osaQuote = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 
 /**
