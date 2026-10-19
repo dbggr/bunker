@@ -254,6 +254,7 @@ remove leftover worktrees and branches (dry run unless --yes)
 | `--logs <days>` | also remove .bunker/runs/*.log older than this | clean.logs_days from config, else keep all |
 | `--images` | also remove bunker-repo-* docker images no running container uses (bunker-claude is kept) |  |
 | `--force` | go ahead although a watch lock for this repo is held by a live process (otherwise exit 2) |  |
+| Ctrl-C (watch) | the first one stops starting work, says what is in flight and finishes those steps (runs only waiting on GitHub are released at once), prints a summary and exits 0; a second one kills the agent containers, puts each interrupted issue back (bunker:in-progress removed, bunker:queued kept, work kept as a bunker/stale/&lt;n>-&lt;timestamp> tag) and exits 130 |  |
 | start-up cleanup | issue, queue and watch run the same worktree and branch cleanup at start-up, and Ctrl-C/SIGTERM removes the current run's /tmp/bunker-* worktree and bunker/&lt;id> branch if it has no commits |  |
 
 ```sh

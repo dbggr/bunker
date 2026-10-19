@@ -5,7 +5,7 @@ import { rm } from "node:fs/promises";
 import { emit } from "../core/events.ts";
 import { worktreeAdmin } from "../worktree/admin.ts";
 
-interface Live { repo: string; worktree: string; branch: string; base: string }
+export interface Live { number: number; repo: string; worktree: string; branch: string; base: string }
 const live = new Set<Live>();
 let hooked = false;
 
@@ -21,6 +21,34 @@ export function cleanupInterrupted(): void {
     Bun.spawnSync(["git", "-C", l.repo, "branch", "-D", l.branch]);
     live.delete(l);
   }
+}
+
+/**
+ * A forced stop: keep what the interrupted runs of this issue did as a `bunker/stale/<n>-<timestamp>` tag (uncommitted changes are
+ * committed first), then remove the worktree and branch. Returns the tag, if there was work to keep.
+ */
+export async function abandonLive(number: number): Promise<string | undefined> {
+  let kept: string | undefined;
+  for (const l of [...live].filter((x) => x.number === number)) {
+    live.delete(l);
+    const git = (...args: string[]) => $`git -C ${l.repo} ${args}`.nothrow().quiet();
+    const commits = Number((await git("rev-list", "--count", `${l.base}..${l.branch}`)).stdout.toString().trim()) || 0;
+    const dirty = existsSync(l.worktree) && (await $`git -C ${l.worktree} status --porcelain`.nothrow().quiet()).stdout.toString().trim() !== "";
+    if (dirty) {
+      await $`git -C ${l.worktree} add -A`.nothrow().quiet();
+      await $`git -C ${l.worktree} -c user.name=bunker -c user.email=bunker@localhost commit -q -m ${"wip: uncommitted changes from an interrupted bunker run"}`.nothrow().quiet();
+    }
+    if (commits > 0 || dirty) {
+      const tag = `bunker/stale/${number}-${stamp()}`;
+      if ((await git("tag", tag, l.branch)).exitCode !== 0) continue; // keep the branch rather than lose the work
+      kept = tag;
+    }
+    await worktreeAdmin(l.repo, () => $`git -C ${l.repo} worktree remove --force ${l.worktree}`.nothrow().quiet());
+    if (existsSync(l.worktree)) await rm(l.worktree, { recursive: true, force: true });
+    await worktreeAdmin(l.repo, () => $`git -C ${l.repo} worktree prune`.nothrow().quiet());
+    await worktreeAdmin(l.repo, () => $`git -C ${l.repo} branch -D ${l.branch}`.nothrow().quiet());
+  }
+  return kept;
 }
 
 export function track(l: Live): () => void {

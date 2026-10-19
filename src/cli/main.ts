@@ -10,7 +10,9 @@ import { review } from "../pipeline/review.ts";
 import { run, runAll } from "../pipeline/run.ts";
 import { worktreeAdmin } from "../worktree/admin.ts";
 import { SkillError, loadSkills } from "../core/skills.ts";
-import { docker } from "../sandboxes/container.ts";
+import { docker, stopLiveContainers } from "../sandboxes/container.ts";
+import { abandonLive } from "../pipeline/issue-cleanup.ts";
+import { createInterrupt } from "./commands/interrupt.ts";
 import { noSandbox } from "../sandboxes/no-sandbox.ts";
 import { formatDuration, formatUsage } from "../agents/agent.ts";
 import { claudeCode } from "../agents/claude.ts";
@@ -295,23 +297,31 @@ if (values.audit) {
 } else if (watchOpts) {
   const reviewer = reviewerAgent();
   const ctl = new AbortController();
-  // The first signal finishes the current step and exits 0; a second one quits now.
-  for (const sig of ["SIGINT", "SIGTERM"] as const) {
-    process.on(sig, () => {
-      if (ctl.signal.aborted) process.exit(130);
-      console.log(`bunker: ${sig} received; finishing the current step, then exiting (again to quit now)`);
-      ctl.abort();
-    });
-  }
+  // The first signal stops new work and finishes the in-flight steps (exit 0); a second one kills the agents, re-queues and exits 130.
+  const intr = createInterrupt({
+    ctl,
+    log: (l) => console.log(l),
+    exit: (code) => process.exit(code),
+    stopContainers: stopLiveContainers,
+    ...(timeouts.stepTimeoutMs ? { stepTimeoutMs: timeouts.stepTimeoutMs } : {}),
+    requeue: async (n) => {
+      const kept = await abandonLive(n);
+      if (kept) console.log(`bunker: #${n}: work kept as tag ${kept}`);
+      await $`gh issue edit ${n} --remove-label bunker:in-progress --add-label bunker:queued`.env(liveGhEnv()).nothrow().quiet();
+    },
+  });
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => void intr.signal(sig));
+  const watchEvent = (e: BunkerEvent) => (intr.onEvent(e), onEvent(e));
   const notify = desktopNotifier({ enabled: !values["no-notify"] && repoCfg.notify.enabled !== false && !process.env.BUNKER_TEST_NO_NOTIFY });
     const mention = await resolveMention(process.cwd(), liveGhEnv(), repoCfg.notify.github_user);
   try {
-    await runWatch({ notify, mention, onEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, manual, ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, logsDays: repoCfg.clean.logs_days ?? 30, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
+    await runWatch({ notify, mention, onEvent: watchEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, manual, ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, logsDays: repoCfg.clean.logs_days ?? 30, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
     process.exit(2);
   }
+  intr.finish();
 } else if (values.queue) {
   await queueCommand({ manual, values, repoCfg, onEvent, agent, reviewerAgent, sandbox, maxRounds, resume, limit, ciTimeoutMin, timeouts, parallel, allowLabelers, publisher, tty });
 } else if (values.issue !== undefined) {

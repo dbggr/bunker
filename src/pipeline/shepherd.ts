@@ -77,6 +77,8 @@ export interface ShepherdOptions extends Timeouts {
   /** Fix attempts per PR before giving up. Defaults to 3. */
   maxAttempts?: number;
   onEvent?: OnEvent;
+  /** Checked before each PR is handled; true ends the pass (no new fixes start). */
+  shouldStop?: () => boolean;
   notify?: Notify;
   /** `@login` put in the comment when the shepherd gives up, so GitHub notifies the user. */
   mention?: string;
@@ -625,6 +627,7 @@ export function createShepherd(o: ShepherdOptions) {
       const entries: ShepherdEntry[] = [];
       let paused: ShepherdPass["paused"];
       for (const pr of prs) {
+        if (o.shouldStop?.()) break;
         try {
           entries.push(await handle(pr));
           const last = entries[entries.length - 1]!;

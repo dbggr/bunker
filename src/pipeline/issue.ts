@@ -45,6 +45,8 @@ export interface IssueOptions extends Timeouts {
   handoff?: boolean;
   /** With `merge`: minutes to wait for GitHub to auto-merge the PR before giving up. Defaults to 30. */
   ciTimeoutMin?: number;
+  /** Aborted to release a run that only waits for GitHub to merge its PR (it ends `awaiting-merge`). */
+  signal?: AbortSignal;
   /** Milliseconds between PR state polls. Defaults to 10000. */
   ciPollMs?: number;
   /** Progress events (stages, agent text and tool calls, results), each labelled with the issue. */

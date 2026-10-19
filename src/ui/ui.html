@@ -306,6 +306,7 @@ const Model = (() => {
   }
   /** Tab label: status dot kind plus a count ("2 running", "1 failed", "idle"). */
   function tab(r, now) {
+    if (r.watcher && r.watcher.stopping) return { kind: "waiting", icon: "◐", label: "stopping" };
     const g = groups(r, now);
     const failed = g.finished.filter((f) => f.outcome === "failed").length;
     if (g.running.length) return { kind: "working", icon: "●", label: g.running.length + " running" };

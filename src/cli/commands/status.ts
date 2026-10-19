@@ -72,6 +72,7 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
   const file = join(dir, STATUS_FILE);
   const { parallel = 1, ...fileInit } = init;
   let nextPassAt: number | undefined;
+  let stopping = false;
   // Finished runs are kept across restarts for the history window, so a page replaying older history can still finish them.
   const kept = readStatusFile(dir);
   const since = Date.now() - HISTORY_MS;
@@ -83,13 +84,18 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
       writeFileSync(file, JSON.stringify(state));
     } catch {}
     try {
-      onChange?.({ version: state.version, startedAt: state.startedAt, parallel, ...(nextPassAt === undefined ? {} : { nextPassAt }), ...structuredClone({ merged: state.merged, noChange: state.noChange, failed: state.failed, shepherd: state.shepherd }) });
+      onChange?.({ version: state.version, startedAt: state.startedAt, parallel, ...(stopping ? { stopping } : {}), ...(nextPassAt === undefined ? {} : { nextPassAt }), ...structuredClone({ merged: state.merged, noChange: state.noChange, failed: state.failed, shepherd: state.shepherd }) });
     } catch {}
   };
   save();
   return {
     /** The merged and failed records as they stand. */
     snapshot: () => ({ merged: state.merged, failed: state.failed }),
+    /** Ctrl-C was pressed: the hub shows the tab as stopping. */
+    stopping() {
+      stopping = true;
+      save();
+    },
     /** When the next queue pass starts (undefined while one runs). */
     nextPass(at: number | undefined) {
       nextPassAt = at;
