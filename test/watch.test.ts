@@ -77,6 +77,9 @@ if [ "$1 $2" = "issue edit" ] && [ -f "${root}/edit-fails" ]; then echo "network
 if [ "$1 $2" = "issue edit" ]; then case "$*" in *in-progress*|*"--remove-label bunker:failed"*) exit 0;; esac; rm -f "${root}/q/$3.json"; exit 0; fi
 if [ "$1 $2" = "issue comment" ]; then shift 3; echo "COMMENT: $*" >> "${root}/comments.log"; exit 0; fi
 if [ "$1 $2" = "pr list" ] && [ -f "${root}/prlist.json" ]; then cat "${root}/prlist.json"; [ -f "${root}/prlist-next.json" ] && mv "${root}/prlist-next.json" "${root}/prlist.json"; exit 0; fi
+if [ "$1 $2" = "pr checks" ]; then if [ -f "${root}/checks.json" ] && ! echo "$*" | grep -q -- "--required"; then cat "${root}/checks.json"; exit 1; fi; echo "no required checks reported on the 'feature/1-x' branch" >&2; exit 1; fi
+if [ "$1 $2" = "run view" ]; then echo "3 failures"; exit 0; fi
+if [ "$1 $2" = "pr comment" ]; then exit 0; fi
 if [ "$1 $2" = "pr view" ] && [ -f "${root}/prview.json" ]; then cat "${root}/prview.json"; exit 0; fi
 if [ "$1 $2" = "label create" ]; then exit 0; fi
 if [ "$1 $2" = "issue create" ]; then echo "https://github.com/o/r/issues/100"; exit 0; fi
@@ -657,6 +660,35 @@ describe("runWatch() shepherd stage", () => {
     const s = await runWatch({ ...base, shepherd: true, cwd: repo, agent: fakeAgent(), signal: ctl.signal, log: (l) => { if (/pass 2 /.test(l)) ctl.abort(); } });
     expect(s.merged).toBe(1);
     expect(await Bun.file(join(root, "gh.log")).text()).toContain("issue edit 1 --remove-label bunker:queued");
+  });
+
+  test("an issue logging 'already has an open PR' still gets a shepherd pass; a red required check that --required does not report reaches fixRed", async () => {
+    const { repo, root } = await setup(three.slice(0, 1));
+    await Bun.write(join(root, "prlist.json"), JSON.stringify([bunkerPr(1)]));
+    // The fake gh's ruleset requires "test"; `gh pr checks --required` prints nothing and exits 1, as for PR #53.
+    await Bun.write(join(root, "checks.json"), JSON.stringify([{ name: "other", bucket: "pass", link: "" }, { name: "test", bucket: "fail", link: "https://github.com/o/r/actions/runs/77/job/1" }]));
+    const ctl = new AbortController();
+    const prompts: string[] = [];
+    const events: any[] = [];
+    await runWatch({ ...base, shepherd: true, cwd: repo, agent: fakeAgent({ prompts }), onEvent: (e: any) => events.push(e), signal: ctl.signal, log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); } });
+    const gh = await Bun.file(join(root, "gh.log")).text();
+    expect(events.some((e) => e.type === "note" && /#1 already has an open PR/.test(e.text))).toBe(true);
+    expect(prompts).toHaveLength(0);
+    expect(gh).toContain("pr checks 41 --required");
+    expect(gh).toContain("run view 77 --log-failed");
+  });
+
+  test("every shepherd decision is logged and kept in watch-status.json, including a PR whose checks it cannot read", async () => {
+    const { repo, root } = await setup([]);
+    await Bun.write(join(root, "prlist.json"), JSON.stringify([bunkerPr(1)]));
+    const lines: string[] = [];
+    const ctl = new AbortController();
+    await runWatch({ ...base, shepherd: true, cwd: repo, agent: fakeAgent(), signal: ctl.signal, log: (l) => { lines.push(l); if (/pass 2 /.test(l)) ctl.abort(); } });
+    const mine = lines.filter((l) => /shepherd: PR #41 waiting/.test(l));
+    expect(mine).toHaveLength(1); // logged on change, not every pass
+    expect(mine[0]).toMatch(/no required checks reported/);
+    const st = JSON.parse(await Bun.file(join(repo, ".bunker", "watch-status.json")).text());
+    expect(st.shepherd).toEqual([expect.objectContaining({ issue: 1, pr: 41, action: "waiting", detail: expect.stringMatching(/no required checks reported/) })]);
   });
 
   test("a closed issue still carrying bunker:queued is cleared even if the shepherd never saw its PR open, once per hour", async () => {

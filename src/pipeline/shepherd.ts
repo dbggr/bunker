@@ -168,14 +168,52 @@ export function createShepherd(o: ShepherdOptions) {
   const entry = (pr: BunkerPr, action: ShepherdAction, detail?: string): ShepherdEntry => ({ pr: pr.number, url: pr.url, issue: pr.issue, action, ...(detail ? { detail: redact(detail) } : {}) });
 
   /** Required checks of the PR; their `fail` bucket is what the shepherd reacts to. Exit codes mean pending/failing, so only the JSON counts. */
-  const requiredChecks = async (pr: BunkerPr): Promise<Check[]> => {
+  const requiredChecks = async (pr: BunkerPr): Promise<{ checks: Check[]; error?: string }> => {
     const r = await gh`gh pr checks ${pr.number} --required --json name,bucket,link`;
     try {
       const list = JSON.parse(r.stdout.toString()) as Check[];
-      return Array.isArray(list) ? list : [];
-    } catch {
-      return [];
-    }
+      if (Array.isArray(list)) return { checks: list };
+    } catch {}
+    const error = r.stderr.toString().trim().split("\n")[0] || `gh pr checks exited ${r.exitCode} without output`;
+    return { checks: [], error };
+  };
+
+  /** Contexts the base branch requires, from rulesets and classic protection (either may be unreadable with the run's token). */
+  const requiredContexts = async (pr: BunkerPr): Promise<string[]> => {
+    const out = new Set<string>();
+    const json = async (path: string) => {
+      const r = await gh`gh api ${path}`;
+      if (r.exitCode !== 0) return undefined;
+      try {
+        return JSON.parse(r.stdout.toString());
+      } catch {
+        return undefined;
+      }
+    };
+    const rules = await json(`repos/{owner}/{repo}/rules/branches/${pr.base}`);
+    for (const r of Array.isArray(rules) ? rules : []) if (r?.type === "required_status_checks") for (const c of r.parameters?.required_status_checks ?? []) if (c?.context) out.add(c.context);
+    const prot = await json(`repos/{owner}/{repo}/branches/${pr.base}/protection/required_status_checks`);
+    for (const c of prot?.contexts ?? []) out.add(c);
+    for (const c of prot?.checks ?? []) if (c?.context) out.add(c.context);
+    return [...out];
+  };
+
+  /**
+   * `gh pr checks --required` reports nothing when the requirement lives in a ruleset or classic branch protection it does not map.
+   * Then the PR's full check list is narrowed to the contexts the base branch requires; when those can't be read either, every check counts.
+   */
+  const checksFor = async (pr: BunkerPr): Promise<{ checks: Check[]; error?: string }> => {
+    const req = await requiredChecks(pr);
+    if (!req.error && req.checks.length) return req;
+    const r = await gh`gh pr checks ${pr.number} --json name,bucket,link`;
+    let all: Check[] = [];
+    try {
+      const list = JSON.parse(r.stdout.toString());
+      if (Array.isArray(list)) all = list;
+    } catch {}
+    if (!all.length) return req;
+    const contexts = await requiredContexts(pr);
+    return { checks: contexts.length ? all.filter((c) => contexts.includes(c.name)) : all };
   };
 
   /** The failed jobs' logs, or why they can't be read (usually: the token lacks Actions: read). */
@@ -449,7 +487,7 @@ export function createShepherd(o: ShepherdOptions) {
     const skip = skipReason(pr);
     if (skip) return entry(pr, "skipped", skip);
     if (pr.mergeable === "CONFLICTING" || pr.mergeState === "DIRTY") return resolveConflict(pr);
-    const checks = await requiredChecks(pr);
+    const { checks, error } = await checksFor(pr);
     const failed = checks.filter((c) => c.bucket === "fail");
     if (failed.length) return fixRed(pr, failed);
     const reviews = await pendingReviews(pr);
@@ -460,7 +498,10 @@ export function createShepherd(o: ShepherdOptions) {
       note(pr, `updated the branch to ${pr.base}`);
       return entry(pr, "updated-branch");
     }
-    return entry(pr, checks.length > 0 && checks.every((c) => c.bucket === "pass" || c.bucket === "skipping") ? "green" : "waiting");
+    if (error) return entry(pr, "waiting", `could not read the required checks: ${error}`);
+    if (!checks.length) return entry(pr, "waiting", "no required check reported on the PR");
+    if (checks.every((c) => c.bucket === "pass" || c.bucket === "skipping")) return entry(pr, "green");
+    return entry(pr, "waiting", `waiting for ${checks.filter((c) => c.bucket !== "pass" && c.bucket !== "skipping").map((c) => c.name).join(", ")}`);
   };
 
   /**
@@ -512,12 +553,16 @@ export function createShepherd(o: ShepherdOptions) {
       for (const pr of prs) {
         try {
           entries.push(await handle(pr));
+          const last = entries[entries.length - 1]!;
+          note(pr, `${last.action}${last.detail ? `: ${last.detail.split("\n")[0]}` : ""}`);
         } catch (e) {
           if (e instanceof UsageLimit) {
             paused = { ...(e.resetAt !== undefined ? { resetAt: e.resetAt } : {}) };
             break;
           }
-          entries.push(entry(pr, "failed", e instanceof Error ? e.message : String(e)));
+          const failed = entry(pr, "failed", e instanceof Error ? e.message : String(e));
+          entries.push(failed);
+          note(pr, `failed: ${failed.detail?.split("\n")[0] ?? ""}`);
         }
       }
       const usage = sumUsage(spent.splice(0));

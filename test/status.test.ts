@@ -110,6 +110,18 @@ describe("collectStatus()", () => {
     expect(s.current.map((c) => c.issue)).toEqual([4]);
   });
 
+  test("shepherd decisions replace the previous list and show in the report", async () => {
+    const r = repo();
+    const dir = join(r, ".bunker");
+    writeFileSync(join(dir, "watch.lock"), "4242");
+    const rec = createStatusRecorder(dir, { pid: 4242, version: "x" });
+    rec.shepherd([{ issue: 4, pr: 9, prUrl: "https://github.com/o/r/pull/9", action: "waiting", detail: "no required checks reported" }]);
+    rec.shepherd([{ issue: 4, pr: 9, prUrl: "https://github.com/o/r/pull/9", action: "skipped", detail: "a draft" }]);
+    const s = await collectStatus({ repo: r, alive: () => true });
+    expect(s.shepherd).toEqual([expect.objectContaining({ issue: 4, pr: 9, action: "skipped", detail: "a draft" })]);
+    expect(formatStatus(s)).toContain("#4 PR #9 skipped: a draft");
+  });
+
   test("JSON shape with a live watcher", async () => {
     const r = repo();
     const dir = join(r, ".bunker");
@@ -140,6 +152,7 @@ describe("collectStatus()", () => {
       blocked: null,
       merged: [{ issue: 3, prUrl: "https://github.com/o/r/pull/9", at: expect.any(Number) }],
       noChange: [],
+      shepherd: [],
       failed: [{ issue: 5, status: "verify-failed", reason: "src/a.ts(1,1): error TS1: x", logPath: "/l/5.log", at: expect.any(Number), retry: "gh issue edit 5 --remove-label bunker:failed --add-label bunker:queued" }],
       spend: { day: { spentUsd: 2.5, capUsd: 10 }, month: { spentUsd: 2.5 } },
     });

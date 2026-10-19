@@ -39,6 +39,8 @@ if (cmd === "pr list") {
   console.log(JSON.stringify(s.prs.map((p) => ({ ...p, comments: [...(p.comments || []), ...(s.comments[p.number] || []).map((body) => ({ body }))].map((c) => ({ author: { login: "bunker-bot" }, ...c })), labels: [...(p.labels || []), ...(s.labels[p.number] || []).map((name) => ({ name }))] }))));
 } else if (cmd === "pr checks") {
   const checks = s.checks[n] || [];
+  if (s.checkError) fail(s.checkError);
+  if (s.requiredEmpty && args.includes("--required")) fail(s.requiredEmpty);
   console.log(JSON.stringify(checks));
   process.exit(checks.some((c) => c.bucket === "fail") ? 1 : checks.some((c) => c.bucket === "pending") ? 8 : 0);
 } else if (cmd === "run view") {
@@ -59,6 +61,8 @@ if (cmd === "pr list") {
   const path = args.find((a) => a.startsWith("repos/")) || "";
   const field = (k) => (args.find((a) => a.startsWith(k + "[]=")) || "").slice(k.length + 3);
   if (path.endsWith("/labels") && args.includes("POST")) { const k = path.split("/")[4]; (s.labels[k] = s.labels[k] || []).push(field("labels")); write(s); }
+  else if (path.includes("/rules/branches/")) console.log(JSON.stringify(s.rules || []));
+  else if (path.includes("/protection/")) fail("HTTP 404: Not Found");
   else if (path.endsWith("/update-branch")) { if (s.updateFails) fail("HTTP 422"); }
   else if (path.includes("/collaborators/")) console.log((s.perms || {})[path.split("/")[3 + 1]] || "read");
   else if (path.endsWith("/reviews")) for (const r of (s.reviews || {})[path.split("/")[4]] || []) console.log(JSON.stringify([String(r.id), r.state, r.login, r.association, r.body]));
@@ -181,6 +185,46 @@ describe("pure helpers", () => {
 });
 
 describe("shepherd pass", () => {
+  test("--required reports nothing but a ruleset requires the failing check: it still reaches fixRed", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs = [prJson(5, "fix/7-thing", sha)];
+    w.state.requiredEmpty = "no required checks reported on the 'fix/7-thing' branch";
+    w.state.rules = [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "phpunit" }] } }];
+    w.state.checks[5] = [{ name: "phpunit", bucket: "fail", link: "https://github.com/o/r/actions/runs/123/job/9" }, { name: "lint", bucket: "fail", link: "https://github.com/o/r/actions/runs/124/job/9" }];
+    w.state.logs["123"] = "3 failures";
+    w.save();
+    const prompts: string[] = [];
+    const p = await shepherd(w, fakeAgent(COMMIT_FIX, prompts)).pass();
+    expect(p.entries[0]!.action).toBe("fixed-ci");
+    expect(prompts[0]).toContain("phpunit");
+    expect(prompts[0]).not.toContain("lint");
+  });
+
+  test("--required reports nothing and the protection cannot be read: the full check list decides", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs = [prJson(5, "fix/7-thing", sha)];
+    w.state.requiredEmpty = "no required checks reported";
+    w.state.checks[5] = RED;
+    w.save();
+    const prompts: string[] = [];
+    const p = await shepherd(w, fakeAgent(COMMIT_FIX, prompts)).pass();
+    expect(p.entries[0]!.action).toBe("fixed-ci");
+  });
+
+  test("checks gh cannot read are a visible waiting decision, and every decision is a run-log note", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs = [prJson(5, "fix/7-thing", sha)];
+    w.state.checkError = "no required checks reported on the 'fix/7-thing' branch";
+    w.save();
+    const events: any[] = [];
+    const p = await shepherd(w, fakeAgent("true"), { onEvent: (e: any) => events.push(e) }).pass();
+    expect(p.entries[0]).toMatchObject({ action: "waiting", detail: expect.stringContaining("no required checks reported") });
+    expect(events.some((e) => e.type === "note" && e.issue === 7 && /PR #5: waiting.*no required checks reported/.test(e.text))).toBe(true);
+  });
+
   test("green: nothing to do, nothing pushed, never merges", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });

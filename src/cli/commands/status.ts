@@ -40,6 +40,16 @@ export interface FailedRun {
   at: number;
 }
 
+/** The shepherd's latest decision on an open bunker PR. */
+export interface ShepherdRun {
+  issue: number;
+  pr: number;
+  prUrl?: string;
+  action: string;
+  /** One line, redacted. */
+  detail?: string;
+}
+
 /** What a running (or last-run) `bunker watch` leaves in `.bunker/watch-status.json`. */
 export interface WatchStatusFile {
   pid: number;
@@ -49,12 +59,14 @@ export interface WatchStatusFile {
   merged: MergedRun[];
   noChange: NoChangeRun[];
   failed: FailedRun[];
+  /** The last shepherd decision per open bunker PR. */
+  shepherd: (ShepherdRun & { at: number })[];
 }
 
 /** Keeps the status file current for a watcher; every change is written straight away. */
 export function createStatusRecorder(dir: string, init: { pid: number; version: string }) {
   const file = join(dir, STATUS_FILE);
-  const state: WatchStatusFile = { ...init, startedAt: Date.now(), current: [], merged: [], noChange: [], failed: [] };
+  const state: WatchStatusFile = { ...init, startedAt: Date.now(), current: [], merged: [], noChange: [], failed: [], shepherd: [] };
   const save = () => {
     try {
       mkdirSync(dir, { recursive: true });
@@ -91,6 +103,11 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
       state.failed = state.failed.filter((f) => f.issue !== r.issue);
       save();
     },
+    /** Replaces the list with one pass's decisions: a PR that is no longer open drops out. */
+    shepherd(runs: ShepherdRun[]) {
+      state.shepherd = runs.map((r) => ({ ...r, at: Date.now() }));
+      save();
+    },
     failed(r: Omit<FailedRun, "at">) {
       state.current = state.current.filter((c) => c.issue !== r.issue);
       state.failed = state.failed.filter((f) => f.issue !== r.issue);
@@ -121,6 +138,7 @@ function readStatusFile(dir: string): WatchStatusFile | undefined {
     merged: Array.isArray(raw.merged) ? raw.merged : [],
     noChange: Array.isArray(raw.noChange) ? raw.noChange : [],
     failed: Array.isArray(raw.failed) ? raw.failed : [],
+    shepherd: Array.isArray(raw.shepherd) ? raw.shepherd : [],
   };
 }
 
@@ -144,6 +162,8 @@ export interface StatusReport {
   /** Closed without a change, with the reviewed verdict's reason. */
   noChange: NoChangeRun[];
   failed: (FailedRun & { retry: string })[];
+  /** Latest shepherd decision per open bunker PR; empty when the watcher is not alive. */
+  shepherd: (ShepherdRun & { at: number })[];
   spend: { day: { spentUsd: number; capUsd?: number }; month: { spentUsd: number; capUsd?: number } };
 }
 
@@ -198,6 +218,7 @@ export async function collectStatus({ repo, caps = {}, queue, blocked, alive, no
     failed: (mine?.failed ?? [])
       .filter((f) => !(mine?.merged ?? []).some((m) => m.issue === f.issue && m.at >= f.at))
       .map((f) => ({ ...f, retry: retryCommand(f.issue) })),
+    shepherd: isAlive && mine ? mine.shepherd : [],
     spend: { day: spend(DAY_MS, caps.day), month: spend(MONTH_MS, caps.month) },
   };
 }
@@ -236,6 +257,10 @@ export function formatStatus(r: StatusReport): string {
   out.push("", `failed: ${r.failed.length}`);
   for (const f of r.failed) {
     out.push(`  #${f.issue} ${f.status}: ${f.reason}`, `    ${f.prUrl ?? f.logPath ?? "no PR or log"}`, `    retry: ${f.retry}`);
+  }
+  if (r.shepherd.length) {
+    out.push("", `shepherd: ${r.shepherd.length} open PR(s)`);
+    for (const s of r.shepherd) out.push(`  #${s.issue} PR #${s.pr} ${s.action}${s.detail ? `: ${s.detail}` : ""}`);
   }
   const usd = (x: { spentUsd: number; capUsd?: number }) => `$${x.spentUsd.toFixed(2)}${x.capUsd === undefined ? " (no cap)" : ` of $${x.capUsd}`}`;
   out.push("", `spend: ${usd(r.spend.day)} in 24 h · ${usd(r.spend.month)} in 30 days`);
