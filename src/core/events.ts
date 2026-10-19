@@ -8,11 +8,15 @@ export type StreamEvent =
   | { type: "usage"; id?: string; model?: string; tokens: Tokens }
   | { type: "result"; text: string; usage?: { costUsd: number; durationMs: number } };
 
-export type Stage = "setup" | "audit" | "implement" | "review" | "verify" | "PR" | "waiting for merge" | "merged" | "done" | "failed";
+export type Stage = "setup" | "audit" | "filing" | "implement" | "review" | "verify" | "PR" | "waiting for merge" | "merged" | "done" | "failed";
 
 /** Progress from a run. `name` is the stage, or the tool call (e.g. "Edit src/cli.ts"). */
 export interface BunkerEvent {
-  type: "stage" | "text" | "toolCall" | "result" | "meta" | "note" | "usage" | "budget" | "watcher";
+  type: "stage" | "text" | "toolCall" | "result" | "meta" | "note" | "usage" | "budget" | "watcher" | "filed";
+  /** Set on every event of a `bunker audit` run (which has no issue number), so the hub draws it as its own card. */
+  audit?: boolean;
+  /** On "filed": an issue the audit filed. */
+  filed?: { number: number; title: string; url?: string };
   issue?: number;
   /** Index of the task, for runAll(). */
   task?: number;

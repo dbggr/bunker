@@ -2,7 +2,7 @@ import { liveGhEnv } from "../github/identity.ts";
 import { $ } from "bun";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { emitStage, lineHook, type OnEvent } from "../core/events.ts";
+import { emit, emitStage, lineHook, type OnEvent } from "../core/events.ts";
 import { runSetup } from "../worktree/admin.ts";
 import { copyIntoWorktree, copyPatterns } from "../worktree/copy.ts";
 import { IdleTimeout, agentLimits, timeoutMessage, type Timeouts, type Sandbox } from "../sandboxes/exec.ts";
@@ -82,10 +82,14 @@ export function auditPrompt(maxIssues: number, focus?: string): string {
  * titles that match an open issue. The worktree is always removed.
  */
 export async function runAudit(opts: AuditOptions): Promise<AuditResult> {
-  const target = { onEvent: opts.onEvent, role: "auditor" as const };
-  emitStage(target, "audit", undefined, modelLabel(opts.agent));
+  // An audit has no issue number: tag its events so the hub draws one card for it.
+  const onEvent: OnEvent | undefined = opts.onEvent && ((e) => opts.onEvent!({ ...e, audit: true }));
+  const target = { onEvent, role: "auditor" as const };
+  emit(onEvent, { type: "meta", title: opts.focus ? `Audit: ${opts.focus}` : "Audit" });
+  emitStage(target, "setup");
   try {
-    const result = await auditRun(opts);
+    const result = await auditRun({ ...opts, onEvent });
+    emit(onEvent, { type: "meta", ...(result.usage ? { costUsd: result.usage.costUsd } : {}) });
     emitStage(target, "done");
     return result;
   } catch (e) {
@@ -119,6 +123,7 @@ async function auditRun({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, fo
     const prep = await runSetup(sandbox, ctx, setup, timeouts);
     if (prep?.timedOut) throw new IdleTimeout(timeoutMessage("setup", prep.timedOut, timeouts));
     if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${prep.stdout.slice(-2000)}`);
+    emitStage({ onEvent, role: "auditor" }, "audit", undefined, modelLabel(agent));
     const base = auditPrompt(maxIssues, focus);
     const usages: (Usage | undefined)[] = [];
     let prompt = base;
@@ -141,6 +146,7 @@ async function auditRun({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, fo
     await $`git -C ${repo} worktree remove --force ${worktree}`.nothrow().quiet();
   }
 
+  emitStage({ onEvent, role: "auditor" }, "filing");
   const result: AuditResult = { filed: [], skipped: [], notFiled: [], ...(usage ? { usage } : {}) };
   const fresh: FollowUp[] = [];
   for (const b of issues) {
@@ -161,6 +167,8 @@ async function auditRun({ agent, sandbox, cwd = process.cwd(), maxIssues = 5, fo
     }
     const n = Number(/\/issues\/(\d+)/.exec(created.stdout.toString())?.[1]);
     result.filed.push({ number: Number.isInteger(n) ? n : 0, title: b.title });
+    const url = /https?:\/\/\S+\/issues\/\d+/.exec(created.stdout.toString())?.[0];
+    emit(onEvent, { type: "filed", filed: { number: Number.isInteger(n) ? n : 0, title: b.title, ...(url ? { url } : {}) } });
   }
   return result;
 }
