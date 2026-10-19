@@ -13,6 +13,7 @@ Usage:
   bunker watch                                keep working the queue unattended (implies --merge)
   bunker shepherd                             one pass over the open bunker PRs: fix red CI, update behind branches, resolve conflicts
   bunker status [--json]                      read-only watch summary: watcher, current run, queue, merged/failed with reasons, spend
+  bunker mcp                                  stdio MCP server: manage local watches (systemd user units) from Claude
   bunker ui [--port <n>]                      shared live view: one tab per repo (default port 4321)
   bunker audit                                file improvement ideas as \`discovered\` issues
   bunker triage [--yes]                       read-only agent verifies open \`discovered\` issues (dry run unless --yes)
@@ -143,6 +144,11 @@ init and doctor:
                              (or make it longer than one word).
   --yes                      (init) accept every default without asking; never overwrites a file, opens no PR and changes no
                              repo setting; the steps that need you (secrets, CI, ruleset) are listed at the end
+
+mcp:
+  bunker mcp                 stdio MCP server over systemd user units bunker-watch@<repo>.service (installed on first start_watch). Tools:
+                             list_watches, start_watch, stop_watch, restart_watch, watch_logs, spend, queue_issue (refused at or over the
+                             daily spend cap). It never starts, stops or alters a run through the hub. Add it: claude mcp add bunker -- bunker mcp
 
 status:
   bunker status              read-only, run in the repo. Prints whether \`bunker watch\` is alive (from .bunker/watch.lock: pid, version,

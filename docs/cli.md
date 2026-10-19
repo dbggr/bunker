@@ -196,6 +196,18 @@ read-only watch summary: watcher, current run, queue, merged/failed with reasons
 bunker status --json
 ```
 
+### bunker mcp
+
+stdio MCP server: manage local watches (systemd user units) from Claude
+
+| Flag | What it does | Default |
+| --- | --- | --- |
+| `bunker mcp` | stdio MCP server over systemd user units `bunker-watch@<repo>.service` (the template is installed on the first `start_watch`). Tools: `list_watches` (unit state, repo, current run), `start_watch`, `stop_watch`, `restart_watch`, `watch_logs` (last N lines), `spend` (today/month against the caps), `queue_issue` (adds `bunker:queued`; refused at or over the daily spend cap). It never starts, stops or alters a run through the hub |  |
+
+```sh
+claude mcp add bunker -- bunker mcp
+```
+
 ### bunker ui
 
 shared live view: one tab per repo
