@@ -15,7 +15,7 @@ import { runTriage, formatTriage } from "../pipeline/triage.ts";
 import { loadSpendCaps } from "../core/spend.ts";
 import { redact } from "../core/redact.ts";
 import { createProgress } from "../core/events.ts";
-import { defaultHubPort, hubReachable, readToken, startHub, viewUrlFor } from "../ui/ui.ts";
+import { defaultHubPort, hubHistoryDir, hubReachable, readToken, startHub, viewUrlFor } from "../ui/ui.ts";
 import { output } from "../core/output.ts";
 import { runClean } from "./commands/clean.ts";
 import { collectStatus, formatStatus } from "./commands/status.ts";
@@ -101,7 +101,7 @@ export async function uiCommand(values: CliValues) {
   }
   let hub;
   try {
-    hub = startHub({ port, token: readToken() });
+    hub = startHub({ port, token: readToken(), historyDir: hubHistoryDir() });
   } catch (e) {
     console.error(`bunker: could not start the hub: ${e instanceof Error ? e.message : e}`);
     process.exit(2);
