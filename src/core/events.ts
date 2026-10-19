@@ -63,6 +63,8 @@ export interface WatcherInfo {
   version: string;
   startedAt: number;
   parallel: number;
+  /** Set once Ctrl-C asked the watcher to stop: it finishes its in-flight steps and exits. */
+  stopping?: boolean;
   /** Epoch ms of the next queue pass; absent while one is running. */
   nextPassAt?: number;
   merged: { issue: number; prUrl?: string; at: number }[];

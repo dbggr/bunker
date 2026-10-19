@@ -87,7 +87,7 @@ export function podman(opts: DockerOptions = {}): Sandbox {
 /** Running containers (name -> bin) so an exiting CLI can stop them instead of orphaning the agent. */
 export const liveContainers = new Map<string, string>();
 let exitHooked = false;
-function stopLiveContainers() {
+export function stopLiveContainers() {
   for (const [name, bin] of liveContainers) Bun.spawnSync([bin, "kill", name], { stdio: ["ignore", "ignore", "ignore"] });
   liveContainers.clear();
 }

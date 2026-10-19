@@ -137,6 +137,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     ...(maxCostMonthUsd === undefined ? {} : { month: maxCostMonthUsd }),
   };
   const status = createStatusRecorder(dir, { pid: process.pid, version: pkg.version, caps, parallel: opts.parallel ?? 1 }, (watcher) => emit(opts.onEvent, { type: "watcher", watcher }));
+  signal?.addEventListener("abort", () => status.stopping(), { once: true });
   const userOnEvent = opts.onEvent;
   opts.onEvent = (e) => {
     status.event(e);
@@ -248,7 +249,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     await $`gh issue comment ${e.issue} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
   };
 
-  const shepherd = shepherdOn ? createShepherd({ cwd, agent: opts.agent, ...(opts.reviewer ? { reviewer: opts.reviewer } : {}), sandbox: opts.sandbox, ...(opts.setup ? { setup: opts.setup } : {}), ...(opts.verify ? { verify: opts.verify } : {}), ...(opts.verifyOnHost ? { verifyOnHost: true } : {}), ...(opts.verifyNetwork ? { verifyNetwork: true } : {}), ...(opts.idleTimeoutMs ? { idleTimeoutMs: opts.idleTimeoutMs } : {}), ...(opts.completionTimeoutMs ? { completionTimeoutMs: opts.completionTimeoutMs } : {}), ...(opts.stepTimeoutMs ? { stepTimeoutMs: opts.stepTimeoutMs } : {}), ...(opts.onEvent ? { onEvent: opts.onEvent } : {}), notify, ...(mention ? { mention } : {}) }) : undefined;
+  const shepherd = shepherdOn ? createShepherd({ cwd, agent: opts.agent, ...(opts.reviewer ? { reviewer: opts.reviewer } : {}), sandbox: opts.sandbox, ...(opts.setup ? { setup: opts.setup } : {}), ...(opts.verify ? { verify: opts.verify } : {}), ...(opts.verifyOnHost ? { verifyOnHost: true } : {}), ...(opts.verifyNetwork ? { verifyNetwork: true } : {}), ...(opts.idleTimeoutMs ? { idleTimeoutMs: opts.idleTimeoutMs } : {}), ...(opts.completionTimeoutMs ? { completionTimeoutMs: opts.completionTimeoutMs } : {}), ...(opts.stepTimeoutMs ? { stepTimeoutMs: opts.stepTimeoutMs } : {}), ...(opts.onEvent ? { onEvent: opts.onEvent } : {}), shouldStop: stopped, notify, ...(mention ? { mention } : {}) }) : undefined;
   const lastDecision = new Map<number, string>();
   let lastSweep = -Infinity;
   const SWEEP_EVERY_MS = 60 * 60_000;
@@ -360,7 +361,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       let paused = 0;
       const failedBefore = summary.failed;
       await runQueue({
-        ...opts, cwd, mention, merge: !manual, manual, handoff: shepherdOn && !manual, limit: Infinity, keepGoing: true, relist: true,
+        ...opts, ...(signal ? { signal } : {}), cwd, mention, merge: !manual, manual, handoff: shepherdOn && !manual, limit: Infinity, keepGoing: true, relist: true,
         skip: skipHandled,
         onRefused: giveUp,
         shouldStop: () => stopped() || capped().length > 0,

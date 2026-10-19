@@ -30,7 +30,7 @@ import { runVerify } from "./steps/verify.ts";
 import { publishIssue } from "./steps/pr.ts";
 import { closeNoChange } from "./steps/close.ts";
 
-export async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyRetries, check, verifyOnHost, verifyNetwork, merge, manual, handoff, ciTimeoutMin = 30, ciPollMs = 10_000, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, mention, allowLabelers, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
+export async function runIssueInner({ issue: number, cwd = process.cwd(), agent, reviewer, sandbox, maxRounds, resume, setup, copyToWorktree, verify, verifyRetries, check, verifyOnHost, verifyNetwork, merge, manual, handoff, ciTimeoutMin = 30, ciPollMs = 10_000, signal, onEvent: rawOnEvent, mergeTurn, attempt = 1, queueOrder, mention, allowLabelers, ...timeouts }: IssueOptions, spent: { usage?: Usage }, setUntrack: (u: () => void) => void): Promise<IssueResult> {
   const onEvent: OnEvent | undefined = rawOnEvent && ((e) => rawOnEvent({ ...e, issue: number }));
   // With BUNKER_GH_TOKEN, gh runs as that scoped token and git talks HTTPS through gh's
   // credential helper, so neither the user's SSH key nor their gh login is used.
@@ -169,7 +169,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
     const remoteState = await claimRemoteBranch({ repo, cwd, number, branch, worktree, baseSha, remote, gitCfg, env, log, onEvent });
     if (remoteState.prUrl) return fail("already-in-progress", { prUrl: remoteState.prUrl });
     remoteSha = remoteState.remoteSha;
-    setUntrack(track({ repo, worktree, branch, base: baseSha }));
+    setUntrack(track({ number, repo, worktree, branch, base: baseSha }));
     log("resuming after the usage limit", `session ${paused.sessionId ?? "(none)"}, ${paused.role} round ${paused.round}`);
     emit(onEvent, { type: "note", text: `#${number}: resuming after the usage limit (session ${paused.sessionId ?? "none"})` });
   } else {
@@ -179,7 +179,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   if (leftover.prUrl) return fail("already-in-progress", { prUrl: leftover.prUrl });
   const add = await worktreeAdmin(repo, () => $`git -C ${repo} worktree add -q -b ${branch} ${worktree} ${baseSha}`.nothrow().quiet());
   if (add.exitCode !== 0) return fail("failed", { error: `could not create worktree:\n${add.stderr}` });
-  setUntrack(track({ repo, worktree, branch, base: baseSha }));
+  setUntrack(track({ number, repo, worktree, branch, base: baseSha }));
   try {
     await copyIntoWorktree(repo, worktree, patterns);
   } catch (e) {
@@ -222,5 +222,5 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   const failedVerify = await verifyStep();
   if (failedVerify) return failedVerify;
 
-  return publishIssue(ctx, { agent, reviewer, verify, verifySource, merge, manual, handoff, mergeTurn, ciTimeoutMin, ciPollMs, result, notFiled, remoteSha, baseSha, runVerify: verifyStep });
+  return publishIssue(ctx, { agent, reviewer, verify, verifySource, merge, manual, handoff, mergeTurn, ciTimeoutMin, ciPollMs, signal, result, notFiled, remoteSha, baseSha, runVerify: verifyStep });
 }

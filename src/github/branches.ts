@@ -8,10 +8,13 @@ export async function waitForMerge(
   env: Record<string, string>,
   timeoutMs: number,
   pollMs: number,
-): Promise<{ outcome: "merged" | "closed" | "timeout"; detail?: string }> {
+  signal?: AbortSignal,
+): Promise<{ outcome: "merged" | "closed" | "timeout" | "released"; detail?: string }> {
   const deadline = Date.now() + timeoutMs;
   let lastError = "";
   for (;;) {
+    // Auto-merge is armed: GitHub merges without bunker, so a stop releases the wait.
+    if (signal?.aborted) return { outcome: "released" };
     const view = await $`gh pr view ${prUrl} --json state,mergeCommit`.cwd(cwd).env(env).nothrow().quiet();
     if (view.exitCode === 0) {
       try {
@@ -28,7 +31,15 @@ export async function waitForMerge(
     if (Date.now() >= deadline) {
       return { outcome: "timeout", detail: `PR not merged after ${timeoutMs / 60_000} min; auto-merge stays armed on the PR${lastError ? `\n${lastError}` : ""}` };
     }
-    await Bun.sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
+    await new Promise<void>((resolve) => {
+      const t = setTimeout(done, Math.min(pollMs, Math.max(0, deadline - Date.now())));
+      signal?.addEventListener("abort", done, { once: true });
+      function done() {
+        clearTimeout(t);
+        signal?.removeEventListener("abort", done);
+        resolve();
+      }
+    });
   }
 }
 

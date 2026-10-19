@@ -28,6 +28,7 @@ export interface PublishInput {
   mergeTurn: IssueOptions["mergeTurn"];
   ciTimeoutMin: number;
   ciPollMs: number;
+  signal: AbortSignal | undefined;
   result: ReviewResult;
   notFiled: FollowUp[];
   remoteSha: string | undefined;
@@ -39,7 +40,7 @@ export interface PublishInput {
 /** Push, open the PR and, with `merge`, update to the latest default branch first, arm auto-merge, wait, and check the merge landed. */
 export function publishIssue(ctx: IssueRunContext, input: PublishInput): Promise<IssueResult> {
   const { number, issue, repo, branch, worktree, token, env, gitCfg, remote, defaultBranch, onEvent, log, fail, fetchDefault } = ctx;
-  const { agent, reviewer, verify, verifySource, merge, manual, handoff, mergeTurn, ciTimeoutMin, ciPollMs, result, notFiled, remoteSha, runVerify } = input;
+  const { agent, reviewer, verify, verifySource, merge, manual, handoff, mergeTurn, ciTimeoutMin, ciPollMs, signal, result, notFiled, remoteSha, runVerify } = input;
   let baseSha = input.baseSha;
 
   /** Merges the latest default branch into the branch; re-verifies if that changed anything. Undefined when all is well. */
@@ -126,7 +127,8 @@ export function publishIssue(ctx: IssueRunContext, input: PublishInput): Promise
     // The shepherd (watch, or `bunker shepherd`) keeps the armed PR green and notices the merge; the slot is free now.
     if (handoff) return fail("awaiting-merge", opened);
     emitStage({ onEvent }, "waiting for merge");
-    const waited = await waitForMerge(prUrl, worktree, env, ciTimeoutMin * 60_000, ciPollMs);
+    const waited = await waitForMerge(prUrl, worktree, env, ciTimeoutMin * 60_000, ciPollMs, signal);
+    if (waited.outcome === "released") return fail("awaiting-merge", opened);
     if (waited.outcome !== "merged") return fail(waited.outcome === "closed" ? "merge-failed" : "ci-timeout", { ...opened, error: waited.detail });
     await $`gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/${branch}`.cwd(worktree).env(env).nothrow().quiet();
 
