@@ -27,6 +27,8 @@ import { noNotify, withRepo, type Notify } from "../../core/notify.ts";
 export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "keepGoing" | "shouldStop" | "skip" | "onResult" | "onRefused" | "handoff"> {
   /** Run the shepherd stage: a run ends when its PR is open and auto-merge armed, and every open bunker PR is kept green until it merges. Defaults to true. */
   shepherd?: boolean;
+  /** How often the shepherd (and the waiting-PR reconcile) runs while a queue run is in flight. Defaults to 1 minute. */
+  shepherdEveryMs?: number;
   /** Remove leftover worktrees and branches (as `bunker clean --yes`) once the lock is held. */
   cleanOnStart?: boolean;
   /** With cleanOnStart: also prune run logs older than this many days. */
@@ -115,7 +117,7 @@ function acquireLock(file: string): () => void {
  * Works the `bunker:queued` queue with auto-merge, pass after pass, until aborted or `forMs` is up.
  * Any outcome other than `merged` relabels the issue `bunker:failed` so it is never retried by itself.
  */
-export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, triageEveryHours, auditor, maxIssues, cleanOnStart, logsDays, log = console.log, notify: rawNotify = noNotify, mention, shepherd: shepherdOn = true, manual, ...opts }: WatchOptions): Promise<WatchSummary> {
+export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, triageEveryHours, auditor, maxIssues, cleanOnStart, logsDays, log = console.log, notify: rawNotify = noNotify, mention, shepherd: shepherdOn = true, shepherdEveryMs = 60_000, manual, ...opts }: WatchOptions): Promise<WatchSummary> {
   const cwd = opts.cwd ?? process.cwd();
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const notify = withRepo(rawNotify, (await repoId(repo)).split("/").pop()!);
@@ -333,6 +335,25 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     return landed;
   };
 
+  // Passes never overlap: the timer pass and the between-runs pass share one in-flight promise.
+  let inFlight: Promise<number> | undefined;
+  let unclaimed = 0;
+  const guardedPass = (): Promise<number> => {
+    inFlight ??= shepherdPass().finally(() => { inFlight = undefined; });
+    return inFlight;
+  };
+  /** While a queue run is in flight, keeps shepherding on a timer so merges and conflicts show up without waiting for the run to end. */
+  const shepherdWhile = async <T>(work: Promise<T>): Promise<T> => {
+    if (!shepherd) return work;
+    const timer = setInterval(() => { void guardedPass().then((n) => { unclaimed += n; }, (e) => log(`bunker: shepherd: ${e instanceof Error ? e.message : String(e)}`)); }, shepherdEveryMs);
+    try {
+      return await work;
+    } finally {
+      clearInterval(timer);
+      await inFlight?.catch(() => {});
+    }
+  };
+
   const summary: WatchSummary = { passes: 0, merged: 0, failed: 0, spentUsd: 0 };
   let idlePasses = 0;
   publishBudget();
@@ -356,11 +377,11 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       if (auditDue() && !stopped()) await audit();
       if (triageDue() && !stopped()) await triage();
       let merged = 0;
-      merged += await shepherdPass();
+      merged += await guardedPass();
       let pausedUntil: number | undefined;
       let paused = 0;
       const failedBefore = summary.failed;
-      await runQueue({
+      await shepherdWhile(runQueue({
         ...opts, ...(signal ? { signal } : {}), cwd, mention, merge: !manual, manual, handoff: shepherdOn && !manual, limit: Infinity, keepGoing: true, relist: true,
         skip: skipHandled,
         onRefused: giveUp,
@@ -404,7 +425,9 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
             await markFailed(e);
           }
         },
-      });
+      }));
+      merged += unclaimed;
+      unclaimed = 0;
       summary.passes++;
       if (stopped()) {
         log(`bunker: pass ${summary.passes} · ${merged} merged · stopping · ${formatSpend(spendFile, caps)}`);
