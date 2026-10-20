@@ -91,7 +91,7 @@ describe("docs", () => {
   test("README has no flag tables and stays short", async () => {
     const readme = await read("README.md");
     expect(readme).not.toMatch(/^\|.*--[a-z]/m);
-    expect(readme.split("\n").length).toBeLessThan(65);
+    expect(readme.split("\n").length).toBeLessThan(75);
   });
 });
 
@@ -108,5 +108,13 @@ describe("services docs (#411)", () => {
     for (const s of ["Running", "Waiting for merge", "Finished today", "Queue", "Shepherd", "Watcher", "audit card", "XDG_STATE_HOME", "hub/<owner>_<repo>.jsonl", "2000", "7 days", "delete its file"]) expect(concepts).toContain(s);
     for (const s of ["XDG_STATE_HOME", "mode 600", "redacted"]) expect(sec).toContain(s);
     expect(readme).toContain("history across restarts");
+  });
+
+  test("bunker mcp is documented in the README and getting-started, and the site guide is built from docs/ (#506)", async () => {
+    const [readme, start, prep] = await Promise.all(["README.md", "docs/getting-started.md", "site/scripts/prepare-docs.ts"].map(read));
+    expect(readme).toContain("claude mcp add -s user bunker -- bunker mcp");
+    expect(start).toContain("claude mcp add -s user bunker -- bunker mcp");
+    for (const s of ["bunker-watch@", "list_watches", "invisible"]) expect(start).toContain(s);
+    expect(prep).toContain('join(root, "docs")'); // site/guide mirrors docs/
   });
 });

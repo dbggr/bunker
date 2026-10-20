@@ -43,6 +43,14 @@ bunker status        # what it's doing, what merged, and why anything failed
 
 Unattended `bunker watch` with `--parallel` runs and spend caps; a PR shepherd that fixes red CI and resolves conflicts; Manual-merge mode; `bunker status` and a live `bunker ui` (runs by state, audit cards, history across restarts); context/spec files and per-role skills; `bunker audit` and `bunker triage` for finding and checking work. See [Concepts](docs/concepts.md).
 
+## Manage watches from Claude
+
+`bunker mcp` is an MCP server that starts, stops and inspects `bunker watch` runs as systemd user units. Add it once, at user scope (works from any repo; see [getting-started](docs/getting-started.md)):
+
+```sh
+claude mcp add -s user bunker -- bunker mcp
+```
+
 ## Safety
 
 bunker is built to be left running, so the defaults are strict. Only maintainers can queue work, and issues edited after labelling are refused. Comments from non-maintainers never reach the agent. The sandbox gets the repo's git internals read-only. Tests run without network or credentials. Changes to `.bunker/`, `.github/`, `.claude/`, `CLAUDE.md` and `AGENTS.md` always wait for human review. Each of these gates has a test that fails if the gate is removed. The full threat model and its trade-offs are in [docs/security.md](docs/security.md).
