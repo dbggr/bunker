@@ -407,6 +407,32 @@ describe("shepherd pass", () => {
     expect((await remoteLog(w, "fix/7-thing"))[0]).toBe("feat: fix/7-thing");
   });
 
+  test("a fix that touches package.json is not pushed", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs.push(prJson(10, "fix/7-thing", sha));
+    w.state.checks[10] = RED;
+    w.save();
+    const pass = await shepherd(w, fakeAgent(`echo '{}' > package.json && git add . && git commit -qm "fix: deps"`)).pass();
+    expect(pass.entries[0]).toMatchObject({ action: "failed" });
+    expect(pass.entries[0]!.detail).toMatch(/only a human/);
+    expect((await remoteLog(w, "fix/7-thing"))[0]).toBe("feat: fix/7-thing");
+  });
+
+  test("a fix that touches a review_paths file of the base config is not pushed", async () => {
+    const w = await world();
+    await Bun.write(join(w.repo, ".bunker/config.toml"), 'review_paths = ["gate/**"]\n');
+    await $`git -C ${w.repo} add . && git -C ${w.repo} commit -q -m "chore: config" && git -C ${w.repo} push -q origin main`;
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs.push(prJson(10, "fix/7-thing", sha));
+    w.state.checks[10] = RED;
+    w.save();
+    const pass = await shepherd(w, fakeAgent(`mkdir gate && echo x > gate/a.sh && git add . && git commit -qm "fix: gate"`)).pass();
+    expect(pass.entries[0]).toMatchObject({ action: "failed" });
+    expect(pass.entries[0]!.detail).toMatch(/only a human/);
+    expect((await remoteLog(w, "fix/7-thing"))[0]).toBe("feat: fix/7-thing");
+  });
+
   test("red after the bounded attempts → bunker:failed on the PR and the issue, a comment, a notification, no agent", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
