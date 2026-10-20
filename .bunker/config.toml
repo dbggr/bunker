@@ -1,5 +1,7 @@
 setup = "bun install --frozen-lockfile"
 verify = "bun test && bun run typecheck"
+# bunker's own gate code: an agent PR that weakens it must not auto-merge
+review_paths = ["src/pipeline/steps/pr.ts", "src/worktree/steering.ts", "src/pipeline/review.ts", "src/core/config.ts"]
 
 [watch]
 # daily spend cap for bunker's own watcher; beats ~/.config/bunker max_cost_day (#482)

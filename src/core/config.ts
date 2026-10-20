@@ -20,6 +20,7 @@ export interface RepoConfig {
   check?: string;
   copy?: string[];
   context?: string[];
+  review_paths?: string[];
   models: { implementer?: string; reviewer?: string; auditor?: string; default?: string };
   skills: SkillsConfig;
   watch: { interval?: number; parallel?: number; max_cost_day?: number; max_cost_month?: number; audit_every?: number; triage_every?: number };
@@ -51,6 +52,7 @@ export const CONFIG_KEYS: KeySpec[] = [
   { key: "check", kind: "string", doc: "command (e.g. a typecheck) run in the isolated sandbox before each review; its output goes into the reviewer prompt" },
   { key: "copy", kind: "strings", doc: "gitignored paths or globs copied into each worktree (legacy: .bunker/copy)", default: [] },
   { key: "context", kind: "strings", doc: "repo files (read from the default branch) inlined into the implementer and reviewer prompts", default: [] },
+  { key: "review_paths", kind: "strings", doc: "extra globs: a PR changing a matching file gets bunker:review and no auto-merge (on top of .bunker/, .github/, agent-steering files, package.json, lockfiles, Makefile)", default: [] },
   { key: "models.implementer", kind: "string", doc: "model for the implementer role" },
   { key: "models.reviewer", kind: "string", doc: "model for the reviewer role" },
   { key: "models.auditor", kind: "string", doc: "model for the auditor role" },

@@ -137,6 +137,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   let fromToml: string | undefined;
   let services: Services | undefined;
   let prepare: string | undefined;
+  let reviewPaths: string[] = [];
   try {
     const toml = await show(".bunker/config.toml");
     const cfg = toml === undefined ? undefined : parseConfig(toml).config;
@@ -145,6 +146,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
     check ??= cfg?.check?.trim() || undefined;
     services = cfg?.services;
     prepare = cfg?.prepare?.trim() || undefined;
+    reviewPaths = cfg?.review_paths ?? [];
   } catch (e) {
     return fail("failed", { error: e instanceof Error ? e.message : String(e) });
   }
@@ -233,5 +235,5 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   const failedVerify = await verifyStep();
   if (failedVerify) return failedVerify;
 
-  return publishIssue(ctx, { agent, reviewer, verify, verifySource, merge, manual, handoff, mergeTurn, ciTimeoutMin, ciPollMs, signal, result, notFiled, remoteSha, baseSha, runVerify: verifyStep });
+  return publishIssue(ctx, { agent, reviewer, verify, verifySource, merge, manual, handoff, mergeTurn, ciTimeoutMin, ciPollMs, signal, result, notFiled, remoteSha, baseSha, reviewPaths, runVerify: verifyStep });
 }

@@ -36,6 +36,11 @@ github_user = "carol"
 `;
 
 describe("parseConfig", () => {
+  test("review_paths is an array of strings", () => {
+    expect(parseConfig('review_paths = ["src/gate/**"]').config.review_paths).toEqual(["src/gate/**"]);
+    expect(() => parseConfig("review_paths = 1")).toThrow(ConfigError);
+  });
+
   test("merge = \"manual\" and [merge] mode = \"manual\" both set the merge mode; other values are refused", () => {
     expect(parseConfig('merge = "manual"').config.merge).toEqual({ mode: "manual" });
     expect(parseConfig('[merge]\nmode = "manual"\nci_timeout = 5').config.merge).toEqual({ mode: "manual", ci_timeout: 5 });

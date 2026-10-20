@@ -9,6 +9,13 @@ export const STEERING = /(^|\/)(\.claude\/|CLAUDE(\.local)?\.md$|AGENTS\.md$)/;
 /** Paths only a human may merge changes to: `.bunker/` feeds the host, `.github/` is CI, and the steering files steer agents. */
 export const isSensitivePath = (f: string) => /^\.(bunker|github)\//.test(f) || STEERING.test(f);
 
+/** Files CI or verify executes (scripts, dependency locks, Makefiles), matched by name at any depth: effectively config, so only a human merges changes to them. */
+export const DEFAULT_REVIEW_PATHS = ["package.json", "bun.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "composer.json", "composer.lock", "Makefile"];
+
+/** Whether a human must review a change to `f`: a sensitive path, a default review path, or a match of one of the repo's `review_paths` globs. */
+export const isReviewPath = (f: string, extra: readonly string[] = []): boolean =>
+  isSensitivePath(f) || DEFAULT_REVIEW_PATHS.includes(f.slice(f.lastIndexOf("/") + 1)) || extra.some((g) => new Bun.Glob(g).match(f));
+
 const listed = async (cmd: Promise<{ stdout: Buffer }>) => (await cmd).stdout.toString().split("\0").filter((f) => f && STEERING.test(f));
 
 const prune = async (worktree: string, f: string) => {

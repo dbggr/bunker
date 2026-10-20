@@ -5,6 +5,7 @@ import { formatSpend, loadSpendCaps } from "../../core/spend.ts";
 import { capSources, capsFrom } from "../../core/settings.ts";
 import { AUTH_VARS, loadBunkerEnv } from "../../core/env.ts";
 import { DEFAULT_MODEL_LABEL, resolveModels } from "../../agents/models.ts";
+import { DEFAULT_REVIEW_PATHS } from "../../worktree/steering.ts";
 import { ConfigError, effectiveSettings, formatValue, loadRepoConfig } from "../../core/config.ts";
 import { redact } from "../../core/redact.ts";
 import { unpullable } from "../../sandboxes/services.ts";
@@ -179,6 +180,10 @@ export async function runDoctor(opts: { cwd: string; env?: Env; fetch?: typeof g
   if (loaded?.present) add({ id: "config", group: "config", label: ".bunker/config.toml", ok: true, detail: loaded.warnings.length ? loaded.warnings.join("; ") : "valid" });
   for (const f of loaded?.removedFiles ?? []) add({ id: "config-removed-file", group: "config", label: `.bunker/${f}`, ok: false, detail: "no longer read", fix: `move it to \`${f} = "…"\` in .bunker/config.toml and delete the file` });
   if (loaded) for (const s of effectiveSettings({ config: loaded.config, legacy: loaded.legacy, env })) add({ id: `setting-${s.key}`, group: "config", label: s.key, ok: true, required: false, detail: `${formatValue(s.value)} (${s.source})` });
+  if (loaded) {
+    const paths = [...DEFAULT_REVIEW_PATHS.map((p) => `${p} (default)`), ...(cfg?.review_paths ?? []).map((p) => `${p} (config.toml)`)];
+    add({ id: "review-paths", group: "config", label: "review paths", ok: true, required: false, detail: `${paths.join(", ")}; plus .bunker/, .github/, .claude/, CLAUDE.md, AGENTS.md (always)` });
+  }
   add({ id: "verify", group: "repo", label: "verify command", ok: !!cfg?.verify, fix: "set verify in .bunker/config.toml with the command that must pass before pushing, e.g. `bun test && bun run typecheck` (`bunker init` proposes one)" });
   add({ id: "setup", group: "repo", label: "setup command (optional)", ok: !!cfg?.setup, required: false, fix: "runs in each worktree before the agent, e.g. `bun install --frozen-lockfile`" });
   // services started for verify: shown, and their images must be pullable
