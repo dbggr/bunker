@@ -20,7 +20,7 @@ import { MAINTAINER_ROLES } from "../github/labeler.ts";
 import { addPrLabel, ensureLabel, FAILED_LABEL, requestReviewer, REVIEW_LABEL } from "../github/labels.ts";
 import { copyIntoWorktree, copyPatterns } from "../worktree/copy.ts";
 import { runSetup, worktreeAdmin } from "../worktree/admin.ts";
-import { isSensitivePath } from "../worktree/steering.ts";
+import { isReviewPath } from "../worktree/steering.ts";
 import { UsageLimit } from "./errors.ts";
 import { VERDICT_FORMAT } from "./review.ts";
 
@@ -399,9 +399,11 @@ export function createShepherd(o: ShepherdOptions) {
       const tip = (await $`git -C ${worktree} rev-parse HEAD`.text()).trim();
       if (tip === headSha) throw new Refused("nothing to push: the agent made no commit");
       // An armed PR was checked not to touch these; a fix must not add to them behind the human's back.
+      const baseToml = await $`git -C ${repo} show ${`${baseSha}:.bunker/config.toml`}`.nothrow().quiet();
+      const reviewPaths = baseToml.exitCode === 0 ? (parseConfig(baseToml.stdout.toString()).config.review_paths ?? []) : [];
       const own = async (rev: string, from: string) => (await $`git -C ${worktree} diff -z --name-only --no-renames ${from} ${rev}`.nothrow().quiet()).stdout.toString().split("\0").filter(Boolean);
-      const before = new Set((await own(headSha, (await $`git -C ${worktree} merge-base ${baseSha} ${headSha}`.nothrow().quiet().text()).trim() || baseSha)).filter(isSensitivePath));
-      const added = (await own(tip, baseSha)).filter((f) => isSensitivePath(f) && !before.has(f));
+      const before = new Set((await own(headSha, (await $`git -C ${worktree} merge-base ${baseSha} ${headSha}`.nothrow().quiet().text()).trim() || baseSha)).filter((f) => isReviewPath(f, reviewPaths)));
+      const added = (await own(tip, baseSha)).filter((f) => isReviewPath(f, reviewPaths) && !before.has(f));
       if (added.length) throw new Refused(`the fix would change ${added.slice(0, 5).join(", ")}, which only a human may change`);
       const push = await $`git ${gitCfg} -C ${worktree} push -q ${`--force-with-lease=refs/heads/${pr.branch}:${headSha}`} ${remote} ${`HEAD:refs/heads/${pr.branch}`}`.env(env).nothrow().quiet();
       if (push.exitCode !== 0) throw new Refused(`git push failed:\n${push.stderr}`);
