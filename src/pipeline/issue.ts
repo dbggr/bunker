@@ -63,7 +63,7 @@ export interface IssueOptions extends Timeouts {
 }
 
 export interface IssueResult {
-  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked" | "bad-output" | "idle-timeout" | "already-in-progress" | "paused-usage-limit" | "needs-review" | "awaiting-merge" | "awaiting-review" | "no-change";
+  status: "pr-opened" | "rejected" | "failed" | "conflict" | "verify-failed" | "ci-timeout" | "merged" | "merge-failed" | "merge-unverified" | "blocked" | "bad-output" | "idle-timeout" | "already-in-progress" | "paused-usage-limit" | "interrupted" | "needs-review" | "awaiting-merge" | "awaiting-review" | "no-change";
   /** With status `paused-usage-limit`: where the run stopped. Re-running the issue (or the next watch pass) resumes it. */
   pause?: { resetAt?: number; sessionId?: string };
   /** With status `no-change`: the verdict the reviewer agreed with, and for which bunker closed the issue. */

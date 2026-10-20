@@ -38,7 +38,11 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   const env = liveGhEnv();
   const gitCfg = token ? ["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"] : [];
   const view = await $`gh issue view ${number} --json number,title,body,author,state,labels,comments`.cwd(cwd).env(env).nothrow().quiet();
-  if (view.exitCode !== 0) throw new Error(`gh issue view ${number} failed:\n${view.stderr}`);
+  if (view.exitCode !== 0) {
+    // A stop (SIGTERM reaches gh too) is not this issue's failure: leave it queued for the next watch.
+    if (signal?.aborted) return { status: "interrupted", branch: "", worktree: "", filed: [] };
+    throw new Error(`gh issue view ${number} failed:\n${view.stderr}`);
+  }
   const issue = JSON.parse(view.stdout.toString()) as IssueInfo;
   // `gh issue view` doesn't expose the issue's author association, so ask the REST API; fail closed to untrusted.
   const assoc = await $`gh api repos/{owner}/{repo}/issues/${number} --jq .author_association`.cwd(cwd).env(env).nothrow().quiet();

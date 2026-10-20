@@ -756,6 +756,17 @@ describe("runIssue()", () => {
     expect((await $`git -C ${repo} branch ${"--format=%(refname:short)"}`.text()).trim()).toBe("main");
   });
 
+  test("gh issue view killed by a stop → interrupted, not a failure", async () => {
+    const { repo, origin } = await setup(issue());
+    await Bun.write(join(dirname(origin), "bin", "gh"), "#!/bin/sh\nexit 1\n"); // SIGTERM killed gh: empty stderr
+    const ctl = new AbortController();
+    ctl.abort();
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), signal: ctl.signal });
+    expect(r.status).toBe("interrupted");
+    // Without a stop the same failure still throws.
+    await expect(runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() })).rejects.toThrow(/gh issue view 7 failed/);
+  });
+
   test("branches from origin's main, not a stale local HEAD", async () => {
     const { repo, origin } = await setup(issue());
     const other = join(repo, "..", "other");
