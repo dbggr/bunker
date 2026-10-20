@@ -394,6 +394,8 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
             // Not a failure: the issue keeps `bunker:queued` and is resumed once the limit resets.
             paused = e.issue;
             pausedUntil = e.pause?.resetAt;
+          } else if (e.status === "interrupted") {
+            // Not a failure: a stop hit the run before it started; the issue keeps `bunker:queued`.
           } else if (e.status === "merged") {
             merged++;
             summary.merged++;
