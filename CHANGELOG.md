@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.12.0 - 2026-10-20
+
+- fix(mcp): start_watch units run bare 'watch' — no --ui, --interval or --parallel, so the hub goes down (#511)
+- docs: document bunker mcp in README and getting-started (#506) (#508)
+
 ## v0.11.0 - 2026-10-20
 
 - fix(mcp): set PATH, pass tokens and quote ExecStart in the bunker-watch@ unit (#501) (#503)
