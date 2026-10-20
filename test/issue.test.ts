@@ -767,6 +767,17 @@ describe("runIssue()", () => {
     await expect(runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() })).rejects.toThrow(/gh issue view 7 failed/);
   });
 
+  test("default-branch fetch killed by a stop → interrupted, not a failure", async () => {
+    const { repo } = await setup(issue());
+    await $`git -C ${repo} remote set-url origin /nonexistent/origin.git`.quiet();
+    const ctl = new AbortController();
+    ctl.abort();
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), signal: ctl.signal });
+    expect(r.status).toBe("interrupted");
+    const r2 = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() });
+    expect(r2.status).toBe("failed");
+  });
+
   test("branches from origin's main, not a stale local HEAD", async () => {
     const { repo, origin } = await setup(issue());
     const other = join(repo, "..", "other");
