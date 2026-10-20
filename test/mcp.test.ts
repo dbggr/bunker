@@ -66,10 +66,18 @@ describe("mcp tools", () => {
     const r = await call("start_watch", { repo });
     expect(r.isError).toBe(false);
     expect(Object.keys(writes)).toEqual(["/units/bunker-watch@.service"]);
-    expect(writes["/units/bunker-watch@.service"]).toBe(UNIT_TEMPLATE(["/usr/bin/bunker"]));
+    expect(writes["/units/bunker-watch@.service"]).toBe(UNIT_TEMPLATE(["/usr/bin/bunker"], process.env.PATH));
     expect(UNIT_TEMPLATE(["/usr/bin/bunker"])).toContain("Restart=on-failure");
     expect(calls.map((c) => c.slice(0, 3).join(" "))).toEqual(["systemctl --user daemon-reload", "systemctl --user start"]);
     expect(calls[1]).toContain(`bunker-watch@${escapePath(repo)}.service`);
+  });
+
+  test("the unit quotes ExecStart and sets PATH and token passthrough", () => {
+    const unit = UNIT_TEMPLATE(["/opt/my dir/bun", "/src/cli.ts"], "/home/u/.local/bin:/usr/bin");
+    expect(unit).toContain('ExecStart="/opt/my dir/bun" "/src/cli.ts" watch');
+    expect(unit).toContain('Environment="PATH=/home/u/.local/bin:/usr/bin"');
+    expect(unit).toContain("PassEnvironment=GH_TOKEN GITHUB_TOKEN ANTHROPIC_API_KEY");
+    expect(UNIT_TEMPLATE(["/a%b/$x"], "/bin")).toContain('ExecStart="/a%%b/$$x" watch');
   });
   test("start_watch leaves an existing template alone", async () => {
     const { call, writes, calls } = setup({ unitExists: () => true });

@@ -32,14 +32,18 @@ export function unescapePath(s: string): string {
 const unitName = (repo: string) => `${PREFIX}${escapePath(repo)}.service`;
 
 /** The systemd user template: one instance per repo, the instance name being the escaped repo path (`%f` is the path back). */
-export const UNIT_TEMPLATE = (bunker: string[]) => `[Unit]
+const quoteExec = (a: string) => `"${a.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/%/g, "%%").replace(/\$/g, "$$$$")}"`;
+
+/** `path` is baked into the unit as PATH: user units get a minimal one that lacks gh and claude. */
+export const UNIT_TEMPLATE = (bunker: string[], path?: string) => `[Unit]
 Description=bunker watch for %f
 After=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=%f
-ExecStart=${bunker.join(" ")} watch
+${path ? `Environment=${quoteExec(`PATH=${path}`)}\n` : ""}PassEnvironment=GH_TOKEN GITHUB_TOKEN ANTHROPIC_API_KEY
+ExecStart=${[...bunker.map(quoteExec), "watch"].join(" ")}
 Restart=on-failure
 RestartSec=30
 
@@ -116,7 +120,7 @@ export function createMcp(d: McpDeps) {
         const repo = repoArg(a);
         const path = join(d.unitDir, `${PREFIX}.service`);
         if (!d.unitExists(path)) {
-          d.writeUnit(path, UNIT_TEMPLATE(d.bunkerCommand()));
+          d.writeUnit(path, UNIT_TEMPLATE(d.bunkerCommand(), process.env.PATH));
           const r = await d.run(["systemctl", "--user", "daemon-reload"]);
           if (r.code !== 0) throw new ToolError(`systemctl daemon-reload failed: ${(r.stderr || r.stdout).trim()}`);
         }
