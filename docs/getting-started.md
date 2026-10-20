@@ -92,6 +92,16 @@ bunker watch --for 5h --max-cost-day 10
 
 `bunker watch` implies `bunker queue --merge`, so it needs `verify` in `config.toml`. Watch the run with `bunker ui`. Every flag is in [cli.md](cli.md); if something goes wrong see [troubleshooting.md](troubleshooting.md).
 
+## Optional: run watches through the MCP
+
+Instead of starting `bunker watch` by hand, let Claude run it as a `bunker-watch@` systemd user unit through `bunker mcp`. Add the server once, at user scope, so it works from any repo:
+
+```sh
+claude mcp add -s user bunker -- bunker mcp
+```
+
+Then ask Claude to start, stop or restart the watch, read its logs, check spend or queue an issue. The unit template is installed on the first `start_watch`. Only watches started this way are managed: a `bunker watch` you started by hand in a terminal is invisible to `list_watches`, and the MCP can't stop it. The tools are listed under `bunker mcp` in [cli.md](cli.md).
+
 ## Optional: a separate GitHub identity
 
 Everything above uses your own PAT, so every PR is authored by you and GitHub won't let you approve it. If you want separate attribution, or "auto-merge, but only after I approve", give bunker its own identity. This is opt-in; with only `BUNKER_GH_TOKEN` set nothing changes, and `bunker init` asks (default no).
