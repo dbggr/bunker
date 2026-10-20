@@ -118,3 +118,13 @@ describe("services docs (#411)", () => {
     expect(prep).toContain('join(root, "docs")'); // site/guide mirrors docs/
   });
 });
+
+describe("good-fit guide (#523)", () => {
+  test("concepts.md has the guide, links review_paths to security.md, and the README points to it", async () => {
+    const [concepts, readme] = await Promise.all(["docs/concepts.md", "README.md"].map(read));
+    expect(concepts).toMatch(/^## Is this a good fit for bunker\?$/m);
+    const section = concepts.split(/^## Is this a good fit for bunker\?$/m)[1]!.split(/^## /m)[0]!;
+    for (const s of ["Do it by hand", "Queue it", "review_paths", "(security.md)", "borderline"]) expect(section).toContain(s);
+    expect(readme).toContain("docs/concepts.md#is-this-a-good-fit-for-bunker");
+  });
+});
