@@ -325,6 +325,7 @@ bunker clean --yes --logs 14
 | check | command (e.g. a typecheck) run in the isolated sandbox before each review; its output goes into the reviewer prompt |  | .bunker/config.toml |
 | copy | gitignored paths or globs copied into each worktree (legacy: .bunker/copy) |  | .bunker/config.toml |
 | context | repo files (read from the default branch) inlined into the implementer and reviewer prompts |  | .bunker/config.toml |
+| review_paths | extra globs: a PR changing a matching file gets bunker:review and no auto-merge (on top of .bunker/, .github/, agent-steering files, package.json, lockfiles, Makefile) |  | .bunker/config.toml |
 | models.implementer | model for the implementer role |  | .bunker/config.toml |
 | models.reviewer | model for the reviewer role |  | .bunker/config.toml |
 | models.auditor | model for the auditor role |  | .bunker/config.toml |

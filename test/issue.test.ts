@@ -977,6 +977,29 @@ describe("runIssue() --merge", () => {
     expect(await Bun.file(mergeLog).exists()).toBe(false);
   });
 
+  test.each(["package.json", "bun.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "composer.json", "composer.lock", "Makefile", "pkg/package.json"])("a PR touching %s (CI executes it) → needs-review", async (path) => {
+    const { repo, mergeLog, editLog } = await setup(issue(), "ff");
+    const agent: Agent = { command: (p, m = "write") => (m === "write" ? ["sh", "-c", `mkdir -p $(dirname ${path}) && echo x > ${path} && echo hi > feature.txt && git add -A && git commit -qm "feat: impl"`] : ["sh", "-c", `echo '${APPROVE}'`]) };
+    const r = await run(repo, { agent });
+    expect(r.status).toBe("needs-review");
+    expect(r.error).toContain(path);
+    expect(await Bun.file(mergeLog).exists()).toBe(false);
+    expect(await Bun.file(editLog).text()).toContain("labels[]=bunker:review");
+  });
+
+  test("a PR touching a review_paths glob of the base branch's config → needs-review", async () => {
+    const { repo, mergeLog } = await setup(issue(), "ff");
+    await $`mkdir -p ${repo}/.bunker`;
+    await Bun.write(join(repo, ".bunker", "config.toml"), 'review_paths = ["src/gate/**", "scripts/ci.sh"]\n');
+    await $`git -C ${repo} add .bunker && git -C ${repo} commit -qm "chore: review paths" && git -C ${repo} push -q origin main`;
+    const path = "src/gate/deep/a.ts";
+    const agent: Agent = { command: (p, m = "write") => (m === "write" ? ["sh", "-c", `mkdir -p $(dirname ${path}) && echo x > ${path} && echo hi > feature.txt && git add -A && git commit -qm "feat: impl"`] : ["sh", "-c", `echo '${APPROVE}'`]) };
+    const r = await run(repo, { agent });
+    expect(r.status).toBe("needs-review");
+    expect(r.error).toContain(path);
+    expect(await Bun.file(mergeLog).exists()).toBe(false);
+  });
+
   test("moving a file out of .bunker/ is still needs-review", async () => {
     const { repo, mergeLog } = await setup(issue(), "ff");
     await $`mkdir -p ${repo}/.bunker`;

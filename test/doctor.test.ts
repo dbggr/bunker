@@ -100,6 +100,16 @@ describe("doctor", () => {
     expect(failed(r2.checks)).toContain("repo");
   });
 
+  test("shows the effective review paths and where each comes from", async () => {
+    const w = await fakeWorld();
+    await Bun.write(join(w.repo, ".bunker", "config.toml"), 'review_paths = ["src/gate/**"]\n');
+    const r = await runDoctor({ cwd: w.repo, env: w.env });
+    const detail = r.checks.find((c) => c.id === "review-paths")!.detail!;
+    expect(detail).toContain("package.json (default)");
+    expect(detail).toContain("Makefile (default)");
+    expect(detail).toContain("src/gate/** (config.toml)");
+  });
+
   test("optional files are noted, not failures; models are shown", async () => {
     const w = await fakeWorld();
     const r = await runDoctor({ cwd: w.repo, env: { ...w.env, BUNKER_REVIEWER_MODEL: "claude-opus-5-5" } });
