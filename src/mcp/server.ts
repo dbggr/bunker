@@ -43,7 +43,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=%f
 ${path ? `Environment=${quoteExec(`PATH=${path}`)}\n` : ""}PassEnvironment=GH_TOKEN GITHUB_TOKEN ANTHROPIC_API_KEY
-ExecStart=${[...bunker.map(quoteExec), "watch"].join(" ")}
+ExecStart=${[...bunker.map(quoteExec), "watch", "--ui", "$BUNKER_WATCH_ARGS"].join(" ")}
 Restart=on-failure
 RestartSec=30
 
@@ -60,7 +60,8 @@ export interface Run {
 export interface McpDeps {
   run: (cmd: string[]) => Promise<Run>;
   unitDir: string;
-  unitExists: (path: string) => boolean;
+  /** The file's text, or null when it does not exist. */
+  readUnit: (path: string) => string | null;
   writeUnit: (path: string, text: string) => void;
   /** argv prefix that starts bunker, e.g. ["/usr/bin/bunker"]. */
   bunkerCommand: () => string[];
@@ -115,16 +116,36 @@ export function createMcp(d: McpDeps) {
     {
       name: "start_watch",
       description: "Start `bunker watch` for a repo as a systemd user unit; installs the bunker-watch@.service template if missing",
-      inputSchema: schema({ repo: repoProp }, ["repo"]),
+      inputSchema: schema(
+        {
+          repo: repoProp,
+          interval: { type: "integer", description: "Minutes to sleep when no work is waiting (watch --interval)" },
+          parallel: { type: "integer", description: "Issues to work at once (watch --parallel)" },
+        },
+        ["repo"],
+      ),
       async call(a) {
         const repo = repoArg(a);
-        const path = join(d.unitDir, `${PREFIX}.service`);
-        if (!d.unitExists(path)) {
-          d.writeUnit(path, UNIT_TEMPLATE(d.bunkerCommand(), process.env.PATH));
+        const flags: string[] = [];
+        for (const k of ["interval", "parallel"]) {
+          if (a[k] === undefined) continue;
+          if (typeof a[k] !== "number" || !Number.isInteger(a[k]) || (a[k] as number) < 1) throw new ToolError(`${k} must be a positive integer`);
+          flags.push(`--${k} ${a[k]}`);
+        }
+        // Rewrite whatever is stale (an old template, a leftover drop-in) and restart so the new ExecStart/args apply to a running unit.
+        let changed = false;
+        const sync = (path: string, text: string) => {
+          if (d.readUnit(path) === text) return;
+          d.writeUnit(path, text);
+          changed = true;
+        };
+        sync(join(d.unitDir, `${PREFIX}.service`), UNIT_TEMPLATE(d.bunkerCommand(), process.env.PATH));
+        sync(join(d.unitDir, `${unitName(repo)}.d`, "args.conf"), `[Service]\nEnvironment="BUNKER_WATCH_ARGS=${flags.join(" ")}"\n`);
+        if (changed) {
           const r = await d.run(["systemctl", "--user", "daemon-reload"]);
           if (r.code !== 0) throw new ToolError(`systemctl daemon-reload failed: ${(r.stderr || r.stdout).trim()}`);
         }
-        return systemctl("start", repo);
+        return systemctl(changed ? "restart" : "start", repo);
       },
     },
     { name: "stop_watch", description: "Stop the bunker watch of a repo", inputSchema: schema({ repo: repoProp }, ["repo"]), call: (a) => systemctl("stop", repoArg(a)) },
@@ -216,7 +237,7 @@ export function liveDeps(): McpDeps {
   return {
     run: exec,
     unitDir: join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "systemd", "user"),
-    unitExists: existsSync,
+    readUnit: (path) => (existsSync(path) ? readFileSync(path, "utf8") : null),
     writeUnit: (path, text) => {
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, text);

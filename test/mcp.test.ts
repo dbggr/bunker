@@ -19,7 +19,7 @@ function setup(over: Partial<McpDeps> = {}) {
       return { code: 0, stdout: "", stderr: "" };
     },
     unitDir: "/units",
-    unitExists: () => false,
+    readUnit: () => null,
     writeUnit: (p, t) => void (writes[p] = t),
     bunkerCommand: () => ["/usr/bin/bunker"],
     readCurrent: () => [{ issue: 7, stage: "verify", since: 1 }],
@@ -61,14 +61,14 @@ describe("mcp tools", () => {
     expect(out.hub).toBe(true);
     expect(out.watches).toEqual([{ unit: `bunker-watch@${escapePath(repo)}.service`, repo, active: "active", sub: "running", current: [{ issue: 7, stage: "verify", since: 1 }] }]);
   });
-  test("start_watch installs the template when missing, then starts", async () => {
+  test("start_watch installs the template when missing, then starts (restart)", async () => {
     const { call, calls, writes } = setup();
     const r = await call("start_watch", { repo });
     expect(r.isError).toBe(false);
-    expect(Object.keys(writes)).toEqual(["/units/bunker-watch@.service"]);
+    expect(Object.keys(writes)).toEqual(["/units/bunker-watch@.service", `/units/bunker-watch@${escapePath(repo)}.service.d/args.conf`]);
     expect(writes["/units/bunker-watch@.service"]).toBe(UNIT_TEMPLATE(["/usr/bin/bunker"], process.env.PATH));
     expect(UNIT_TEMPLATE(["/usr/bin/bunker"])).toContain("Restart=on-failure");
-    expect(calls.map((c) => c.slice(0, 3).join(" "))).toEqual(["systemctl --user daemon-reload", "systemctl --user start"]);
+    expect(calls.map((c) => c.slice(0, 3).join(" "))).toEqual(["systemctl --user daemon-reload", "systemctl --user restart"]);
     expect(calls[1]).toContain(`bunker-watch@${escapePath(repo)}.service`);
   });
 
@@ -79,11 +79,41 @@ describe("mcp tools", () => {
     expect(unit).toContain("PassEnvironment=GH_TOKEN GITHUB_TOKEN ANTHROPIC_API_KEY");
     expect(UNIT_TEMPLATE(["/a%b/$x"], "/bin")).toContain('ExecStart="/a%%b/$$x" watch');
   });
-  test("start_watch leaves an existing template alone", async () => {
-    const { call, writes, calls } = setup({ unitExists: () => true });
+  test("the unit runs watch with --ui and the per-instance args", () => {
+    expect(UNIT_TEMPLATE(["/usr/bin/bunker"])).toContain('ExecStart="/usr/bin/bunker" watch --ui $BUNKER_WATCH_ARGS\n');
+  });
+  test("start_watch writes a drop-in for interval and parallel", async () => {
+    const { call, writes } = setup();
+    const r = await call("start_watch", { repo, interval: 1, parallel: 2 });
+    expect(r.isError).toBe(false);
+    expect(writes[`/units/bunker-watch@${escapePath(repo)}.service.d/args.conf`]).toBe('[Service]\nEnvironment="BUNKER_WATCH_ARGS=--interval 1 --parallel 2"\n');
+  });
+  test("start_watch rejects a bad interval", async () => {
+    const { call } = setup();
+    expect((await call("start_watch", { repo, interval: 0 })).isError).toBe(true);
+    expect((await call("start_watch", { repo, parallel: 1.5 })).isError).toBe(true);
+  });
+  test("start_watch only starts when the template and drop-in are current", async () => {
+    const first = setup();
+    await first.call("start_watch", { repo });
+    const { call, writes, calls } = setup({ readUnit: (p) => first.writes[p] ?? null });
     await call("start_watch", { repo });
     expect(writes).toEqual({});
-    expect(calls.length).toBe(1);
+    expect(calls.map((c) => c[2])).toEqual(["start"]);
+  });
+  test("start_watch rewrites a stale template and restarts", async () => {
+    const { call, writes, calls } = setup({ readUnit: () => '[Service]\nExecStart="/usr/bin/bunker" watch\n' });
+    await call("start_watch", { repo });
+    expect(writes["/units/bunker-watch@.service"]).toContain("watch --ui $BUNKER_WATCH_ARGS");
+    expect(calls.map((c) => c[2])).toEqual(["daemon-reload", "restart"]);
+  });
+  test("start_watch clears a stale drop-in when no flags are given", async () => {
+    const dropin = `/units/bunker-watch@${escapePath(repo)}.service.d/args.conf`;
+    const tmpl = UNIT_TEMPLATE(["/usr/bin/bunker"], process.env.PATH);
+    const { call, writes, calls } = setup({ readUnit: (p) => (p === dropin ? '[Service]\nEnvironment="BUNKER_WATCH_ARGS=--interval 1"\n' : tmpl) });
+    await call("start_watch", { repo });
+    expect(writes).toEqual({ [dropin]: '[Service]\nEnvironment="BUNKER_WATCH_ARGS="\n' });
+    expect(calls.map((c) => c[2])).toEqual(["daemon-reload", "restart"]);
   });
   test("stop_watch and restart_watch", async () => {
     const { call, calls } = setup();
