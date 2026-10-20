@@ -3,10 +3,10 @@
 What v1.0.0 promises, how close bunker is, and what would prove it, from raw evidence rather than impressions.
 
 - **Sources:**
-  - every run log in `.bunker/runs` (142 logs, 2026-10-16 18:02Z to 2026-10-18 01:22Z)
-  - GitHub's history of this repo: 151 PRs, 132 CI runs on `main`, issue label events
+  - every run log in `.bunker/runs` (233 logs, 2026-10-16 18:02Z to 2026-10-20 03:03Z)
+  - GitHub's history of this repo: 246 PRs, 247 CI runs on `main`, issue label events
   - the cost recorded in each run's `result` events
-- **Snapshot:** the numbers in sections 1, 2 and 4's "Measured" column were taken at 2026-10-18 01:22Z, before the soak; re-running gives newer ones (GitHub answers are cached, so pass `--refresh`). Soak numbers come from `bun scripts/v1-readiness.ts --since 2026-10-18T23:57:25Z --refresh` (fixed in #454 to count `awaiting-merge` runs whose PR merged); the first reading is in section 4.
+- **Snapshot:** section 1 was refreshed at 2026-10-20 03:03Z; sections 2 and 4's "Measured" column were taken at 2026-10-18 01:22Z, before the soak; re-running gives newer ones (GitHub answers are cached, so pass `--refresh`). Soak numbers come from `bun scripts/v1-readiness.ts --since 2026-10-18T23:57:25Z --refresh` (fixed in #454 to count `awaiting-merge` runs whose PR merged); the first reading is in section 4.
 - **Reproduce:**
   - `bun scripts/v1-readiness.ts` (add `--since 2026-10-17T12:00:00Z` for the recent window, `--json` for raw numbers)
   - `bun scripts/mutate-gates.ts` for the gate mutation table
@@ -14,26 +14,26 @@ What v1.0.0 promises, how close bunker is, and what would prove it, from raw evi
   - **all**: everything logged, including the day bunker was still building its own merge plumbing
   - **recent**: since 2026-10-17 12:00Z, after GitHub auto-merge, the flaky-suite fix (#149) and restart cleanup (#160, #201)
 
-Bunker PRs are recognised by the `Round N:` line every bunker-written PR body carries. 130 PRs are bunker's and 21 were written by hand (the spike, CI setup, the security fixes #273/#277/#316, and the #284 refactor).
+Bunker PRs are recognised by the `Round N:` line every bunker-written PR body carries. 203 PRs are bunker's (201 merged) and 43 were written by hand (the spike, CI setup, the security fixes, the #323 refactor, release bumps and docs).
 
 ## 1. Where it stands
 
 | | all | recent |
 |---|---|---|
-| Runs logged | 142 | 56 |
-| Runs that merged (of finished runs) | 108 / 132 (82%) | 43 / 51 (84%) |
-| Issues attempted / merged | 124 / 108 | 48 / 43 |
-| Merged on the first finished attempt | 103 / 108 (95%) | 41 / 43 (95%) |
-| Runs needing a second review round | 20 | — |
-| Interrupted runs (no final status) | 10 | 5 |
-| `main` CI runs / red | 132 / 3 | 52 / 0 |
+| Runs logged | 233 | 147 |
+| Runs that merged (of finished runs) | 177 / 221 (80%) | 115 / 140 (82%) |
+| Issues attempted / merged | 200 / 177 | 124 / 115 |
+| Merged on the first finished attempt | 162 / 177 (92%) | 103 / 115 (90%) |
+| Runs needing a second review round | 41 | 25 |
+| Interrupted runs (no final status) | 12 | 7 |
+| `main` CI runs / red | 247 / 3 | 167 / 0 |
 | Reverts on `main` | 0 | 0 |
 | Human re-queues (relabel after a failure) | 12 | 6 |
 | Issues taken over by hand after bunker failed | #82, #238, #294, #326 | #294, #326 |
-| Agent cost | $131.75 | $15.79 |
-| Cost per merged issue | $1.22 | $0.37 |
-| Median cost per run | $0.25 | $0.21 |
-| Median PR open → merged | 2.4 min | — |
+| Agent cost | $194.01 | $78.04 |
+| Cost per merged issue | $1.10 | $0.68 |
+| Median cost per run | $0.37 | $0.36 |
+| Median PR open → merged | 2.4 min | 3.0 min |
 
 - **Every failure was a refusal.** No failed run merged anything.
 - **Main went red 3 times, all inside the flaky-suite window.** After bunker PRs #127, #138 and #150 (2026-10-16 22:16Z to 2026-10-17 01:10Z), in the window #149 (PR #159) fixed: cross-file timeout cascades and races in the parallel queue. Twice the next merge was green with no fix in between. The failing logs have expired, so each one's cause can't be proven; none was reverted. Main has been green for every run since 7175b78.

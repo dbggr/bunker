@@ -4,7 +4,7 @@
 
 bunker runs a Claude coding agent on each issue in its own git worktree and Docker sandbox, has a second agent review the change, runs your tests, and lets GitHub's own required checks decide what merges. You choose the work; bunker does it, and stops to ask when it should.
 
-> **Status: beta (v0.9.1).** bunker works its own repository every day (most of its code was written by bunker), but flags, config keys and labels can still change before 1.0. Progress to 1.0: the [v1.0.0 milestone](https://github.com/dbggr/bunker/milestone/1) and [release/v1-readiness.md](release/v1-readiness.md).
+> **Status: beta (v0.12.0).** bunker works its own repository every day (most of its code was written by bunker), but flags, config keys and labels can still change before 1.0. Progress to 1.0: the [v1.0.0 milestone](https://github.com/dbggr/bunker/milestone/1) and [release/v1-readiness.md](release/v1-readiness.md).
 
 ## How it works
 
@@ -18,7 +18,7 @@ bunker runs a Claude coding agent on each issue in its own git worktree and Dock
 
 Linux or macOS with Docker, git and [Bun](https://bun.sh); the [GitHub CLI](https://cli.github.com) logged in; [Claude Code](https://docs.claude.com/en/docs/claude-code/setup) with a Claude subscription or API key; a fine-grained GitHub token (Contents, Pull requests, Issues read/write; Metadata read; *no* Workflows); and a repo with tests and a CI check required by a GitHub **ruleset**. `bunker init` walks you through all of it.
 
-**Cost:** agent runs are billed to your Claude plan or API account. On this repository the average is about $1.29 of agent time per merged issue (Claude Sonnet), and `bunker watch` takes daily and monthly spend caps (`--max-cost-day`, `--max-cost-month`).
+**Cost:** agent runs are billed to your Claude plan or API account. On this repository the average is about $1.10 of agent time per merged issue (Claude Sonnet), and `bunker watch` takes daily and monthly spend caps (`--max-cost-day`, `--max-cost-month`).
 
 ## Install
 
@@ -57,7 +57,7 @@ bunker is built to be left running, so the defaults are strict. Only maintainers
 
 ## Built with bunker
 
-In its first three days bunker wrote and merged 159 of its own pull requests (29 more were written by hand), with 820 tests and no reverts on `main` (as of 2026-10-19) ([the numbers and failures](release/v1-readiness.md)). It was inspired by Matt Pocock's [sandcastle](https://github.com/mattpocock/sandcastle), a toolkit for building agent loops with many agents and sandbox providers. bunker is one opinionated loop, from issue to merged PR, with the queue, review, merge and unattended safety built in.
+In its first four days bunker wrote and merged 201 of its own pull requests (43 more were written by hand), with 979 tests and no reverts on `main` (as of 2026-10-20) ([the numbers and failures](release/v1-readiness.md)). It was inspired by Matt Pocock's [sandcastle](https://github.com/mattpocock/sandcastle), a toolkit for building agent loops with many agents and sandbox providers. bunker is one opinionated loop, from issue to merged PR, with the queue, review, merge and unattended safety built in.
 
 ## Scope
 
