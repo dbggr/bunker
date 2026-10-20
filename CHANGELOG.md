@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.11.0 - 2026-10-20
+
+- fix(mcp): set PATH, pass tokens and quote ExecStart in the bunker-watch@ unit (#501) (#503)
+- feat(mcp): bunker mcp server to manage local watches (#498) (#502)
+
 ## v0.10.0 - 2026-10-19
 
 - feat(watch): shepherd and reconcile waiting PRs on a timer while a run is in flight (#493) (#497)

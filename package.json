@@ -2,7 +2,7 @@
   "name": "@dbggr/bunker",
   "module": "src/index.ts",
   "type": "module",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Label a GitHub issue, get back a reviewed, tested, merged pull request: Claude coding agents in sandboxed git worktrees.",
   "license": "MIT",
   "repository": {
