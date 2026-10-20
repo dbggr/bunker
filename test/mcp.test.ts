@@ -79,6 +79,20 @@ describe("mcp tools", () => {
     expect(unit).toContain("PassEnvironment=GH_TOKEN GITHUB_TOKEN ANTHROPIC_API_KEY");
     expect(UNIT_TEMPLATE(["/a%b/$x"], "/bin")).toContain('ExecStart="/a%%b/$$x" watch');
   });
+  test("the unit runs watch with --ui and the per-instance args", () => {
+    expect(UNIT_TEMPLATE(["/usr/bin/bunker"])).toContain('ExecStart="/usr/bin/bunker" watch --ui $BUNKER_WATCH_ARGS\n');
+  });
+  test("start_watch writes a drop-in for interval and parallel", async () => {
+    const { call, writes } = setup();
+    const r = await call("start_watch", { repo, interval: 1, parallel: 2 });
+    expect(r.isError).toBe(false);
+    expect(writes[`/units/bunker-watch@${escapePath(repo)}.service.d/args.conf`]).toBe('[Service]\nEnvironment="BUNKER_WATCH_ARGS=--interval 1 --parallel 2"\n');
+  });
+  test("start_watch rejects a bad interval", async () => {
+    const { call } = setup();
+    expect((await call("start_watch", { repo, interval: 0 })).isError).toBe(true);
+    expect((await call("start_watch", { repo, parallel: 1.5 })).isError).toBe(true);
+  });
   test("start_watch leaves an existing template alone", async () => {
     const { call, writes, calls } = setup({ unitExists: () => true });
     await call("start_watch", { repo });

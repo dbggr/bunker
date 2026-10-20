@@ -43,7 +43,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=%f
 ${path ? `Environment=${quoteExec(`PATH=${path}`)}\n` : ""}PassEnvironment=GH_TOKEN GITHUB_TOKEN ANTHROPIC_API_KEY
-ExecStart=${[...bunker.map(quoteExec), "watch"].join(" ")}
+ExecStart=${[...bunker.map(quoteExec), "watch", "--ui", "$BUNKER_WATCH_ARGS"].join(" ")}
 Restart=on-failure
 RestartSec=30
 
@@ -115,9 +115,27 @@ export function createMcp(d: McpDeps) {
     {
       name: "start_watch",
       description: "Start `bunker watch` for a repo as a systemd user unit; installs the bunker-watch@.service template if missing",
-      inputSchema: schema({ repo: repoProp }, ["repo"]),
+      inputSchema: schema(
+        {
+          repo: repoProp,
+          interval: { type: "integer", description: "Minutes to sleep when no work is waiting (watch --interval)" },
+          parallel: { type: "integer", description: "Issues to work at once (watch --parallel)" },
+        },
+        ["repo"],
+      ),
       async call(a) {
         const repo = repoArg(a);
+        const flags: string[] = [];
+        for (const k of ["interval", "parallel"]) {
+          if (a[k] === undefined) continue;
+          if (typeof a[k] !== "number" || !Number.isInteger(a[k]) || (a[k] as number) < 1) throw new ToolError(`${k} must be a positive integer`);
+          flags.push(`--${k} ${a[k]}`);
+        }
+        if (flags.length) {
+          d.writeUnit(join(d.unitDir, `${unitName(repo)}.d`, "args.conf"), `[Service]\nEnvironment="BUNKER_WATCH_ARGS=${flags.join(" ")}"\n`);
+          const r = await d.run(["systemctl", "--user", "daemon-reload"]);
+          if (r.code !== 0) throw new ToolError(`systemctl daemon-reload failed: ${(r.stderr || r.stdout).trim()}`);
+        }
         const path = join(d.unitDir, `${PREFIX}.service`);
         if (!d.unitExists(path)) {
           d.writeUnit(path, UNIT_TEMPLATE(d.bunkerCommand(), process.env.PATH));
