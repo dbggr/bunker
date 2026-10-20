@@ -139,3 +139,24 @@ Embedders import from `src/index.ts`. This is the stable surface for 1.0; everyt
 - Errors: `AgentFailure`, `UsageLimit`, and the `Pause` type
 
 The export list is pinned by `test/public-api.test.ts`.
+
+## Is this a good fit for bunker?
+
+The test: can the whole job be written down in the issue before anyone starts? If yes, queue it. If the work only takes shape while you're doing it, do it by hand.
+
+**Do it by hand when one of these is true:**
+
+1. **Decisions get made mid-task.** Wording, UX, "what should this do", or any question you'd want answered halfway through. The agent can't ask, so it guesses.
+2. **The tests can't tell if it's right.** The proof is real data, a real browser, header or CSP behaviour, or a production deploy. A green run is only as good as the suite.
+3. **It needs access bunker deliberately doesn't have.** Secrets, deploy or production systems, merges, or changes to `.bunker/` and CI config.
+4. **It's security- or money-sensitive.** Auth, authz or payments auto-merge unless the path is covered by `review_paths`, so add a glob first or do it by hand (see [security.md](security.md)).
+5. **It's an investigation** ("why is X wrong"), not a change.
+6. **It's urgent**, such as a hotfix where the queue is slower than doing it.
+
+**Queue it when:**
+
+- the issue fits in a few lines with checkable acceptance criteria,
+- it's contained (roughly 1-3 files), and
+- the existing tests would catch it if it went wrong.
+
+**Making a borderline issue fit:** move the decisions into the issue. Spell out the exact wording, edge-case rules (for example "don't resend on re-approve") and the tests you expect. Then the agent is following a spec, not guessing at intent.
