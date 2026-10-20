@@ -45,7 +45,7 @@ features:
 - **Your backlog moves while you do something else.** Label the small, well-defined issues you never get to; come back to reviewed, tested pull requests that are already merged, or a clear reason why one couldn't be done.
 - **You get AI-written code without handing over the keys.** The agent works in a sandbox with no access to your tokens or SSH keys, a second agent reviews it, and your tests and GitHub's required checks decide what merges.
 - **You stay in charge.** Only you can queue work, changes to CI or bunker's own rules always wait for a person, and everything arrives as a normal PR you can read.
-- **It's cheap and measurable.** About $1.29 of agent time per merged issue on bunker's own repo, with daily and monthly spend caps, and `bunker status` shows what it did and why.
+- **It's cheap and measurable.** About $1.10 of agent time per merged issue on bunker's own repo, with daily and monthly spend caps, and `bunker status` shows what it did and why.
 
 **Not for you if:** your repo has no tests or CI to gate on, the work is a big redesign rather than issues you could describe in a few lines, or you don't want to read the PRs it opens.
 
@@ -114,14 +114,14 @@ spend: $44.83 in 24 h</pre>
 
 <section class="bs" aria-label="It built itself">
   <p class="bs-kicker">It built itself</p>
-  <h3 class="bs-title">Three days of bunker working on bunker</h3>
+  <h3 class="bs-title">Four days of bunker working on bunker</h3>
   <div class="bs-stats">
-    <div style="--c: var(--bs-bunker)"><span class="v">159</span><span class="l">pull requests written and merged by bunker</span></div>
-    <div><span class="v">29</span><span class="l">written by hand: the first spike, the security fixes and the docs</span></div>
-    <div style="--c: var(--bs-ok)"><span class="v">820</span><span class="l">tests guarding about 10,300 lines of code</span></div>
-    <div style="--c: var(--bs-ai)"><span class="v">$1.29</span><span class="l">average agent cost per merged issue</span></div>
+    <div style="--c: var(--bs-bunker)"><span class="v">201</span><span class="l">pull requests written and merged by bunker</span></div>
+    <div><span class="v">43</span><span class="l">written by hand: the first spike, the security fixes, releases and the docs</span></div>
+    <div style="--c: var(--bs-ok)"><span class="v">979</span><span class="l">tests guarding about 12,300 lines of code</span></div>
+    <div style="--c: var(--bs-ai)"><span class="v">$1.10</span><span class="l">average agent cost per merged issue</span></div>
   </div>
-  <p class="bs-note">178 CI runs on main, 3 red (all during one flaky-test window, since fixed), 0 reverts. Numbers from the repo's own run logs and GitHub history on 2026-10-19.</p>
+  <p class="bs-note">247 CI runs on main, 3 red (all during one flaky-test window, since fixed), 0 reverts. Numbers from the repo's own run logs and GitHub history on 2026-10-20.</p>
 </section>
 
 ## Install
@@ -144,7 +144,7 @@ bunker watch         # then work everything labelled bunker:queued, unattended
 
 ## Built with bunker
 
-In its first three days bunker wrote and merged **159 of its own pull requests** (29 more were written by hand), with 820 tests and no reverts on main, at roughly **$1.29 of agent time per merged issue** (as of 2026-10-19). The numbers and the failures, from an earlier snapshot, are in the [v1.0 readiness review](https://github.com/dbggr/bunker/blob/main/release/v1-readiness.md).
+In its first four days bunker wrote and merged **201 of its own pull requests** (43 more were written by hand), with 979 tests and no reverts on main, at roughly **$1.10 of agent time per merged issue** (as of 2026-10-20). The numbers and the failures are in the [v1.0 readiness review](https://github.com/dbggr/bunker/blob/main/release/v1-readiness.md).
 
 ::: tip Pre-1.0
 bunker works its own repository every day, but flags, config keys and labels can still change before 1.0.
