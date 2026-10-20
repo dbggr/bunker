@@ -65,7 +65,13 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   log(`issue #${number}: ${issue.title}`, `branch ${branch}`);
   if (queueOrder) log("queue order", queueOrder);
   emit(onEvent, { type: "meta", logPath, title: issue.title });
+  // Until the worktree is set up, a failure while a stop is in flight is the stop's doing (SIGTERM reaches git and gh too).
+  let preflight = true;
   const fail = (status: IssueResult["status"], extra: Partial<IssueResult> = {}): IssueResult => {
+    if (preflight && status === "failed" && signal?.aborted) {
+      log("final status: interrupted", extra.error ?? "");
+      return finish("interrupted", {});
+    }
     log(`final status: ${status}`, [extra.error, extra.prUrl].filter(Boolean).join("\n"));
     if (status === "merged") emitStage({ onEvent }, "merged");
     else if (status === "awaiting-merge") emitStage({ onEvent }, "waiting for merge", extra.prUrl);
@@ -191,6 +197,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
   }
   }
 
+  preflight = false;
   const ctx: IssueRunContext = { number, cwd, issue, repo, branch, worktree, logPath, token, env, gitCfg, remote, defaultBranch, gitCommonDir, onEvent, timeouts, log, fail, finish, failNote, fetchDefault };
   const implemented = await implementIssue(ctx, { agent, reviewer, sandbox, maxRounds, resume, setup, patterns, paused, pausedFile, baseSha, fetchedSha: fetched.sha, spent, check });
   if ("done" in implemented) return implemented.done;
