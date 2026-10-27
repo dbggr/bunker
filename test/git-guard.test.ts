@@ -105,7 +105,22 @@ describe("container sandbox mounts and verify isolation", () => {
     expect(a).toContain(`${admin}:${admin}`);
     for (const f of [join(admin, "commondir"), join(admin, "gitdir"), join(worktree, ".git")]) expect(a).toContain(`${f}:${f}:ro`);
     expect(a).not.toContain(`${gitCommonDir}:${gitCommonDir}`);
-    expect(a.join(" ")).toContain("--network host"); // no veth churn on docker0 per run
+    expect(a.join(" ")).not.toContain("--network host"); // the agent must not see the host's localhost
+    expect(a.join(" ")).toContain("--network bunker-agent"); // a dedicated bridge created once: no veth churn per run
+  });
+
+  test("the agent network is created once and reused across runs", async () => {
+    const { root, worktree, gitCommonDir } = await repoWithWorktree();
+    const bin = join(root, "log-docker");
+    await Bun.write(bin, `#!/bin/sh\necho "$*" >> "${root}/calls.txt"\n[ "$1 $2" = "network inspect" ] && ! grep -q "network create" "${root}/calls.txt" && exit 1\nexit 0\n`);
+    await chmod(bin, 0o755);
+    const sb = docker({ image: "img", bin });
+    await sb.exec(["true"], { worktree, gitCommonDir });
+    await sb.exec(["true"], { worktree, gitCommonDir });
+    const calls = readFileSync(join(root, "calls.txt"), "utf8").split("\n");
+    expect(calls.filter((c) => c.startsWith("network create"))).toEqual(["network create bunker-agent"]);
+    expect(calls.filter((c) => c.startsWith("network inspect"))).toHaveLength(1);
+    expect(calls.filter((c) => c.startsWith("run"))).toHaveLength(2);
   });
 
   test("an isolated exec (verify) has no network and no Claude credentials", async () => {

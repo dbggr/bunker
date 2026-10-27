@@ -6,7 +6,7 @@ Each issue gets its own git worktree at `<repo>/.worktrees/<N>-<slug>` on a bran
 
 ## Docker sandbox and images
 
-The agent runs in a throwaway docker container with the worktree (and the repo's `.git`, mounted at its host path) as the working directory. The container runs as your uid, and holds the Claude token but no GitHub credentials. Agent steps run with `--network host`, so the container shares the host's network and can reach services on the host's localhost (see [security.md](security.md)). Isolated steps (verify and `check`, by default) run with no network. `--no-sandbox` runs the agent on the host instead.
+The agent runs in a throwaway docker container with the worktree (and the repo's `.git`, mounted at its host path) as the working directory. The container runs as your uid, and holds the Claude token but no GitHub credentials. Agent steps run on a dedicated `bunker-agent` bridge network (not `--network host`), so they can't reach services on the host's localhost (see [security.md](security.md)). Isolated steps (verify and `check`, by default) run with no network. `--no-sandbox` runs the agent on the host instead.
 
 Images come in two layers:
 
