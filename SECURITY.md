@@ -14,4 +14,4 @@ bunker is pre-1.0: only the latest `vX.Y.Z` release and `main` receive security 
 
 ## Scope
 
-The threat model, including what bunker deliberately doesn't protect against (for example, `--no-sandbox` is not isolation, and the agent container shares the host network), is in [docs/security.md](docs/security.md). Reports that bypass a gate described there are in scope; problems in Claude Code, Docker or GitHub themselves should go to those projects.
+The threat model, including what bunker deliberately doesn't protect against (for example, `--no-sandbox` is not isolation, and the agent container has outbound network access), is in [docs/security.md](docs/security.md). Reports that bypass a gate described there are in scope; problems in Claude Code, Docker or GitHub themselves should go to those projects.

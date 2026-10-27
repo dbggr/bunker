@@ -92,6 +92,31 @@ export function stopLiveContainers() {
   liveContainers.clear();
 }
 
+/** The bridge non-isolated containers join. */
+export const AGENT_NETWORK = "bunker-agent";
+
+const agentNetworks = new Map<string, Promise<void>>();
+
+/** Creates the agent bridge network if missing, once per process and runtime. Reusing one network avoids a veth add/remove per run. */
+function ensureAgentNetwork(bin: string): Promise<void> {
+  let p = agentNetworks.get(bin);
+  if (!p) {
+    p = (async () => {
+      const quiet = { stdout: "ignore", stderr: "pipe" } as const;
+      if ((await Bun.spawn([bin, "network", "inspect", AGENT_NETWORK], quiet).exited) === 0) return;
+      const create = Bun.spawn([bin, "network", "create", AGENT_NETWORK], quiet);
+      const [err, code] = await Promise.all([new Response(create.stderr).text(), create.exited]);
+      // A parallel run may have created it between inspect and create.
+      if (code !== 0 && (await Bun.spawn([bin, "network", "inspect", AGENT_NETWORK], quiet).exited) !== 0) {
+        throw new Error(`could not create the ${AGENT_NETWORK} network: ${err.trim()}`);
+      }
+    })();
+    p.catch(() => agentNetworks.delete(bin));
+    agentNetworks.set(bin, p);
+  }
+  return p;
+}
+
 export function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions): Sandbox {
   const env = opts.env ?? ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
   // runAll() calls exec once per task at the same time; share one image build per repo.
@@ -125,6 +150,7 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
         GIT_AUTHOR_EMAIL: email,
         GIT_COMMITTER_EMAIL: email,
       }).flatMap(([k, v]) => (v ? ["-e", `${k}=${v}`] : []));
+      if (!network && !isolate) await ensureAgentNetwork(bin);
       const cname = `bunker-${crypto.randomUUID().slice(0, 12)}`;
       const argv = [
         bin, "run", "--rm", ...(stdin === undefined ? [] : ["-i"]), "--name", cname,
@@ -133,10 +159,10 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
         // Marks the container so a bunker CLI run from inside it refuses to start (it would drive the live queue with our token).
         "-e", "BUNKER_IN_SANDBOX=1",
         // Verify runs code the agent wrote: no network to send anything out, and no credentials to send.
-        // Non-isolated runs use the host network: the default bridge creates and removes a veth per run, and each link event makes Chrome fail in-flight requests (ERR_NETWORK_CHANGED).
-        // Tradeoff: the container can reach the host's localhost services; it already runs the agent with credentials and full outbound network.
+        // Non-isolated runs join one long-lived bridge network (not the default bridge, which creates and removes a veth per run and makes Chrome fail with ERR_NETWORK_CHANGED).
+        // Not the host network: the container has its own loopback, so the host's 127.0.0.1 services are out of reach.
         // With services the command joins their internal network (no route out) instead.
-        ...(network ? ["--network", network, ...(isolate ? [] : env.flatMap((name) => ["-e", name]))] : isolate ? ["--network", "none"] : ["--network", "host", ...env.flatMap((name) => ["-e", name])]), // name only: value comes from our env, never argv
+        ...(network ? ["--network", network, ...(isolate ? [] : env.flatMap((name) => ["-e", name]))] : isolate ? ["--network", "none"] : ["--network", AGENT_NETWORK, ...env.flatMap((name) => ["-e", name])]), // name only: value comes from our env, never argv
         ...identity,
         "-v", `${this.projectsDir}:/tmp/.claude/projects`,
         ...(role ? opts.skills?.[role] ?? [] : []).flatMap((k) => ["-v", `${k.path}:/tmp/.claude/skills/${k.name}:ro`]),
