@@ -105,6 +105,31 @@ describe("install.sh", () => {
     expect(existsSync(join(home, ".local", "bin", "bunker"))).toBe(true);
   });
 
+  test("warns when the release tag is not signed but still installs", () => {
+    const r = run(["--yes"]);
+    expect(r.code).toBe(0);
+    expect(r.err).toContain("v1.0.0 has no valid signature");
+  });
+
+  test("--verify-tag refuses an unsigned tag and installs nothing", () => {
+    const r = run(["--yes", "--verify-tag"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("v1.0.0 has no valid signature");
+    expect(existsSync(join(home, ".local", "bin", "bunker"))).toBe(false);
+  });
+
+  test("BUNKER_VERIFY_TAG=1 is the same as --verify-tag", () => {
+    expect(run(["--yes"], { BUNKER_VERIFY_TAG: "1" }).code).toBe(1);
+  });
+
+  test("--verify-tag installs when git verify-tag passes", () => {
+    exe(join(fakes, "git"), `for a in "$@"; do [ "$a" = verify-tag ] && exit 0; done\nexec ${Bun.which("git")} "$@"`);
+    const r = run(["--yes", "--verify-tag"]);
+    expect(r.code).toBe(0);
+    expect(r.err).not.toContain("no valid signature");
+    expect(existsSync(join(home, ".local", "bin", "bunker"))).toBe(true);
+  });
+
   test("re-running upgrades in place", () => {
     expect(run(["--yes"]).out).toContain("(v1.0.0)");
     release("1.2.0");
