@@ -12,7 +12,7 @@ import { extractOutput, verdictOutput } from "../core/structured.ts";
 import { interpret, stdinOf, sumUsage, type Agent, type Usage } from "../agents/agent.ts";
 import { describeMissing, missingHunks } from "./landing.ts";
 import { agentLimits, stepLimits, type Sandbox, type Timeouts } from "../sandboxes/exec.ts";
-import { isolatedEnv } from "../sandboxes/env.ts";
+import { spawnOnHost } from "../sandboxes/env.ts";
 import type { Services } from "../sandboxes/services.ts";
 import { startVerifyEnv, VerifyEnvError, type VerifyEnv } from "../sandboxes/verify-env.ts";
 import { listBunkerPrs, type BunkerPr } from "../github/prs.ts";
@@ -442,7 +442,7 @@ export function createShepherd(o: ShepherdOptions) {
       }
       try {
       if (o.verifyOnHost) {
-        const proc = Bun.spawn(["setsid", "sh", "-c", verify], { cwd: w.worktree, env: isolatedEnv(), stdout: "pipe", stderr: "pipe" });
+        const { proc, cleanup } = spawnOnHost(verify, w.worktree);
         const timer = setTimeout(() => { try { process.kill(-proc.pid, "SIGKILL"); } catch { proc.kill("SIGKILL"); } }, stepLimits(timeouts).stepMs);
         try {
           const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
@@ -450,6 +450,7 @@ export function createShepherd(o: ShepherdOptions) {
           text = out + err;
         } finally {
           clearTimeout(timer);
+          cleanup();
         }
       } else {
         const out = await o.sandbox.exec(["sh", "-c", `(${verify}) 2>&1`], { worktree: w.worktree, gitCommonDir: w.gitCommonDir, limits: stepLimits(timeouts), isolate: !o.verifyNetwork, ...(env.network ? { network: env.network } : {}) });
