@@ -102,6 +102,7 @@ watch:
   notifies you); a branch behind its base is updated; a conflict is resolved by an agent, verified, and reviewed again if the diff changed;
   "changes requested" by a maintainer goes to the agent and the review is re-requested. It never merges: auto-merge plus a required check is the gate
   Failed issues get \`bunker:failed\` instead of \`bunker:queued\` and are never retried automatically; a running one shows \`bunker:in-progress\`.
+  An issue labelled \`bunker:exclude\` is never triaged, queued or worked, even if also \`bunker:queued\`; the queue output says why.
 
 audit:
   audit                      read-only agent run that files issues
@@ -113,7 +114,7 @@ triage:
   triage                     read-only agent (same sandbox as audit) checks each open \`discovered\` issue without a triage comment
                              against the default branch: fixed, as-designed, duplicate or valid (with a suggested priority and bug).
                              Bunker posts the verdict as a comment, sanitised and redacted. Dry run by default: prints verdicts and
-                             planned actions, changes nothing. Failed or unparseable verdicts leave the issue untouched
+                             planned actions, changes nothing. Failed or unparseable verdicts leave the issue untouched. Skips issues labelled \`bunker:exclude\`
   --yes                      (triage) comment and close fixed / duplicate issues (as-designed: closed not planned), and label valid
                              ones bunker:queued + priority:* + bug as you. Valid issues are never labelled bunker:queued without --yes
   --limit <n>                (triage) max issues per run, oldest first (default 10)

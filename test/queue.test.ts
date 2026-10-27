@@ -659,6 +659,18 @@ describe("queue order: priority, bug, age", () => {
     expect(await Bun.file(rs[0]!.logPath!).text()).toContain("queue: #160 (high, bug) · #131 · #132 (low)");
   });
 
+  test("skips an issue labelled bunker:exclude even when queued, and says why", async () => {
+    const { repo } = await ordered([
+      [1, "2026-01-01T00:00:00Z", ["bunker:exclude"]],
+      [2, "2026-01-02T00:00:00Z", []],
+    ]);
+    const notes: string[] = [];
+    const rs = await run(repo, { onEvent: (e: { type: string; text?: string }) => e.type === "note" && notes.push(e.text ?? "") });
+    expect(rs.map((r) => r.issue)).toEqual([2]);
+    expect(notes.some((n) => n.includes("#1") && n.includes("bunker:exclude"))).toBe(true);
+    expect(notes).toContain("queue: #2");
+  });
+
   test("creates the priority labels", async () => {
     const { repo, root } = await ordered([[1, "2026-01-01T00:00:00Z", []]]);
     await run(repo, { limit: 1 });
