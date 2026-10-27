@@ -2,7 +2,7 @@ import { $ } from "bun";
 import { output } from "../core/output.ts";
 import type { Queued } from "../core/priority.ts";
 import { blockerRefs, isDone, isLiveShape, type Env, type IssueInfo } from "./issues.ts";
-import { hasQueuedLabel, QUEUED_LABEL } from "./labels.ts";
+import { hasExcludeLabel, hasQueuedLabel, QUEUED_LABEL } from "./labels.ts";
 import { markTrust } from "./trust.ts";
 
 export async function listQueued(cwd: string, env: Env): Promise<Queued[]> {
@@ -39,7 +39,7 @@ export async function countWaiting(cwd: string, env: Env, skip: (issue: number) 
     } catch {
       continue;
     }
-    if (live.state !== "OPEN" || !hasQueuedLabel(live.labels)) continue;
+    if (live.state !== "OPEN" || !hasQueuedLabel(live.labels) || hasExcludeLabel(live.labels)) continue;
     let blocked = false;
     await markTrust(live, cwd, env);
     for (const ref of blockerRefs(live)) {

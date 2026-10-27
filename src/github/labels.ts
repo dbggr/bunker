@@ -9,10 +9,13 @@ export const FAILED_LABEL = "bunker:failed";
 export const REVIEW_LABEL = "bunker:review";
 export const AWAITING_REVIEW_LABEL = "bunker:awaiting-review";
 export const BLOCKED_LABEL = "bunker-blocked";
+export const EXCLUDE_LABEL = "bunker:exclude";
 
 /** Only `bunker:queued` queues an issue (never `in-progress`, `failed` or `review`). */
 export const isQueuedLabel = (name: string) => name === QUEUED_LABEL;
 export const hasQueuedLabel = (labels: { name: string }[]) => labels.some((l) => isQueuedLabel(l.name));
+/** `bunker:exclude` marks an issue as never for bunker: it is not triaged, queued or worked, even if also `bunker:queued`. */
+export const hasExcludeLabel = (labels: { name: string }[] | undefined) => !!labels?.some((l) => l.name === EXCLUDE_LABEL);
 
 /** jq condition matching `labeled` events of the queueing label. */
 export const QUEUED_EVENT_JQ = `.event == "labeled" and .label.name == "${QUEUED_LABEL}"`;
@@ -23,6 +26,7 @@ const COLORS: Record<string, [string, string]> = {
   [FAILED_LABEL]: ["B60205", "bunker gave up on this issue; relabel `bunker:queued` to retry"],
   [REVIEW_LABEL]: ["D93F0B", "bunker will not auto-merge this PR; it waits for a human"],
   [AWAITING_REVIEW_LABEL]: ["FBCA04", "manual-merge mode: bunker keeps this PR green and never merges it"],
+  [EXCLUDE_LABEL]: ["000000", "never for bunker: not triaged, queued or worked, even if also bunker:queued"],
 };
 
 /** `--color`/`--description` args for `gh label create` of a bunker label (none for other names). */

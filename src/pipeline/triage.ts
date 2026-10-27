@@ -10,7 +10,7 @@ import { stdinOf, sumUsage, type Agent, type Usage } from "../agents/agent.ts";
 import { fetchDefaultBranch } from "./audit.ts";
 import { modelLabel } from "../agents/models.ts";
 import { neutralise } from "../core/redact.ts";
-import { isQueuedLabel, QUEUED_LABEL } from "../github/labels.ts";
+import { hasExcludeLabel, isQueuedLabel, QUEUED_LABEL } from "../github/labels.ts";
 import { extractOutput, readTriageVerdict, triageOutput, type TriageVerdict } from "../core/structured.ts";
 
 /** `dry`: change nothing. `comment`: comment and close. `label`: also apply `bunker` + `priority:*` + `bug` to valid issues (the maintainer's `--yes`). */
@@ -143,9 +143,9 @@ async function triageRun({ agent, sandbox, cwd = process.cwd(), mode = "dry", li
   const me = env.BUNKER_IDENTITY_LOGIN || (await $`gh api user --jq .login`.cwd(repo).env(env).nothrow().quiet().text()).trim();
   const isOwn = (login = "") => (me ? login === me : login.endsWith("[bot]"));
   const alreadyTriaged = all.filter((i) => i.comments?.some((c) => c.body?.includes(TRIAGE_MARKER) && isOwn(c.author?.login))).map((i) => i.number);
-  // An issue a maintainer already queued is theirs to judge.
+  // An issue a maintainer already queued is theirs to judge; one labelled bunker:exclude is never bunker's.
   const fresh = all
-    .filter((i) => !alreadyTriaged.includes(i.number) && !i.labels?.some((l) => isQueuedLabel(l.name)))
+    .filter((i) => !alreadyTriaged.includes(i.number) && !i.labels?.some((l) => isQueuedLabel(l.name)) && !hasExcludeLabel(i.labels))
     .sort((a, b) => (a.createdAt ?? "").localeCompare(b.createdAt ?? "") || a.number - b.number)
     .slice(0, limit)
     .map((i): Candidate => ({ number: i.number, title: i.title, body: i.body ?? "" }));

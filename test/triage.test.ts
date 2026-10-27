@@ -175,6 +175,14 @@ describe("runTriage()", () => {
     expect(await writes()).toEqual([]);
   });
 
+  test("an issue labelled bunker:exclude is not triaged", async () => {
+    const { repo, writes } = await setup([{ number: 1, title: "A", labels: [{ name: "bunker:exclude" }] }]);
+    const seen: { prompt?: string } = {};
+    await run(repo, verdicts({ issue: 1, verdict: "fixed", evidence: "x" }), "comment", seen);
+    expect(seen.prompt).toBeUndefined();
+    expect(await writes()).toEqual([]);
+  });
+
   test("a missing, invalid or unverifiable verdict leaves that issue untouched", async () => {
     const { repo, writes } = await setup(open);
     const out = verdicts(

@@ -123,3 +123,11 @@ describe("sweepClosedQueued()", () => {
     expect(await g.log()).not.toContain("issue edit");
   });
 });
+
+test("bunker:exclude has create args and is an init label", async () => {
+  const { EXCLUDE_LABEL, labelCreateArgs } = await import("../src/github/labels.ts");
+  const { LABELS } = await import("../src/cli/commands/doctor.ts");
+  expect(EXCLUDE_LABEL).toBe("bunker:exclude");
+  expect(labelCreateArgs(EXCLUDE_LABEL)).toContain("--color");
+  expect(LABELS).toContain(EXCLUDE_LABEL);
+});

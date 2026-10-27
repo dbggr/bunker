@@ -1,5 +1,5 @@
 import { liveGhEnv } from "../github/identity.ts";
-import { hasQueuedLabel } from "../github/labels.ts";
+import { EXCLUDE_LABEL, hasExcludeLabel, hasQueuedLabel } from "../github/labels.ts";
 import { enforceLabeler } from "../github/labeler.ts";
 import { blockerRefs, isDone, isLiveShape, resumeBlocked, type IssueInfo } from "../github/issues.ts";
 import { markTrust } from "../github/trust.ts";
@@ -54,7 +54,17 @@ export interface QueueEntry extends IssueResult {
 export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shouldStop, skip, onResult, parallel = 1, relist, allowLabelers, onRefused, ...opts }: QueueOptions): Promise<QueueEntry[]> {
   const cwd = opts.cwd ?? process.cwd();
   const env = liveGhEnv();
-  const listIssues = () => listQueued(cwd, env);
+  const excludedNoted = new Set<number>();
+  const noteExcluded = (n: number) => {
+    if (excludedNoted.has(n)) return;
+    excludedNoted.add(n);
+    emit(opts.onEvent, { type: "note", text: `skipping #${n}: labelled ${EXCLUDE_LABEL}` });
+  };
+  const listIssues = async () => {
+    const all = await listQueued(cwd, env);
+    all.filter((q) => hasExcludeLabel(q.labels)).forEach((q) => noteExcluded(q.number));
+    return all.filter((q) => !hasExcludeLabel(q.labels));
+  };
   // `gh issue list` lags the label swap, so the issues just relabelled go straight into the queue.
   const resumedNow = new Map<number, Queued>();
   const addResumed = (qs: Queued[]) => qs.forEach((q) => resumedNow.set(q.number, q));
@@ -182,6 +192,10 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
       continue;
     }
     if (live.state !== "OPEN" || !hasQueuedLabel(live.labels)) continue;
+    if (hasExcludeLabel(live.labels)) {
+      noteExcluded(q.number);
+      continue;
+    }
     let waiting: number | undefined;
     await markTrust(live, cwd, env);
     for (const ref of blockerRefs(live)) {
