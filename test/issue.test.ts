@@ -592,6 +592,28 @@ describe("runIssue()", () => {
     }
   });
 
+  test("verifyOnHost runs with an empty HOME and warns about the missing isolation", async () => {
+    const { repo } = await setup(issue());
+    const realHome = await mkdtemp(join(tmpdir(), "bunker-realhome-"));
+    await Bun.write(join(realHome, ".config/gh/hosts.yml"), "oauth_token: secret\n");
+    const savedHome = process.env.HOME;
+    const savedWarn = output.warn;
+    const warnings: string[] = [];
+    output.warn = (l) => warnings.push(l);
+    process.env.HOME = realHome;
+    try {
+      const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verifyRetries: 0, verify: 'echo "home=$HOME"; cat "$HOME/.config/gh/hosts.yml" 2>&1; test ! -e "$HOME/.config/gh/hosts.yml"; echo "[$?]"; exit 4', verifyOnHost: true });
+      expect(r.verifyOutput).not.toContain("secret");
+      expect(r.verifyOutput).not.toContain(`home=${realHome}`);
+      expect(r.verifyOutput).toContain("[0]");
+      expect(warnings.some((w) => w.includes("--verify-on-host"))).toBe(true);
+    } finally {
+      process.env.HOME = savedHome;
+      output.warn = savedWarn;
+      await rm(realHome, { recursive: true, force: true });
+    }
+  });
+
   test("sandboxed verify is isolated (no network, no credentials) unless verifyNetwork", async () => {
     const seen: boolean[] = [];
     const inner = noSandbox();

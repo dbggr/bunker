@@ -2,7 +2,7 @@ import { redact } from "../../core/redact.ts";
 import { emit, emitStage } from "../../core/events.ts";
 import { tailLines, testCounts } from "../../core/output.ts";
 import { runSetup } from "../../worktree/admin.ts";
-import { isolatedEnv } from "../../sandboxes/env.ts";
+import { spawnOnHost } from "../../sandboxes/env.ts";
 import type { ServiceSet, Services } from "../../sandboxes/services.ts";
 import { stepLimits, timeoutMessage, type Sandbox } from "../../sandboxes/exec.ts";
 import type { ReviewResult } from "../review.ts";
@@ -106,7 +106,7 @@ async function verifyOnce(ctx: IssueRunContext, input: VerifyInput, extra: Parti
   if (verifyOnHost) {
     // Own process group (setsid) so a timeout kills the whole tree, not just the shell.
     // Agent-written code on the host: no GitHub tokens, no Claude credentials.
-    const proc = Bun.spawn(["setsid", "sh", "-c", verify], { cwd: worktree, env: isolatedEnv(), stdout: "pipe", stderr: "pipe" });
+    const { proc, cleanup } = spawnOnHost(verify, worktree);
     const timer = setTimeout(() => {
       timedOut = "step";
       try { process.kill(-proc.pid, "SIGKILL"); } catch { proc.kill("SIGKILL"); }
@@ -117,6 +117,7 @@ async function verifyOnce(ctx: IssueRunContext, input: VerifyInput, extra: Parti
       text = o + e;
     } finally {
       clearTimeout(timer);
+      cleanup();
     }
   } else {
     // Agent-written code: same sandbox as the agent, no GitHub tokens, and (unless opted in) no network
