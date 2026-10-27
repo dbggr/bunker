@@ -69,9 +69,14 @@ interface Candidate {
   body: string;
 }
 
+/** Breaks any `</issue-body` (any case) so the body cannot close the untrusted-content fence early. */
+export function fenceSafe(body: string): string {
+  return body.replace(/<\/(issue-body)/gi, "<\\/$1");
+}
+
 export function triagePrompt(issues: Candidate[], open: { number: number; title: string }[]): string {
   const listed = issues
-    .map((i) => `#${i.number}: ${JSON.stringify(i.title)}\n<issue-body>\n${i.body.slice(0, BODY_CAP)}\n</issue-body>`)
+    .map((i) => `#${i.number}: ${JSON.stringify(i.title)}\n<issue-body>\n${fenceSafe(i.body.slice(0, BODY_CAP))}\n</issue-body>`)
     .join("\n\n");
   return (
     "Triage these GitHub issues, which agents filed as `discovered`. For each, check its claim against the code in this checkout (the current default branch) and its git history, " +
@@ -133,8 +138,11 @@ async function triageRun({ agent, sandbox, cwd = process.cwd(), mode = "dry", li
 
   const list = await $`gh issue list --state open --label discovered --limit 1000 --json number,title,body,comments,labels,createdAt`.cwd(repo).env(env).nothrow().quiet();
   if (list.exitCode !== 0) throw new Error(`gh issue list failed:\n${list.stderr}`);
-  const all = JSON.parse(list.stdout.toString()) as { number: number; title: string; body?: string; createdAt?: string; comments?: { body?: string }[]; labels?: { name: string }[] }[];
-  const alreadyTriaged = all.filter((i) => i.comments?.some((c) => c.body?.includes(TRIAGE_MARKER))).map((i) => i.number);
+  const all = JSON.parse(list.stdout.toString()) as { number: number; title: string; body?: string; createdAt?: string; comments?: { body?: string; author?: { login?: string } }[]; labels?: { name: string }[] }[];
+  // Only bunker's own comments count: anyone can paste the marker.
+  const me = env.BUNKER_IDENTITY_LOGIN || (await $`gh api user --jq .login`.cwd(repo).env(env).nothrow().quiet().text()).trim();
+  const isOwn = (login = "") => (me ? login === me : login.endsWith("[bot]"));
+  const alreadyTriaged = all.filter((i) => i.comments?.some((c) => c.body?.includes(TRIAGE_MARKER) && isOwn(c.author?.login))).map((i) => i.number);
   // An issue a maintainer already queued is theirs to judge.
   const fresh = all
     .filter((i) => !alreadyTriaged.includes(i.number) && !i.labels?.some((l) => isQueuedLabel(l.name)))
