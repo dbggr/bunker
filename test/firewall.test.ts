@@ -12,7 +12,7 @@ describe("agent network firewall", () => {
     const r = firewallRules(net).join("\n");
     for (const d of ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]) expect(r).toContain(`-d ${d} -j REJECT`);
     expect(r).toContain("-I INPUT -i br-0123456789ab");
-    expect(firewallRules(net)[0]).toContain("-j RETURN");
+    expect(firewallRules(net).at(-1)).toContain("-j RETURN");
   });
 
   test("rulesBlock accepts the printed rules and rejects partial ones", () => {
