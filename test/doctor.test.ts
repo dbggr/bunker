@@ -263,3 +263,30 @@ describe("doctor services", () => {
     expect(formatChecks(r.checks)).toContain("service database: postgres:18");
   });
 });
+
+describe("doctor agent firewall", () => {
+  const setup = async (iptables: string) => {
+    const w = await fakeWorld();
+    const bin = join(w.root, "bin");
+    await Bun.write(join(bin, "docker"), `#!/bin/bash\ncase "$*" in "network inspect"*) printf "0123456789abcdef\nfd00::/64 fd00::1\n172.20.0.0/16 172.20.0.1\n";; esac\nexit 0\n`);
+    await Bun.write(join(bin, "iptables"), `#!/bin/bash\n${iptables}\n`);
+    await Bun.$`chmod +x ${join(bin, "docker")} ${join(bin, "iptables")}`;
+    return w;
+  };
+
+  test("unprotected bridge: optional ✗ with the rules to install", async () => {
+    const w = await setup("exit 0");
+    const r = await runDoctor({ cwd: w.repo, env: w.env });
+    const c = r.checks.find((c) => c.id === "agent-firewall")!;
+    expect(c.ok).toBe(false);
+    expect(c.required).toBe(false);
+    expect(c.fix).toContain("iptables -I DOCKER-USER -i br-0123456789ab -d 192.168.0.0/16 -j REJECT");
+    expect(r.code).toBe(0);
+  });
+
+  test("rules in place: ✓", async () => {
+    const w = await setup(`case "$2" in DOCKER-USER) for d in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do echo "-A DOCKER-USER -d $d -i br-0123456789ab -j REJECT"; done;; INPUT) echo "-A INPUT -i br-0123456789ab -m conntrack --ctstate NEW -j REJECT";; esac`);
+    const r = await runDoctor({ cwd: w.repo, env: w.env });
+    expect(r.checks.find((c) => c.id === "agent-firewall")?.ok).toBe(true);
+  });
+});

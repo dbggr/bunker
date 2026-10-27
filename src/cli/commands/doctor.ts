@@ -9,6 +9,8 @@ import { DEFAULT_REVIEW_PATHS } from "../../worktree/steering.ts";
 import { ConfigError, effectiveSettings, formatValue, loadRepoConfig } from "../../core/config.ts";
 import { redact } from "../../core/redact.ts";
 import { unpullable } from "../../sandboxes/services.ts";
+import { AGENT_NETWORK } from "../../sandboxes/container.ts";
+import { bridgeName, firewallRules, rulesBlock } from "../../sandboxes/firewall.ts";
 import { applyIdentity, identityKind } from "../../github/identity.ts";
 import { AWAITING_REVIEW_LABEL, FAILED_LABEL, IN_PROGRESS_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
 import { SKILL_ROLES, SkillError, resolveSkills, skillPaths } from "../../core/skills.ts";
@@ -138,6 +140,27 @@ export async function runDoctor(opts: { cwd: string; env?: Env; fetch?: typeof g
   add({ id: "git", group: "tools", label: "git", ok: git.code === 0, fix: "install git" });
   add({ id: "gh", group: "tools", label: "gh authenticated", ok: gh.code === 0, fix: "install the GitHub CLI and run `gh auth login`" });
   add({ id: "claude", group: "tools", label: "claude present", ok: claude.code === 0, required: !authed, fix: "install Claude Code (needed for `claude setup-token`)" });
+
+  // the agent bridge can still reach the LAN and the gateway without host firewall rules (#530); bunker cannot install them without root
+  if (docker.code === 0) {
+    const net = await exec(["docker", "network", "inspect", AGENT_NETWORK, "--format", "{{.Id}}\n{{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}\n{{end}}"], { env });
+    const [id, ...cfgs] = net.out.trim().split("\n").map((l) => l.trim());
+    const [subnet, gateway] = (cfgs.find((l) => l && !l.includes(":")) ?? "").split(/\s+/); // first IPv4 entry
+    if (net.code === 0 && id && subnet && gateway) {
+      const n = { bridge: bridgeName(id), subnet, gateway };
+      const [du, inp] = await Promise.all([exec(["iptables", "-S", "DOCKER-USER"], { env }), exec(["iptables", "-S", "INPUT"], { env })]);
+      const readable = du.code === 0 && inp.code === 0;
+      add({
+        id: "agent-firewall",
+        group: "tools",
+        label: `${AGENT_NETWORK} network blocks the LAN and the gateway (optional)`,
+        ok: readable && rulesBlock(n, du.out, inp.out),
+        required: false,
+        ...(readable ? {} : { detail: "could not read iptables rules (needs root)" }),
+        fix: `as root, run: ${firewallRules(n).join("; ")}`,
+      });
+    }
+  }
 
   // auth
   const authVar = AUTH_VARS.find((v) => !!env[v]);
