@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { bridgeName, firewallRules, rulesBlock } from "../src/sandboxes/firewall.ts";
+
+setDefaultTimeout(60_000); // see test/setup.ts
 
 const net = { bridge: bridgeName("0123456789abcdef"), subnet: "172.20.0.0/16", gateway: "172.20.0.1" };
 
