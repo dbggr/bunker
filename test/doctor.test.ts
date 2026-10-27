@@ -268,7 +268,7 @@ describe("doctor agent firewall", () => {
   const setup = async (iptables: string) => {
     const w = await fakeWorld();
     const bin = join(w.root, "bin");
-    await Bun.write(join(bin, "docker"), `#!/bin/bash\ncase "$*" in "network inspect"*) echo "0123456789abcdef 172.20.0.0/16 172.20.0.1";; esac\nexit 0\n`);
+    await Bun.write(join(bin, "docker"), `#!/bin/bash\ncase "$*" in "network inspect"*) printf "0123456789abcdef\nfd00::/64 fd00::1\n172.20.0.0/16 172.20.0.1\n";; esac\nexit 0\n`);
     await Bun.write(join(bin, "iptables"), `#!/bin/bash\n${iptables}\n`);
     await Bun.$`chmod +x ${join(bin, "docker")} ${join(bin, "iptables")}`;
     return w;

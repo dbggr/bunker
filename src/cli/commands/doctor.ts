@@ -143,8 +143,9 @@ export async function runDoctor(opts: { cwd: string; env?: Env; fetch?: typeof g
 
   // the agent bridge can still reach the LAN and the gateway without host firewall rules (#530); bunker cannot install them without root
   if (docker.code === 0) {
-    const net = await exec(["docker", "network", "inspect", AGENT_NETWORK, "--format", "{{.Id}} {{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}{{end}}"], { env });
-    const [id, subnet, gateway] = net.out.trim().split(/\s+/);
+    const net = await exec(["docker", "network", "inspect", AGENT_NETWORK, "--format", "{{.Id}}\n{{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}\n{{end}}"], { env });
+    const [id, ...cfgs] = net.out.trim().split("\n").map((l) => l.trim());
+    const [subnet, gateway] = (cfgs.find((l) => l && !l.includes(":")) ?? "").split(/\s+/); // first IPv4 entry
     if (net.code === 0 && id && subnet && gateway) {
       const n = { bridge: bridgeName(id), subnet, gateway };
       const [du, inp] = await Promise.all([exec(["iptables", "-S", "DOCKER-USER"], { env }), exec(["iptables", "-S", "INPUT"], { env })]);

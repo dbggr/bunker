@@ -26,3 +26,17 @@ describe("agent network firewall", () => {
     expect(rulesBlock(net, du.split("\n").filter((l) => !l.includes("192.168")).join("\n"), inp)).toBe(false);
   });
 });
+
+describe("rule order", () => {
+  test("applying the commands with -I leaves the own-subnet RETURN above every REJECT", () => {
+    const stack: string[] = [];
+    for (const r of firewallRules(net).filter((r) => r.includes("DOCKER-USER"))) stack.unshift(r);
+    expect(stack[0]).toContain("-j RETURN");
+    expect(stack.slice(1).every((r) => r.includes("-j REJECT"))).toBe(true);
+  });
+
+  test("a port-restricted INPUT reject is not a gateway block", () => {
+    const du = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"].map((d) => `-A DOCKER-USER -d ${d} -i ${net.bridge} -j REJECT`).join("\n");
+    expect(rulesBlock(net, du, `-A INPUT -i ${net.bridge} -p tcp -m tcp --dport 22 -j REJECT`)).toBe(false);
+  });
+});
