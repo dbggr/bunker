@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, statSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connectHub, hubReachable, readToken, repoIdFromUrl, startHub, type Hub } from "../src/ui/ui.ts";
+import { connectHub, ensureHub, hubReachable, readToken, repoIdFromUrl, startHub, type Hub } from "../src/ui/ui.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -579,5 +579,30 @@ describe("hub keeps only the latest watcher snapshot", () => {
     await Bun.sleep(50);
     expect(late.messages.map((m) => m.event.watcher.version)).toEqual(["3"]);
     late.ws.close();
+  });
+});
+
+describe("ensureHub()", () => {
+  test("simultaneous starts on one port: one owns the hub, the others join it", async () => {
+    const probe = startHub({ port: 0, token: TOKEN });
+    const port = probe.server.port!;
+    await probe.stop();
+    const hubs = await Promise.all([ensureHub({ port, token: TOKEN }), ensureHub({ port, token: TOKEN }), ensureHub({ port, token: TOKEN })]);
+    const owned = hubs.filter((h): h is Hub => !!h);
+    try {
+      expect(owned.length).toBe(1);
+      expect(await hubReachable(port, TOKEN)).toBe(true);
+    } finally {
+      await Promise.all(owned.map((h) => h.stop()));
+    }
+  });
+
+  test("still throws when the port is held by something that is not our hub", async () => {
+    const other = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("no") });
+    try {
+      await expect(ensureHub({ port: other.port!, token: TOKEN }, { retries: 1, delayMs: 10 })).rejects.toThrow();
+    } finally {
+      await other.stop(true);
+    }
   });
 });

@@ -258,3 +258,21 @@ export async function connectHub({ port = defaultHubPort(), repo, token }: { por
     flush: async () => void (await chain),
   };
 }
+
+/**
+ * Start the hub unless one is already up. Simultaneous starts race for the port: the loser's bind fails,
+ * so it joins the winner's hub (returns undefined) instead of failing. Rethrows when no hub shows up.
+ */
+export async function ensureHub(opts: Parameters<typeof startHub>[0], { retries = 5, delayMs = 100 }: { retries?: number; delayMs?: number } = {}): Promise<Hub | undefined> {
+  const port = opts.port ?? defaultHubPort();
+  if (await hubReachable(port, opts.token)) return undefined;
+  try {
+    return startHub(opts);
+  } catch (e) {
+    for (let i = 0; i < retries; i++) {
+      if (await hubReachable(port, opts.token)) return undefined;
+      await Bun.sleep(delayMs);
+    }
+    throw e;
+  }
+}
