@@ -25,6 +25,9 @@ const release = (version: string) => {
   git(origin, "tag", `v${version}`);
 };
 
+const signed = () => exe(join(fakes, "git"), `for a in "$@"; do [ "$a" = verify-tag ] && exit 0; done\nexec ${Bun.which("git")} "$@"`);
+const unsigned = () => exe(join(fakes, "git"), `exec ${Bun.which("git")} "$@"`);
+
 function run(args: string[], env: Record<string, string> = {}) {
   const r = Bun.spawnSync(["sh", script, ...args], {
     env: {
@@ -49,7 +52,7 @@ beforeEach(() => {
   mkdirSync(origin);
   git(origin, "init", "-q", "-b", "main");
   release("1.0.0");
-  exe(join(fakes, "git"), `exec ${Bun.which("git")} "$@"`);
+  signed(); // release tags here count as signed unless a test says otherwise
   // fake bun: `bun run build` drops a "compiled" binary at dist/bunker
   exe(join(fakes, "bun"), `case "$1" in --version) echo 1.3.0;; run) mkdir -p dist; printf '#!/bin/sh\\necho bunker\\n' > dist/bunker;; esac`);
   exe(join(fakes, "docker"), `[ "$1" = --version ] && echo "Docker version 28.1.0, build x"; exit 0`);
@@ -105,26 +108,36 @@ describe("install.sh", () => {
     expect(existsSync(join(home, ".local", "bin", "bunker"))).toBe(true);
   });
 
-  test("warns when the release tag is not signed but still installs", () => {
+  test("refuses an unsigned tag by default and installs nothing", () => {
+    unsigned();
     const r = run(["--yes"]);
-    expect(r.code).toBe(0);
-    expect(r.err).toContain("v1.0.0 has no valid signature");
-  });
-
-  test("--verify-tag refuses an unsigned tag and installs nothing", () => {
-    const r = run(["--yes", "--verify-tag"]);
     expect(r.code).toBe(1);
     expect(r.err).toContain("v1.0.0 has no valid signature");
+    expect(r.err).toContain("refusing to install an unverified tag");
     expect(existsSync(join(home, ".local", "bin", "bunker"))).toBe(false);
   });
 
-  test("BUNKER_VERIFY_TAG=1 is the same as --verify-tag", () => {
-    expect(run(["--yes"], { BUNKER_VERIFY_TAG: "1" }).code).toBe(1);
+  test("--no-verify-tag warns about an unsigned tag but still installs", () => {
+    unsigned();
+    const r = run(["--yes", "--no-verify-tag"]);
+    expect(r.code).toBe(0);
+    expect(r.err).toContain("v1.0.0 has no valid signature");
+    expect(existsSync(join(home, ".local", "bin", "bunker"))).toBe(true);
   });
 
-  test("--verify-tag installs when git verify-tag passes", () => {
-    exe(join(fakes, "git"), `for a in "$@"; do [ "$a" = verify-tag ] && exit 0; done\nexec ${Bun.which("git")} "$@"`);
-    const r = run(["--yes", "--verify-tag"]);
+  test("BUNKER_VERIFY_TAG=0 is the same as --no-verify-tag", () => {
+    unsigned();
+    expect(run(["--yes"], { BUNKER_VERIFY_TAG: "0" }).code).toBe(0);
+  });
+
+  test("--verify-tag still refuses an unsigned tag", () => {
+    unsigned();
+    expect(run(["--yes", "--verify-tag"]).code).toBe(1);
+    expect(run(["--yes", "--no-verify-tag", "--verify-tag"]).code).toBe(1);
+  });
+
+  test("installs without a warning when git verify-tag passes", () => {
+    const r = run(["--yes"]);
     expect(r.code).toBe(0);
     expect(r.err).not.toContain("no valid signature");
     expect(existsSync(join(home, ".local", "bin", "bunker"))).toBe(true);
