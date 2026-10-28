@@ -62,3 +62,13 @@ test("the pids and memory limits can be overridden", async () => {
   expect(args[args.indexOf("--pids-limit") + 1]).toBe("99");
   expect(args[args.indexOf("--memory") + 1]).toBe("2g");
 });
+
+test("containers never mount the real Claude credential files", async () => {
+  const args = await runArgs({});
+  const mounts = args.filter((a, i) => args[i - 1] === "-v");
+  for (const m of mounts) {
+    expect(m).not.toContain(".credentials.json");
+    expect(m).not.toContain(".claude.json");
+    expect(m.startsWith(`${process.env.HOME}/.claude`)).toBe(false);
+  }
+});
