@@ -7,6 +7,7 @@ import { gitMountArgs, guardGit } from "./git-guard.ts";
 import type { RoleSkills } from "../core/skills.ts";
 import { startServices } from "./services.ts";
 import { startCredentialProxy, type CredentialProxy } from "./credential-proxy.ts";
+import { effectiveEgress, pickProxyPort, startEgressProxy, type EgressProxy } from "./egress.ts";
 import { CLAUDE_CREDENTIAL_VARS } from "../agents/claude.ts";
 import { killGroup, teeStdout, type Sandbox } from "./exec.ts";
 import baseDockerfile from "../../images/base/Dockerfile" with { type: "text" };
@@ -62,6 +63,8 @@ export interface DockerOptions {
   env?: string[];
   /** Skill directories per role, mounted read-only into the container's ~/.claude/skills/<name>. */
   skills?: RoleSkills;
+  /** Extra hosts (beyond DEFAULT_EGRESS) the agent may reach: the repo's `[sandbox] egress`. */
+  egress?: string[];
   /** Container CLI to invoke. Defaults to the provider's own (`docker` / `podman`). */
   bin?: string;
   /** Resource limits per container; `pids` and `memory` (docker/podman syntax, e.g. 8g) default to DEFAULT_LIMITS. */
@@ -148,6 +151,7 @@ function credentialProxy(bin: string): Promise<CredentialProxy> {
       const hostname = await agentGateway(bin);
       if (!hostname) throw new Error(`could not find the ${AGENT_NETWORK} gateway: the Claude credential proxy needs it`);
       const proxy = startCredentialProxy({
+        port: await pickProxyPort(hostname),
         hostname,
         credentials: {
           ...(process.env.CLAUDE_CODE_OAUTH_TOKEN ? { CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN } : {}),
@@ -161,6 +165,36 @@ function credentialProxy(bin: string): Promise<CredentialProxy> {
     credentialProxies.set(bin, p);
   }
   return p;
+}
+
+const egressProxies = new Map<string, Promise<{ proxy: EgressProxy; gateway: string }>>();
+
+/** One egress proxy per runtime and allowlist, on the agent network's gateway. */
+function egressProxy(bin: string, allow: string[]) {
+  const key = `${bin}\0${[...allow].sort().join(",")}`;
+  let p = egressProxies.get(key);
+  if (!p) {
+    p = (async () => {
+      await ensureAgentNetwork(bin);
+      const gateway = await agentGateway(bin);
+      if (!gateway) throw new Error(`could not find the ${AGENT_NETWORK} gateway: the egress allowlist proxy needs it`);
+      const proxy = startEgressProxy({ hostname: gateway, allow, port: await pickProxyPort(gateway) });
+      process.on("exit", () => proxy.stop());
+      return { proxy, gateway };
+    })();
+    p.catch(() => egressProxies.delete(key));
+    egressProxies.set(key, p);
+  }
+  return p;
+}
+
+/** `-e` args that send the agent's HTTP(S) traffic through the allowlisting proxy; the gateway (credential proxy) stays direct. */
+async function egressEnvArgs(bin: string, extra: string[] | undefined): Promise<string[]> {
+  if (process.env.BUNKER_EGRESS_PROXY === "off") return []; // user-level escape hatch (a repo cannot set it)
+  const { proxy, gateway } = await egressProxy(bin, effectiveEgress(extra));
+  const url = `http://${gateway}:${proxy.port}`;
+  const noProxy = `${gateway},localhost,127.0.0.1`;
+  return ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"].flatMap((k) => ["-e", `${k}=${url}`]).concat(["-e", `NO_PROXY=${noProxy}`, "-e", `no_proxy=${noProxy}`]);
 }
 
 /** `-e` args for the agent: Claude credentials become placeholders and ANTHROPIC_BASE_URL the proxy; other names pass by name. */
@@ -210,6 +244,8 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
       }).flatMap(([k, v]) => (v ? ["-e", `${k}=${v}`] : []));
       if (!network && !isolate) await ensureAgentNetwork(bin);
       const agentEnv = isolate ? [] : await agentEnvArgs(bin, env);
+      // Only the plain agent network has a way out; services networks are internal and verify has none.
+      const egressEnv = !network && !isolate ? await egressEnvArgs(bin, opts.egress) : [];
       const cname = `bunker-${crypto.randomUUID().slice(0, 12)}`;
       const argv = [
         bin, "run", "--rm", ...(stdin === undefined ? [] : ["-i"]), "--name", cname,
@@ -224,7 +260,7 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
         // Non-isolated runs join one long-lived bridge network (not the default bridge, which creates and removes a veth per run and makes Chrome fail with ERR_NETWORK_CHANGED).
         // Not the host network: the container has its own loopback, so the host's 127.0.0.1 services are out of reach.
         // With services the command joins their internal network (no route out) instead.
-        ...(network ? ["--network", network, ...agentEnv] : isolate ? ["--network", "none"] : ["--network", AGENT_NETWORK, ...agentEnv]),
+        ...(network ? ["--network", network, ...agentEnv] : isolate ? ["--network", "none"] : ["--network", AGENT_NETWORK, ...agentEnv, ...egressEnv]),
         ...identity,
         "-v", `${this.projectsDir}:/tmp/.claude/projects`,
         ...(role ? opts.skills?.[role] ?? [] : []).flatMap((k) => ["-v", `${k.path}:/tmp/.claude/skills/${k.name}:ro`]),

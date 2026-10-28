@@ -27,7 +27,7 @@ export interface RepoConfig {
   merge: { ci_timeout?: number; mode?: "auto" | "manual" };
   notify: { enabled?: boolean; github_user?: string };
   clean: { logs_days?: number };
-  sandbox: { pids_limit?: number; memory?: string };
+  sandbox: { pids_limit?: number; memory?: string; egress?: string[] };
 }
 
 /** An invalid `.bunker/config.toml`: the CLI exits 2. */
@@ -69,6 +69,7 @@ export const CONFIG_KEYS: KeySpec[] = [
   { key: "watch.triage_every", kind: "number", doc: "hours between periodic `bunker triage` runs in bunker watch (comment and close only)" },
   { key: "merge.mode", kind: "string", doc: '"manual": PRs stay open for a human to merge; bunker keeps them green (also written `merge = "manual"`)', default: "auto" },
   { key: "merge.ci_timeout", kind: "number", doc: "minutes --merge waits for CI", default: 30 },
+  { key: "sandbox.egress", kind: "strings", doc: "extra hosts agent containers may reach, on top of the default allowlist (Anthropic, GitHub, npm, Bun); `*.example.com` matches subdomains" },
   { key: "clean.logs_days", kind: "number", doc: "days to keep .bunker/runs logs; bunker watch / bunker queue start-up and `bunker clean` prune older ones", default: 30 },
   { key: "sandbox.pids_limit", kind: "integer", doc: "max processes per sandbox container (docker/podman --pids-limit)", default: 4096 },
   { key: "sandbox.memory", kind: "string", doc: "memory limit per sandbox container, e.g. 8g (docker/podman --memory)", default: "8g" },

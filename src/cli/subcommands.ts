@@ -168,7 +168,7 @@ export async function shepherdCommand(values: CliValues) {
   const agent = claudeCode({ model: models.implementer, json: true });
   const shepherd = createShepherd({
     agent, reviewer: models.reviewer === models.implementer ? agent : claudeCode({ model: models.reviewer, json: true }),
-    sandbox: values["no-sandbox"] ? noSandbox({ skills }) : docker({ limits: { pids: cfg.sandbox.pids_limit, memory: cfg.sandbox.memory }, image: values.image, skills }),
+    sandbox: values["no-sandbox"] ? noSandbox({ skills }) : docker({ limits: { pids: cfg.sandbox.pids_limit, memory: cfg.sandbox.memory }, image: values.image, skills, egress: cfg.sandbox.egress }),
     ...(values.setup ? { setup: values.setup } : {}), ...(values.verify ? { verify: values.verify } : {}), verifyOnHost: values["verify-on-host"], verifyNetwork: cfg.verify_network === true,
     onEvent: createProgress({ write: (s) => output.write(redact(s)), tty: !!process.stdout.isTTY, columns: process.stdout.columns ?? 100 }).onEvent, ...timeouts,
   });

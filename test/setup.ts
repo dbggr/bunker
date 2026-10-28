@@ -77,3 +77,6 @@ process.on("exit", () => rmSync(configHome, { recursive: true, force: true }));
 // `bunker ui` (phantom bunker-watch-*/origin tabs). Point the default at a port nothing listens on (dynamic range,
 // picked per run). test/hygiene.test.ts checks this.
 process.env.BUNKER_HUB_PORT = String(40000 + (process.pid % 20000));
+
+// Most container tests use a fake docker with no network gateway to put the egress proxy on (test/egress.test.ts turns it back on).
+process.env.BUNKER_EGRESS_PROXY = "off";
