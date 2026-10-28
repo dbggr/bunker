@@ -6,6 +6,8 @@ import { output } from "../core/output.ts";
 import { gitMountArgs, guardGit } from "./git-guard.ts";
 import type { RoleSkills } from "../core/skills.ts";
 import { startServices } from "./services.ts";
+import { startCredentialProxy, type CredentialProxy } from "./credential-proxy.ts";
+import { CLAUDE_CREDENTIAL_VARS } from "../agents/claude.ts";
 import { killGroup, teeStdout, type Sandbox } from "./exec.ts";
 import baseDockerfile from "../../images/base/Dockerfile" with { type: "text" };
 
@@ -121,6 +123,58 @@ function ensureAgentNetwork(bin: string): Promise<void> {
   return p;
 }
 
+/** The agent network's gateway address, where the container reaches the host; undefined if the runtime doesn't say. */
+async function agentGateway(bin: string): Promise<string | undefined> {
+  const proc = Bun.spawn([bin, "network", "inspect", AGENT_NETWORK], { stdout: "pipe", stderr: "ignore" });
+  const [text] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  try {
+    const net = (JSON.parse(text) as Record<string, unknown>[])[0] ?? {};
+    const ipam = ((net.IPAM as { Config?: { Gateway?: string }[] } | undefined)?.Config ?? []).map((c) => c.Gateway);
+    const subnets = (((net.subnets ?? net.Subnets) as { gateway?: string }[] | undefined) ?? []).map((c) => c.gateway);
+    return [...ipam, ...subnets].find((g): g is string => !!g && !g.includes(":"));
+  } catch {
+    return undefined;
+  }
+}
+
+const credentialProxies = new Map<string, Promise<CredentialProxy>>();
+
+/** One proxy per process and runtime, listening on the agent network's gateway only. */
+function credentialProxy(bin: string): Promise<CredentialProxy> {
+  let p = credentialProxies.get(bin);
+  if (!p) {
+    p = (async () => {
+      await ensureAgentNetwork(bin);
+      const hostname = await agentGateway(bin);
+      if (!hostname) throw new Error(`could not find the ${AGENT_NETWORK} gateway: the Claude credential proxy needs it`);
+      const proxy = startCredentialProxy({
+        hostname,
+        credentials: {
+          ...(process.env.CLAUDE_CODE_OAUTH_TOKEN ? { CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN } : {}),
+          ...(process.env.ANTHROPIC_API_KEY ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY } : {}),
+        },
+      });
+      process.on("exit", () => proxy.stop());
+      return proxy;
+    })();
+    p.catch(() => credentialProxies.delete(bin));
+    credentialProxies.set(bin, p);
+  }
+  return p;
+}
+
+/** `-e` args for the agent: Claude credentials become placeholders and ANTHROPIC_BASE_URL the proxy; other names pass by name. */
+async function agentEnvArgs(bin: string, names: string[]): Promise<string[]> {
+  const isCred = (n: string) => (CLAUDE_CREDENTIAL_VARS as readonly string[]).includes(n);
+  const held = names.filter((n) => isCred(n) && process.env[n]);
+  const args = names.filter((n) => !isCred(n)).flatMap((n) => ["-e", n]); // name only: value comes from our env, never argv
+  if (!held.length) return args;
+  const proxy = await credentialProxy(bin);
+  for (const n of held) args.push("-e", `${n}=${proxy.placeholders[n as keyof typeof proxy.placeholders]}`);
+  args.push("-e", `ANTHROPIC_BASE_URL=${proxy.url}`);
+  return args;
+}
+
 export function containerSandbox(bin: string, userArgs: string[], opts: DockerOptions): Sandbox {
   const env = opts.env ?? ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
   // runAll() calls exec once per task at the same time; share one image build per repo.
@@ -155,6 +209,7 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
         GIT_COMMITTER_EMAIL: email,
       }).flatMap(([k, v]) => (v ? ["-e", `${k}=${v}`] : []));
       if (!network && !isolate) await ensureAgentNetwork(bin);
+      const agentEnv = isolate ? [] : await agentEnvArgs(bin, env);
       const cname = `bunker-${crypto.randomUUID().slice(0, 12)}`;
       const argv = [
         bin, "run", "--rm", ...(stdin === undefined ? [] : ["-i"]), "--name", cname,
@@ -169,7 +224,7 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
         // Non-isolated runs join one long-lived bridge network (not the default bridge, which creates and removes a veth per run and makes Chrome fail with ERR_NETWORK_CHANGED).
         // Not the host network: the container has its own loopback, so the host's 127.0.0.1 services are out of reach.
         // With services the command joins their internal network (no route out) instead.
-        ...(network ? ["--network", network, ...(isolate ? [] : env.flatMap((name) => ["-e", name]))] : isolate ? ["--network", "none"] : ["--network", AGENT_NETWORK, ...env.flatMap((name) => ["-e", name])]), // name only: value comes from our env, never argv
+        ...(network ? ["--network", network, ...agentEnv] : isolate ? ["--network", "none"] : ["--network", AGENT_NETWORK, ...agentEnv]),
         ...identity,
         "-v", `${this.projectsDir}:/tmp/.claude/projects`,
         ...(role ? opts.skills?.[role] ?? [] : []).flatMap((k) => ["-v", `${k.path}:/tmp/.claude/skills/${k.name}:ro`]),

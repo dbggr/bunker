@@ -17,6 +17,7 @@ export const ISSUE_CONVENTION =
   "Block only when this issue cannot be delivered at all without other work. If only an optional or secondary part of the spec depends on it, build the rest and file a follow-up (or note it in the PR) instead of blocking. " +
   "If it really cannot be done until something else is done, do not work around it: report what blocks it and stop. " +
   'If what it waits on is an existing open issue (queued, in progress or labelled), give that number as "issue" in the blocked_by item instead of describing a new one; do not file a duplicate. ' +
+  "Before reporting a blocker, check the open issues, the open and merged PRs and the default branch: if that work is already open, or has already landed (even in part), do not report it as a new blocker; build what remains or reference the existing issue. " +
   'Report by ending your answer with <report>{"issues": [{"title": "short title", "body": "one-paragraph body", "bug": true if it is a defect, "severity": "high|medium|low"}], ' +
   "Never set a priority; a human does that when triaging. " + SEVERITY_HELP + " At most one follow-up is filed per run, the most severe; the rest are only listed, so report only what matters. " +
   '"blocked_by": [{"title": "short title", "body": "why it blocks, plus acceptance criteria", "issue": 12 (only for an existing open issue)}]}</report> (valid JSON; both lists optional, omit the whole block if there is nothing to report; only the last <report> counts). ' +
