@@ -133,7 +133,7 @@ export async function triageCommand(values: CliValues) {
   const mode = values.yes ? "label" : "dry";
   let result;
   try {
-    result = await runTriage({ agent: claudeCode({ model: models.auditor, json: true }), sandbox: values["no-sandbox"] ? noSandbox() : docker({ image: values.image }), mode, limit: triageLimit, setup: values.setup, onEvent: createProgress({ write: (s) => output.write(redact(s)), tty: !!process.stdout.isTTY, columns: process.stdout.columns ?? 100 }).onEvent, ...triageTimeouts });
+    result = await runTriage({ agent: claudeCode({ model: models.auditor, json: true }), sandbox: values["no-sandbox"] ? noSandbox() : docker({ limits: { pids: cfg.sandbox.pids_limit, memory: cfg.sandbox.memory }, image: values.image }), mode, limit: triageLimit, setup: values.setup, onEvent: createProgress({ write: (s) => output.write(redact(s)), tty: !!process.stdout.isTTY, columns: process.stdout.columns ?? 100 }).onEvent, ...triageTimeouts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     process.exit(2);
@@ -168,7 +168,7 @@ export async function shepherdCommand(values: CliValues) {
   const agent = claudeCode({ model: models.implementer, json: true });
   const shepherd = createShepherd({
     agent, reviewer: models.reviewer === models.implementer ? agent : claudeCode({ model: models.reviewer, json: true }),
-    sandbox: values["no-sandbox"] ? noSandbox({ skills }) : docker({ image: values.image, skills }),
+    sandbox: values["no-sandbox"] ? noSandbox({ skills }) : docker({ limits: { pids: cfg.sandbox.pids_limit, memory: cfg.sandbox.memory }, image: values.image, skills }),
     ...(values.setup ? { setup: values.setup } : {}), ...(values.verify ? { verify: values.verify } : {}), verifyOnHost: values["verify-on-host"], verifyNetwork: cfg.verify_network === true,
     onEvent: createProgress({ write: (s) => output.write(redact(s)), tty: !!process.stdout.isTTY, columns: process.stdout.columns ?? 100 }).onEvent, ...timeouts,
   });

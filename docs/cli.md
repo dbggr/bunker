@@ -342,6 +342,8 @@ bunker clean --yes --logs 14
 | merge.mode | "manual": PRs stay open for a human to merge; bunker keeps them green (also written `merge = "manual"`) | auto | .bunker/config.toml |
 | merge.ci_timeout | minutes --merge waits for CI | 30 | .bunker/config.toml |
 | clean.logs_days | days to keep .bunker/runs logs; bunker watch / bunker queue start-up and `bunker clean` prune older ones | 30 | .bunker/config.toml |
+| sandbox.pids_limit | max processes per sandbox container (docker/podman --pids-limit) | 4096 | .bunker/config.toml |
+| sandbox.memory | memory limit per sandbox container, e.g. 8g (docker/podman --memory) | 8g | .bunker/config.toml |
 | notify.enabled | desktop notifications from bunker watch (notify-send / osascript) | true | .bunker/config.toml |
 | notify.github_user | login @-mentioned when an issue becomes bunker:failed / bunker-blocked (default: the repo owner, if a user) |  | .bunker/config.toml |
 | allow_labelers | GitHub logins also accepted as `bunker:queued` labelers (same as repeatable --allow-labeler); user-level only, a repo file cannot widen its own gate. e.g. `["login"]` | none | ~/.config/bunker/config.toml |
