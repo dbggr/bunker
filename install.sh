@@ -5,7 +5,7 @@
 #   --check                        only run the checks
 #   --skip-runtime-check           don't require docker, gh and claude
 #   --ref <ref>                    install this tag/branch/commit instead of the latest tag
-#   --verify-tag | BUNKER_VERIFY_TAG=1   refuse to install unless git verify-tag passes
+#   --no-verify-tag | BUNKER_VERIFY_TAG=0   only warn when git verify-tag fails (default: refuse)
 #   --uninstall                    remove the binary and checkout (never ~/.config/bunker)
 # Env: BUNKER_HOME (checkout), BUNKER_BIN_DIR (binary dir), BUNKER_REPO (clone URL).
 set -eu
@@ -19,7 +19,7 @@ yes=${BUNKER_INSTALL_YES:-0}
 check_only=0
 skip_runtime=0
 uninstall=0
-verify_tag=${BUNKER_VERIFY_TAG:-0}
+verify_tag=${BUNKER_VERIFY_TAG:-1}
 ref=
 
 while [ $# -gt 0 ]; do
@@ -28,6 +28,7 @@ while [ $# -gt 0 ]; do
     --check) check_only=1 ;;
     --skip-runtime-check) skip_runtime=1 ;;
     --verify-tag) verify_tag=1 ;;
+    --no-verify-tag) verify_tag=0 ;;
     --uninstall) uninstall=1 ;;
     --ref)
       [ $# -ge 2 ] || { echo "bunker installer: --ref needs a value" >&2; exit 2; }
@@ -149,11 +150,11 @@ else
   [ -n "$tag" ] || { echo "bunker installer: no vX.Y.Z release tags found (use --ref)" >&2; exit 2; }
 fi
 
-# Release tags are not signed yet, so by default an unverified tag only warns;
-# --verify-tag makes a good signature (git verify-tag, needs the signer's key in gpg) mandatory.
+# Release tags are signed (docs/release.md), so by default a tag without a good signature
+# (git verify-tag, needs the signer's key in gpg) is refused; --no-verify-tag only warns.
 if ! git -C "$HOME_DIR" verify-tag "$tag" > /dev/null 2>&1; then
   echo "bunker installer: $tag has no valid signature (git verify-tag failed)" >&2
-  [ "$verify_tag" = 1 ] && { echo "bunker installer: refusing to install an unverified tag (--verify-tag)" >&2; exit 1; }
+  [ "$verify_tag" = 1 ] && { echo "bunker installer: refusing to install an unverified tag (--no-verify-tag to override)" >&2; exit 1; }
 fi
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/bunker-install.XXXXXX")

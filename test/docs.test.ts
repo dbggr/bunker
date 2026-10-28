@@ -38,7 +38,7 @@ describe("docs", () => {
   });
 
   test("every flag shown in the docs and README exists in --help", async () => {
-    const known = new Set([...(HELP.match(/--[a-z][a-z-]*/g) ?? []), "--name", "--yes", "--check", "--skip-runtime-check", "--ref", "--verify-tag", "--uninstall", "--network"]); // --name: `gh label edit` in the label migration; --network: the container's `--network host`; the rest: install.sh
+    const known = new Set([...(HELP.match(/--[a-z][a-z-]*/g) ?? []), "--name", "--yes", "--check", "--skip-runtime-check", "--ref", "--verify-tag", "--no-verify-tag", "--uninstall", "--network"]); // --name: `gh label edit` in the label migration; --network: the container's `--network host`; the rest: install.sh
     for (const f of [...docs, "README.md"]) {
       for (const flag of new Set((await read(f)).match(/(?<![\w-])--[a-z][a-z-]*/g) ?? [])) {
         if (!known.has(flag)) throw new Error(`${f} mentions ${flag}, which is not in --help`);
