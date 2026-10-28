@@ -7,7 +7,7 @@ import { gitMountArgs, guardGit } from "./git-guard.ts";
 import type { RoleSkills } from "../core/skills.ts";
 import { startServices } from "./services.ts";
 import { startCredentialProxy, type CredentialProxy } from "./credential-proxy.ts";
-import { effectiveEgress, startEgressProxy, type EgressProxy } from "./egress.ts";
+import { effectiveEgress, pickProxyPort, startEgressProxy, type EgressProxy } from "./egress.ts";
 import { CLAUDE_CREDENTIAL_VARS } from "../agents/claude.ts";
 import { killGroup, teeStdout, type Sandbox } from "./exec.ts";
 import baseDockerfile from "../../images/base/Dockerfile" with { type: "text" };
@@ -147,6 +147,7 @@ function credentialProxy(bin: string): Promise<CredentialProxy> {
       const hostname = await agentGateway(bin);
       if (!hostname) throw new Error(`could not find the ${AGENT_NETWORK} gateway: the Claude credential proxy needs it`);
       const proxy = startCredentialProxy({
+        port: await pickProxyPort(hostname),
         hostname,
         credentials: {
           ...(process.env.CLAUDE_CODE_OAUTH_TOKEN ? { CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN } : {}),
@@ -173,7 +174,7 @@ function egressProxy(bin: string, allow: string[]) {
       await ensureAgentNetwork(bin);
       const gateway = await agentGateway(bin);
       if (!gateway) throw new Error(`could not find the ${AGENT_NETWORK} gateway: the egress allowlist proxy needs it`);
-      const proxy = startEgressProxy({ hostname: gateway, allow });
+      const proxy = startEgressProxy({ hostname: gateway, allow, port: await pickProxyPort(gateway) });
       process.on("exit", () => proxy.stop());
       return { proxy, gateway };
     })();

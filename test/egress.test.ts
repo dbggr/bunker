@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { createServer, connect } from "node:net";
-import { DEFAULT_EGRESS, egressAllowed, effectiveEgress, startEgressProxy } from "../src/sandboxes/egress.ts";
+import { DEFAULT_EGRESS, egressAllowed, effectiveEgress, privateAddress, startEgressProxy } from "../src/sandboxes/egress.ts";
 import { parseConfig } from "../src/core/config.ts";
-import { firewallRules, egressDenied, bridgeName } from "../src/sandboxes/firewall.ts";
+import { firewallRules, egressDenied, proxyReachable, rulesBlock, PROXY_PORTS, bridgeName } from "../src/sandboxes/firewall.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -35,22 +35,34 @@ describe("egress allowlist", () => {
     expect(rules.some((r) => r === `iptables -I DOCKER-USER -i ${net.bridge} -j REJECT`)).toBe(true);
     expect(egressDenied(net, `-A DOCKER-USER -i ${net.bridge} -j REJECT`)).toBe(true);
     expect(egressDenied(net, `-A DOCKER-USER -i ${net.bridge} -d 10.0.0.0/8 -j REJECT`)).toBe(false);
+    // the INPUT carve-out keeps the proxies on the gateway reachable
+    expect(rules.some((r) => r.includes(`-I INPUT -i ${net.bridge} -d ${net.gateway} -p tcp --dport ${PROXY_PORTS.from}:${PROXY_PORTS.to} -j ACCEPT`))).toBe(true);
+    const applied = rules.filter((r) => r.includes(" INPUT ")).reduce<string[]>((st, r) => [r.replace("iptables -I INPUT", "-A INPUT"), ...st], []).join("\n");
+    expect(proxyReachable(net, applied)).toBe(true);
+    expect(rulesBlock(net, `-A DOCKER-USER -d 10.0.0.0/8 -i ${net.bridge} -j REJECT\n-A DOCKER-USER -d 172.16.0.0/12 -i ${net.bridge} -j REJECT\n-A DOCKER-USER -d 192.168.0.0/16 -i ${net.bridge} -j REJECT`, applied)).toBe(true);
+    expect(proxyReachable(net, `-A INPUT -i ${net.bridge} -m conntrack --ctstate NEW -j REJECT`)).toBe(false);
+    // an ACCEPT below the REJECT never matches
+    expect(proxyReachable(net, `-A INPUT -i ${net.bridge} -m conntrack --ctstate NEW -j REJECT\n-A INPUT -i ${net.bridge} -d ${net.gateway} -p tcp -m tcp --dport ${PROXY_PORTS.from}:${PROXY_PORTS.to} -j ACCEPT`)).toBe(false);
   });
 });
 
 describe("egress proxy", () => {
   const upstream = createServer((s) => s.on("data", (d) => s.write(d)));
-  upstream.listen(0, "127.0.0.1");
-  const proxy = startEgressProxy({ hostname: "127.0.0.1", allow: ["127.0.0.1"] });
+  const ports: number[] = [];
+  upstream.listen(0, "127.0.0.1", () => ports.push((upstream.address() as { port: number }).port));
+  const proxy = startEgressProxy({ hostname: "127.0.0.1", allow: ["127.0.0.1"], allowPrivate: true, ports });
+  // same allowlist entries, but private addresses are refused (the default)
+  const strict = startEgressProxy({ hostname: "127.0.0.1", allow: ["127.0.0.1", "localhost"], ports });
   afterAll(() => {
     upstream.close();
     proxy.stop();
+    strict.stop();
   });
 
-  const request = (target: string, payload?: string) =>
+  const request = (target: string, payload?: string, via = proxy) =>
     new Promise<string>((resolve) => {
       let out = "";
-      const s = connect(proxy.port, "127.0.0.1", () => s.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`));
+      const s = connect(via.port, "127.0.0.1", () => s.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`));
       s.on("data", (d) => {
         out += d;
         if (payload && out.includes("200") && !out.includes("echo:")) s.write(`echo:${payload}`);
@@ -67,6 +79,17 @@ describe("egress proxy", () => {
   test("a non-allowed host is refused", async () => {
     const out = await request(`localhost:${(upstream.address() as { port: number }).port}`);
     expect(out).toContain("403");
+  });
+  test("an allowlisted host that resolves to a private address is refused", async () => {
+    expect(await request(`localhost:${ports[0]}`, undefined, strict)).toContain("403");
+    expect(await request(`127.0.0.1:${ports[0]}`, undefined, strict)).toContain("403");
+  });
+  test("a port outside the allowed ones is refused", async () => {
+    expect(await request("127.0.0.1:22")).toContain("403");
+  });
+  test("privateAddress", () => {
+    for (const a of ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "::1", "fd00::1", "fe80::1", "::ffff:10.0.0.1"]) expect(privateAddress(a)).toBe(true);
+    for (const a of ["140.82.112.3", "172.32.0.1", "2606:4700::1"]) expect(privateAddress(a)).toBe(false);
   });
   test("plain http to a non-allowed host is refused", async () => {
     const out = await new Promise<string>((resolve) => {

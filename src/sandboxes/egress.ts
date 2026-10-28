@@ -3,7 +3,9 @@
  * thing the container's HTTP(S)_PROXY points at) tunnels CONNECT and refuses every host that is not on the allowlist.
  * With the host firewall rules from `bunker doctor`, the bridge has no other way out.
  */
-import { createServer, connect, type Server, type Socket } from "node:net";
+import { lookup } from "node:dns/promises";
+import { createServer, connect, isIP, type Server, type Socket } from "node:net";
+import { PROXY_PORTS } from "./firewall.ts";
 
 /** What a run needs: Claude, GitHub (git, gh, tarballs), npm and Bun's install hosts. */
 export const DEFAULT_EGRESS = [
@@ -30,6 +32,30 @@ export function egressAllowed(host: string, allow: string[]): boolean {
   });
 }
 
+/** True for loopback, private, link-local, CGNAT, unspecified and ULA addresses (v4, v6 and v4-mapped v6). */
+export function privateAddress(ip: string): boolean {
+  const m = ip.toLowerCase().match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  const a = m ? m[1]! : ip.toLowerCase();
+  if (isIP(a) === 4) {
+    const [x = 0, y = 0] = a.split(".").map(Number);
+    return x === 0 || x === 10 || x === 127 || (x === 100 && y >= 64 && y <= 127) || (x === 169 && y === 254) || (x === 172 && y >= 16 && y <= 31) || (x === 192 && y === 168);
+  }
+  return a === "::" || a === "::1" || /^f[cd]/.test(a) || /^fe[89ab]/.test(a);
+}
+
+/** The first free port in bunker's proxy range on `hostname`, so the firewall can name the range. */
+export async function pickProxyPort(hostname: string): Promise<number> {
+  for (let port = PROXY_PORTS.from; port <= PROXY_PORTS.to; port++) {
+    const ok = await new Promise<boolean>((res) => {
+      const s = createServer();
+      s.once("error", () => res(false));
+      s.listen(port, hostname, () => s.close(() => res(true)));
+    });
+    if (ok) return port;
+  }
+  throw new Error(`no free port in ${PROXY_PORTS.from}-${PROXY_PORTS.to} for a bunker proxy`);
+}
+
 export interface EgressProxy {
   port: number;
   stop(): void;
@@ -39,6 +65,10 @@ export interface EgressProxyOptions {
   hostname: string;
   allow: string[];
   port?: number;
+  /** Ports a tunnel may target. Defaults to 443. */
+  ports?: number[];
+  /** Tunnel to hosts that resolve to private/loopback/link-local addresses (tests only). */
+  allowPrivate?: boolean;
 }
 
 const refuse = (s: Socket, status: string, why: string) => s.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: ${why.length}\r\n\r\n${why}`);
@@ -72,10 +102,25 @@ export function startEgressProxy(opts: EgressProxyOptions): EgressProxy {
       const i = target.lastIndexOf(":");
       const host = i > 0 ? target.slice(0, i).replace(/^\[|\]$/g, "") : target;
       const port = i > 0 ? Number(target.slice(i + 1)) : 443;
-      if (!Number.isInteger(port) || port < 1 || port > 65535 || !egressAllowed(host, opts.allow)) {
+      if (!(opts.ports ?? [443]).includes(port) || !egressAllowed(host, opts.allow)) {
         return refuse(client, "403 Forbidden", `bunker egress proxy: ${target} is not on the egress allowlist`);
       }
-      const up = connect(port, host);
+      client.pause();
+      void tunnel(host, port, rest);
+    };
+    // Resolve once, refuse private addresses, then connect to that address: a wildcard entry cannot reach the LAN, and a rebinding answer cannot change it.
+    const tunnel = async (host: string, port: number, rest: Buffer) => {
+      let addr = host;
+      try {
+        const addrs = isIP(host) ? [{ address: host }] : await lookup(host, { all: true });
+        if (!addrs.length || (!opts.allowPrivate && addrs.some((a) => privateAddress(a.address)))) {
+          return refuse(client, "403 Forbidden", `bunker egress proxy: ${host} resolves to a private address`);
+        }
+        addr = addrs[0]!.address;
+      } catch {
+        return refuse(client, "502 Bad Gateway", "bunker egress proxy: could not resolve host");
+      }
+      const up = connect(port, addr);
       sockets.add(up);
       up.on("close", () => sockets.delete(up));
       up.on("error", () => {

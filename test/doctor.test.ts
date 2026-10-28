@@ -285,7 +285,7 @@ describe("doctor agent firewall", () => {
   });
 
   test("rules in place: ✓", async () => {
-    const w = await setup(`case "$2" in DOCKER-USER) for d in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do echo "-A DOCKER-USER -d $d -i br-0123456789ab -j REJECT"; done; echo "-A DOCKER-USER -i br-0123456789ab -j REJECT";; INPUT) echo "-A INPUT -i br-0123456789ab -m conntrack --ctstate NEW -j REJECT";; esac`);
+    const w = await setup(`case "$2" in DOCKER-USER) for d in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do echo "-A DOCKER-USER -d $d -i br-0123456789ab -j REJECT"; done; echo "-A DOCKER-USER -i br-0123456789ab -j REJECT";; INPUT) echo "-A INPUT -d 172.20.0.1/32 -i br-0123456789ab -p tcp -m tcp --dport 18100:18199 -j ACCEPT"; echo "-A INPUT -i br-0123456789ab -m conntrack --ctstate NEW -j REJECT";; esac`);
     const r = await runDoctor({ cwd: w.repo, env: w.env });
     expect(r.checks.find((c) => c.id === "agent-firewall")?.ok).toBe(true);
   });

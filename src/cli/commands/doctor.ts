@@ -11,7 +11,7 @@ import { redact } from "../../core/redact.ts";
 import { unpullable } from "../../sandboxes/services.ts";
 import { AGENT_NETWORK } from "../../sandboxes/container.ts";
 import { DEFAULT_EGRESS } from "../../sandboxes/egress.ts";
-import { bridgeName, egressDenied, firewallRules, rulesBlock } from "../../sandboxes/firewall.ts";
+import { bridgeName, egressDenied, firewallRules, proxyReachable, rulesBlock } from "../../sandboxes/firewall.ts";
 import { applyIdentity, identityKind } from "../../github/identity.ts";
 import { AWAITING_REVIEW_LABEL, EXCLUDE_LABEL, FAILED_LABEL, IN_PROGRESS_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
 import { SKILL_ROLES, SkillError, resolveSkills, skillPaths } from "../../core/skills.ts";
@@ -155,10 +155,10 @@ export async function runDoctor(opts: { cwd: string; env?: Env; fetch?: typeof g
         id: "agent-firewall",
         group: "tools",
         label: `${AGENT_NETWORK} network blocks the LAN, the gateway and all direct egress (optional)`,
-        ok: readable && rulesBlock(n, du.out, inp.out) && egressDenied(n, du.out),
+        ok: readable && rulesBlock(n, du.out, inp.out) && egressDenied(n, du.out) && proxyReachable(n, inp.out),
         required: false,
         ...(readable ? {} : { detail: "could not read iptables rules (needs root)" }),
-        fix: `as root, run: ${firewallRules(n).join("; ")}`,
+        fix: `without these rules the egress allowlist is advisory (a process that ignores HTTP(S)_PROXY connects directly); as root, run: ${firewallRules(n).join("; ")}`,
       });
     }
   }
