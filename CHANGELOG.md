@@ -2,6 +2,7 @@
 
 ## v0.14.0 - 2026-10-29
 
+- test(sandbox): pin that containers never mount real Claude credential files (#552) (#560)
 - fix(sandbox): remove per-run service networks on exit and in bunker clean (#555) (#559)
 - feat(sandbox): deny-by-default egress allowlist for agent containers (#557)
 - feat(sandbox): drop capabilities, no-new-privileges and resource limits on sandbox containers (#558)
