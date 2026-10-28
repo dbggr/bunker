@@ -21,7 +21,7 @@ export function claudeCode(opts: { model?: string; attribution?: boolean; json?:
   };
 }
 
-/** The only files of the real HOME the agent gets: what `claude` needs to authenticate. */
+/** The only files of the real HOME a --no-sandbox agent gets (copied into a temp HOME). Container sandboxes never mount them: the real token stays behind the credential proxy. */
 export const CLAUDE_AUTH_FILES = [".claude.json", join(".claude", ".credentials.json")];
 
 /** Claude credentials: the agent needs them; code it wrote (verify) must not see them. */
