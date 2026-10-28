@@ -64,7 +64,11 @@ export interface DockerOptions {
   skills?: RoleSkills;
   /** Container CLI to invoke. Defaults to the provider's own (`docker` / `podman`). */
   bin?: string;
+  /** Resource limits per container; `pids` and `memory` (docker/podman syntax, e.g. 8g) default to DEFAULT_LIMITS. */
+  limits?: { pids?: number; memory?: string };
 }
+
+export const DEFAULT_LIMITS = { pids: 4096, memory: "8g" };
 
 /**
  * Runs the agent in a throwaway container. A worktree's .git is a file pointing at
@@ -210,6 +214,9 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
       const argv = [
         bin, "run", "--rm", ...(stdin === undefined ? [] : ["-i"]), "--name", cname,
         ...userArgs,
+        // Locked at creation: no capabilities, no privilege gain via setuid binaries, bounded processes and memory.
+        "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+        "--pids-limit", String(opts.limits?.pids ?? DEFAULT_LIMITS.pids), "--memory", opts.limits?.memory ?? DEFAULT_LIMITS.memory,
         "-e", "HOME=/tmp",
         // Marks the container so a bunker CLI run from inside it refuses to start (it would drive the live queue with our token).
         "-e", "BUNKER_IN_SANDBOX=1",

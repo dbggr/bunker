@@ -27,6 +27,7 @@ export interface RepoConfig {
   merge: { ci_timeout?: number; mode?: "auto" | "manual" };
   notify: { enabled?: boolean; github_user?: string };
   clean: { logs_days?: number };
+  sandbox: { pids_limit?: number; memory?: string };
 }
 
 /** An invalid `.bunker/config.toml`: the CLI exits 2. */
@@ -69,6 +70,8 @@ export const CONFIG_KEYS: KeySpec[] = [
   { key: "merge.mode", kind: "string", doc: '"manual": PRs stay open for a human to merge; bunker keeps them green (also written `merge = "manual"`)', default: "auto" },
   { key: "merge.ci_timeout", kind: "number", doc: "minutes --merge waits for CI", default: 30 },
   { key: "clean.logs_days", kind: "number", doc: "days to keep .bunker/runs logs; bunker watch / bunker queue start-up and `bunker clean` prune older ones", default: 30 },
+  { key: "sandbox.pids_limit", kind: "integer", doc: "max processes per sandbox container (docker/podman --pids-limit)", default: 4096 },
+  { key: "sandbox.memory", kind: "string", doc: "memory limit per sandbox container, e.g. 8g (docker/podman --memory)", default: "8g" },
   { key: "notify.enabled", kind: "boolean", doc: "desktop notifications from bunker watch (notify-send / osascript)", default: true },
   { key: "notify.github_user", kind: "string", doc: "login @-mentioned when an issue becomes bunker:failed / bunker-blocked (default: the repo owner, if a user)" },
 ];
@@ -82,7 +85,7 @@ const EXPECTED: Record<Kind, string> = {
   boolean: "true or false",
 };
 
-const TABLES = ["models", "skills", "watch", "merge", "notify", "clean"];
+const TABLES = ["models", "skills", "watch", "merge", "notify", "clean", "sandbox"];
 
 function check(kind: Kind, v: unknown): boolean {
   switch (kind) {
@@ -144,7 +147,7 @@ export function parseConfig(text: string, name = ".bunker/config.toml"): { confi
   } catch (e) {
     throw new ConfigError(`${name}: invalid TOML: ${e instanceof Error ? e.message : e}`);
   }
-  const config: RepoConfig = { services: {}, models: {}, skills: {}, watch: {}, merge: {}, notify: {}, clean: {} };
+  const config: RepoConfig = { services: {}, models: {}, skills: {}, watch: {}, merge: {}, notify: {}, clean: {}, sandbox: {} };
   const warnings: string[] = [];
   const known = new Set(CONFIG_KEYS.map((k) => k.key));
   const root = raw as Record<string, unknown>;

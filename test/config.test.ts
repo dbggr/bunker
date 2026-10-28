@@ -62,12 +62,13 @@ describe("parseConfig", () => {
       merge: { ci_timeout: 45 },
       skills: {},
       clean: {},
+      sandbox: {},
       notify: { enabled: false, github_user: "carol" },
     });
   });
 
   test("empty file is an empty config", () => {
-    expect(parseConfig("").config).toEqual({ services: {}, models: {}, skills: {}, watch: {}, merge: {}, notify: {}, clean: {} });
+    expect(parseConfig("").config).toEqual({ services: {}, models: {}, skills: {}, watch: {}, merge: {}, notify: {}, clean: {}, sandbox: {} });
   });
 
   test("unknown keys warn, naming the key", () => {
@@ -270,4 +271,9 @@ describe("services and prepare", () => {
     expect(() => parseConfig("[services.'a b']\nimage = 'x'")).toThrow("host name");
     expect(() => parseConfig("services = 'x'")).toThrow("services must be a table");
   });
+});
+
+test("sandbox limits are read from [sandbox]", () => {
+  expect(parseConfig('[sandbox]\npids_limit = 512\nmemory = "4g"').config.sandbox).toEqual({ pids_limit: 512, memory: "4g" });
+  expect(() => parseConfig("[sandbox]\npids_limit = 0")).toThrow(ConfigError);
 });
