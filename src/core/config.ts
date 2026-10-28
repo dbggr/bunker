@@ -254,21 +254,21 @@ const get = (c: RepoConfig, key: string): unknown => {
   return b === undefined ? v : (v as Record<string, unknown>)[b];
 };
 
-/** The value and source of every key, ignoring CLI flags: env > config.toml > .bunker/copy > default. */
+/** The value and source of every key, ignoring CLI flags: env > config.toml > .bunker/copy > default; for models.*, config.toml > env. */
 export function effectiveSettings(o: { config: RepoConfig; legacy: Legacy; env: Env }): Setting[] {
   return CONFIG_KEYS.map((spec) => {
     const { key } = spec;
     if (key.startsWith("models.")) {
       const role = key.slice(7);
       const roleVar = role === "default" ? undefined : `BUNKER_${role.toUpperCase()}_MODEL`;
-      if (roleVar && o.env[roleVar]) return { key, value: o.env[roleVar]!, source: `env ${roleVar}` };
-      if (o.env.BUNKER_MODEL) return { key, value: o.env.BUNKER_MODEL, source: "env BUNKER_MODEL" };
       const c = get(o.config, key) as string | undefined;
       if (c !== undefined) return { key, value: c, source: "config.toml" };
       if (role !== "default") {
         const d = o.config.models.default;
         if (d !== undefined) return { key, value: d, source: "config.toml (models.default)" };
       }
+      if (roleVar && o.env[roleVar]) return { key, value: o.env[roleVar]!, source: `env ${roleVar}` };
+      if (o.env.BUNKER_MODEL) return { key, value: o.env.BUNKER_MODEL, source: "env BUNKER_MODEL" };
       return { key, value: undefined, source: "default" };
     }
     const c = get(o.config, key) as Setting["value"];

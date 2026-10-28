@@ -297,7 +297,7 @@ bunker clean --yes --logs 14
 
 | Rule | What it does | Default |
 | --- | --- | --- |
-| Per role | (implementer, reviewer, auditor), highest first: role flag (--implementer-model, --reviewer-model, --auditor-model) > --model > role env (BUNKER_IMPLEMENTER_MODEL, BUNKER_REVIEWER_MODEL, BUNKER_AUDITOR_MODEL) > BUNKER_MODEL > Claude Code's own default (no --model is passed). Env vars follow the auth precedence, so a repo's .bunker/.env can set its own defaults; models.* in .bunker/config.toml rank below the env vars. The model in use is shown when each role starts, in the run log, the PR body and --ui; "Claude default" when none is set | Claude default |
+| Per role | (implementer, reviewer, auditor), highest first: role flag (--implementer-model, --reviewer-model, --auditor-model) > --model > models.&lt;role> > models.default in .bunker/config.toml > role env (BUNKER_IMPLEMENTER_MODEL, BUNKER_REVIEWER_MODEL, BUNKER_AUDITOR_MODEL) > BUNKER_MODEL > Claude Code's own default (no --model is passed). A repo's config.toml beats a global BUNKER_MODEL; env vars follow the auth precedence. The model in use is shown when each role starts, in the run log, the PR body and --ui; "Claude default" when none is set | Claude default |
 
 ### Auth
 
