@@ -62,12 +62,13 @@ describe("parseConfig", () => {
       merge: { ci_timeout: 45 },
       skills: {},
       clean: {},
+      sandbox: {},
       notify: { enabled: false, github_user: "carol" },
     });
   });
 
   test("empty file is an empty config", () => {
-    expect(parseConfig("").config).toEqual({ services: {}, models: {}, skills: {}, watch: {}, merge: {}, notify: {}, clean: {} });
+    expect(parseConfig("").config).toEqual({ services: {}, models: {}, skills: {}, watch: {}, merge: {}, notify: {}, clean: {}, sandbox: {} });
   });
 
   test("unknown keys warn, naming the key", () => {

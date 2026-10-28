@@ -341,6 +341,7 @@ bunker clean --yes --logs 14
 | watch.triage_every | hours between periodic `bunker triage` runs in bunker watch (comment and close only) |  | .bunker/config.toml |
 | merge.mode | "manual": PRs stay open for a human to merge; bunker keeps them green (also written `merge = "manual"`) | auto | .bunker/config.toml |
 | merge.ci_timeout | minutes --merge waits for CI | 30 | .bunker/config.toml |
+| sandbox.egress | extra hosts agent containers may reach, on top of the default allowlist (Anthropic, GitHub, npm, Bun); `*.example.com` matches subdomains |  | .bunker/config.toml |
 | clean.logs_days | days to keep .bunker/runs logs; bunker watch / bunker queue start-up and `bunker clean` prune older ones | 30 | .bunker/config.toml |
 | notify.enabled | desktop notifications from bunker watch (notify-send / osascript) | true | .bunker/config.toml |
 | notify.github_user | login @-mentioned when an issue becomes bunker:failed / bunker-blocked (default: the repo owner, if a user) |  | .bunker/config.toml |

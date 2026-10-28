@@ -283,7 +283,7 @@ const skills = await loadSkills(process.cwd()).catch((e) => {
   console.error(`bunker: ${e.message}`);
   process.exit(2);
 });
-const sandbox = values["no-sandbox"] ? noSandbox({ skills }) : docker({ image: values.image, skills });
+const sandbox = values["no-sandbox"] ? noSandbox({ skills }) : docker({ image: values.image, skills, egress: repoCfg.sandbox.egress });
 
 if (values.audit) {
   let result;

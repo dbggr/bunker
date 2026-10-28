@@ -10,7 +10,8 @@ import { ConfigError, effectiveSettings, formatValue, loadRepoConfig } from "../
 import { redact } from "../../core/redact.ts";
 import { unpullable } from "../../sandboxes/services.ts";
 import { AGENT_NETWORK } from "../../sandboxes/container.ts";
-import { bridgeName, firewallRules, rulesBlock } from "../../sandboxes/firewall.ts";
+import { DEFAULT_EGRESS } from "../../sandboxes/egress.ts";
+import { bridgeName, egressDenied, firewallRules, rulesBlock } from "../../sandboxes/firewall.ts";
 import { applyIdentity, identityKind } from "../../github/identity.ts";
 import { AWAITING_REVIEW_LABEL, EXCLUDE_LABEL, FAILED_LABEL, IN_PROGRESS_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
 import { SKILL_ROLES, SkillError, resolveSkills, skillPaths } from "../../core/skills.ts";
@@ -153,8 +154,8 @@ export async function runDoctor(opts: { cwd: string; env?: Env; fetch?: typeof g
       add({
         id: "agent-firewall",
         group: "tools",
-        label: `${AGENT_NETWORK} network blocks the LAN and the gateway (optional)`,
-        ok: readable && rulesBlock(n, du.out, inp.out),
+        label: `${AGENT_NETWORK} network blocks the LAN, the gateway and all direct egress (optional)`,
+        ok: readable && rulesBlock(n, du.out, inp.out) && egressDenied(n, du.out),
         required: false,
         ...(readable ? {} : { detail: "could not read iptables rules (needs root)" }),
         fix: `as root, run: ${firewallRules(n).join("; ")}`,
@@ -206,6 +207,10 @@ export async function runDoctor(opts: { cwd: string; env?: Env; fetch?: typeof g
   if (loaded) {
     const paths = [...DEFAULT_REVIEW_PATHS.map((p) => `${p} (default)`), ...(cfg?.review_paths ?? []).map((p) => `${p} (config.toml)`)];
     add({ id: "review-paths", group: "config", label: "review paths", ok: true, required: false, detail: `${paths.join(", ")}; plus .bunker/, .github/, .claude/, CLAUDE.md, AGENTS.md (always)` });
+  }
+  if (loaded) {
+    const hosts = [...DEFAULT_EGRESS.map((h) => `${h} (default)`), ...(cfg?.sandbox.egress ?? []).map((h) => `${h} (config.toml)`)];
+    add({ id: "egress-allowlist", group: "config", label: "egress allowlist", ok: true, required: false, detail: `${hosts.join(", ")}; every other host is refused by the agent's proxy` });
   }
   add({ id: "verify", group: "repo", label: "verify command", ok: !!cfg?.verify, fix: "set verify in .bunker/config.toml with the command that must pass before pushing, e.g. `bun test && bun run typecheck` (`bunker init` proposes one)" });
   add({ id: "setup", group: "repo", label: "setup command (optional)", ok: !!cfg?.setup, required: false, fix: "runs in each worktree before the agent, e.g. `bun install --frozen-lockfile`" });
