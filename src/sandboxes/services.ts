@@ -1,4 +1,4 @@
-import { liveContainers } from "./container.ts";
+import { hookExit, liveContainers, liveNetworks } from "./container.ts";
 
 /** A throwaway service (e.g. Postgres) started next to verify, reachable from it by the name it is declared under. */
 export interface ServiceConfig {
@@ -49,10 +49,12 @@ export async function startServices(bin: string, services: Services, timing: Ser
       await run(bin, ["rm", "-f", name]);
       liveContainers.delete(name);
     }
-    await run(bin, ["network", "rm", network]);
+    if (liveNetworks.delete(network)) await run(bin, ["network", "rm", network]);
   };
   const net = await run(bin, ["network", "create", "--internal", network]);
   if (net.code !== 0) throw new ServiceError(`could not create the service network: ${net.text}`);
+  liveNetworks.set(network, bin);
+  hookExit();
   try {
     for (const [name, svc] of Object.entries(services)) {
       const cname = `bunker-svc-${id}-${name}`;

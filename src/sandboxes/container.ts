@@ -95,10 +95,24 @@ export function podman(opts: DockerOptions = {}): Sandbox {
 
 /** Running containers (name -> bin) so an exiting CLI can stop them instead of orphaning the agent. */
 export const liveContainers = new Map<string, string>();
+/** Per-run service networks (name -> bin) so an exiting CLI can remove them: leaked ones exhaust docker's address pools. */
+export const liveNetworks = new Map<string, string>();
 let exitHooked = false;
+/** Makes the process stop its live containers and remove its service networks on exit. */
+export function hookExit() {
+  if (exitHooked) return;
+  exitHooked = true;
+  process.on("exit", stopLiveContainers);
+}
 export function stopLiveContainers() {
-  for (const [name, bin] of liveContainers) Bun.spawnSync([bin, "kill", name], { stdio: ["ignore", "ignore", "ignore"] });
+  const quiet = { stdio: ["ignore", "ignore", "ignore"] satisfies ["ignore", "ignore", "ignore"] };
+  for (const [name, bin] of liveContainers) {
+    Bun.spawnSync([bin, "kill", name], quiet);
+    if (name.startsWith("bunker-svc-")) Bun.spawnSync([bin, "rm", "-f", name], quiet); // started without --rm
+  }
   liveContainers.clear();
+  for (const [network, bin] of liveNetworks) Bun.spawnSync([bin, "network", "rm", network], quiet);
+  liveNetworks.clear();
 }
 
 /** The bridge non-isolated containers join. */
@@ -276,10 +290,7 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
         Bun.spawn([bin, "kill", cname], { stdio: ["ignore", "ignore", "ignore"] });
         killGroup(proc);
       };
-      if (!exitHooked) {
-        exitHooked = true;
-        process.on("exit", stopLiveContainers);
-      }
+      hookExit();
       liveContainers.set(cname, bin);
       return teeStdout(proc, prefix, onLine, limits, kill).finally(() => liveContainers.delete(cname));
       });

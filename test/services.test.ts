@@ -3,6 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServices, unpullable } from "../src/sandboxes/services.ts";
+import { stopLiveContainers } from "../src/sandboxes/container.ts";
 import { docker } from "../src/index.ts";
 import { runVerify } from "../src/pipeline/steps/verify.ts";
 import type { Sandbox } from "../src/sandboxes/exec.ts";
@@ -165,4 +166,17 @@ test("services need a container sandbox and exclude --verify-on-host", async () 
   expect(r1.error).toContain("docker or podman");
   const r2: any = await runVerify(ctx().ctx, input(fakeSandbox().sandbox, { verifyOnHost: true }));
   expect(r2.error).toContain("--verify-on-host");
+});
+
+test("stopLiveContainers (the exit hook) removes the networks and service containers of runs that never called stop", async () => {
+  const { bin, log } = await fakeBin();
+  const set = await startServices(bin, { database: { image: "pg" } });
+  stopLiveContainers();
+  const calls = await log();
+  expect(calls.some((c) => c.startsWith("rm -f bunker-svc-"))).toBe(true);
+  expect(calls).toContain(`network rm ${set.network}`);
+  stopLiveContainers();
+  expect((await log()).filter((c) => c === `network rm ${set.network}`)).toHaveLength(1);
+  await set.stop(); // already gone: no second removal
+  expect((await log()).filter((c) => c === `network rm ${set.network}`)).toHaveLength(1);
 });

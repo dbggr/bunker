@@ -316,6 +316,15 @@ export async function runClean(o: CleanOptions): Promise<CleanResult> {
         }
       }
     }
+    // Per-run service networks an interrupted run left behind; docker refuses to remove one that still has containers.
+    const nets = await $`docker network ls --format {{.Name}}`.nothrow().quiet();
+    if (nets.exitCode === 0) {
+      for (const net of nets.stdout.toString().split("\n").map((l) => l.trim()).filter((l) => l.startsWith("bunker-net-"))) {
+        note(`${verb}remove network ${net} (left by an interrupted run)`);
+        acted = true;
+        if (o.yes) await $`docker network rm ${net}`.nothrow().quiet();
+      }
+    }
     if (!acted) note("nothing to clean");
     else if (!o.yes) note("dry run: nothing was changed; re-run with --yes to do this");
   }
