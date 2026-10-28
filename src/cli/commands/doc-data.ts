@@ -246,7 +246,7 @@ export const COMMON_FLAGS: Row[] = [
 
 /** Models precedence, auth precedence and the legacy copy file: reference rows, no help prose. */
 export const MODEL_ROWS: Row[] = [
-  ["Per role", "(implementer, reviewer, auditor), highest first: role flag (--implementer-model, --reviewer-model, --auditor-model) > --model > role env (BUNKER_IMPLEMENTER_MODEL, BUNKER_REVIEWER_MODEL, BUNKER_AUDITOR_MODEL) > BUNKER_MODEL > Claude Code's own default (no --model is passed). Env vars follow the auth precedence, so a repo's .bunker/.env can set its own defaults; models.* in .bunker/config.toml rank below the env vars. The model in use is shown when each role starts, in the run log, the PR body and --ui; \"Claude default\" when none is set", "Claude default"],
+  ["Per role", "(implementer, reviewer, auditor), highest first: role flag (--implementer-model, --reviewer-model, --auditor-model) > --model > models.<role> > models.default in .bunker/config.toml > role env (BUNKER_IMPLEMENTER_MODEL, BUNKER_REVIEWER_MODEL, BUNKER_AUDITOR_MODEL) > BUNKER_MODEL > Claude Code's own default (no --model is passed). A repo's config.toml beats a global BUNKER_MODEL; env vars follow the auth precedence. The model in use is shown when each role starts, in the run log, the PR body and --ui; \"Claude default\" when none is set", "Claude default"],
 ];
 export const AUTH_ROWS: Row[] = [
   ["`CLAUDE_CODE_OAUTH_TOKEN`", "from `claude setup-token`, in ~/.config/bunker/.env. Easiest: run `bunker init` in the repo (or `bunker doctor` to just check)"],

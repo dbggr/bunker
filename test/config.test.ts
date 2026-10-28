@@ -154,17 +154,25 @@ describe("precedence", () => {
     expect(l.find((x) => x.key === "verify")).toBeDefined();
   });
 
-  test("env beats config.toml for models", () => {
-    const s = effectiveSettings({ config: cfg, legacy: {}, env: { BUNKER_REVIEWER_MODEL: "env-rev", BUNKER_MODEL: "env-def" } });
-    expect(s.find((x) => x.key === "models.reviewer")).toMatchObject({ value: "env-rev", source: "env BUNKER_REVIEWER_MODEL" });
-    expect(s.find((x) => x.key === "models.implementer")).toMatchObject({ value: "env-def", source: "env BUNKER_MODEL" });
+  test("config.toml beats env for models; env fills roles the repo leaves unset", () => {
+    const env = { BUNKER_REVIEWER_MODEL: "env-rev", BUNKER_MODEL: "env-def" };
+    const s = effectiveSettings({ config: cfg, legacy: {}, env });
+    expect(s.find((x) => x.key === "models.reviewer")).toMatchObject({ value: "m-rev", source: "config.toml" });
+    expect(s.find((x) => x.key === "models.implementer")).toMatchObject({ value: "m-impl", source: "config.toml" });
+    const onlyDefault = effectiveSettings({ config: parseConfig('[models]\ndefault = "d"').config, legacy: {}, env });
+    expect(onlyDefault.find((x) => x.key === "models.reviewer")).toMatchObject({ value: "d", source: "config.toml (models.default)" });
+    const none = effectiveSettings({ config: parseConfig("").config, legacy: {}, env });
+    expect(none.find((x) => x.key === "models.reviewer")).toMatchObject({ value: "env-rev", source: "env BUNKER_REVIEWER_MODEL" });
+    expect(none.find((x) => x.key === "models.implementer")).toMatchObject({ value: "env-def", source: "env BUNKER_MODEL" });
   });
 
-  test("resolveModels: flag > env > config role > config default", () => {
+  test("resolveModels: flag > config role > config default > role env > BUNKER_MODEL", () => {
     const models = cfg.models;
     expect(resolveModels({ "reviewer-model": "flag" }, { BUNKER_REVIEWER_MODEL: "env" }, models).reviewer).toBe("flag");
-    expect(resolveModels({}, { BUNKER_REVIEWER_MODEL: "env" }, models).reviewer).toBe("env");
-    expect(resolveModels({}, { BUNKER_MODEL: "envdef" }, models).implementer).toBe("envdef");
+    expect(resolveModels({ model: "all" }, {}, models).reviewer).toBe("all");
+    expect(resolveModels({}, { BUNKER_REVIEWER_MODEL: "env", BUNKER_MODEL: "envdef" }, models).reviewer).toBe("m-rev");
+    expect(resolveModels({}, { BUNKER_REVIEWER_MODEL: "env" }, { default: "d" }).reviewer).toBe("d");
+    expect(resolveModels({}, { BUNKER_REVIEWER_MODEL: "env", BUNKER_MODEL: "envdef" }, {})).toEqual({ implementer: "envdef", reviewer: "env", auditor: "envdef" });
     expect(resolveModels({}, {}, models).reviewer).toBe("m-rev");
     expect(resolveModels({}, {}, { default: "d" }).auditor).toBe("d");
     expect(resolveModels({}, {}, {})).toEqual({});

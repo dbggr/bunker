@@ -197,10 +197,11 @@ Legacy .bunker/copy (same as copy in config.toml):
 
 Models:
   Per role (implementer, reviewer, auditor), highest first: role flag (--implementer-model, --reviewer-model,
-  --auditor-model) > --model > role env (BUNKER_IMPLEMENTER_MODEL, BUNKER_REVIEWER_MODEL, BUNKER_AUDITOR_MODEL)
-  > BUNKER_MODEL > Claude Code's own default (no --model is passed). Env vars follow the Auth precedence below,
-  so a repo's .bunker/.env can set its own defaults; models.* in .bunker/config.toml rank below the env vars. The model in use is shown when each role starts, in the run
-  log, the PR body and --ui; "Claude default" when none is set.
+  --auditor-model) > --model > models.<role> > models.default in .bunker/config.toml > role env
+  (BUNKER_IMPLEMENTER_MODEL, BUNKER_REVIEWER_MODEL, BUNKER_AUDITOR_MODEL) > BUNKER_MODEL > Claude Code's own
+  default (no --model is passed). A repo's config.toml beats a global BUNKER_MODEL; env vars follow the Auth
+  precedence below. The model in use is shown when each role starts, in the run log, the PR body and --ui;
+  "Claude default" when none is set.
 
 Auth:
   Easiest: run \`bunker init\` in the repo (or \`bunker doctor\` to just check). By hand:

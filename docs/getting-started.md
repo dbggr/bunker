@@ -34,7 +34,7 @@ claude setup-token
 
 Copy [`.env.example`](../.env.example) to `~/.config/bunker/.env` and set `CLAUDE_CODE_OAUTH_TOKEN` to the token it printed. One file covers every repo. A repo can override it in its own `.bunker/.env` (gitignored). Precedence: exported variables > `<repo>/.bunker/.env` > `~/.config/bunker/.env`.
 
-Models are chosen per role (implementer, reviewer, auditor): `BUNKER_MODEL` sets all of them, `BUNKER_IMPLEMENTER_MODEL` / `BUNKER_REVIEWER_MODEL` / `BUNKER_AUDITOR_MODEL` one role, in the same `.env` files. Flags win: `--implementer-model`, `--reviewer-model`, `--auditor-model`, and `--model` for all. Per role: role flag > `--model` > role env > `BUNKER_MODEL` > Claude Code's default. The model is shown when each role starts, in the run log, in the PR body and in `--ui`.
+Models are chosen per role (implementer, reviewer, auditor): `BUNKER_MODEL` sets all of them, `BUNKER_IMPLEMENTER_MODEL` / `BUNKER_REVIEWER_MODEL` / `BUNKER_AUDITOR_MODEL` one role, in the same `.env` files. Flags win: `--implementer-model`, `--reviewer-model`, `--auditor-model`, and `--model` for all. A repo can pin its own with `[models]` (`default`, or `implementer` / `reviewer` / `auditor`) in `.bunker/config.toml`, which beats the env vars. Per role: role flag > `--model` > `models.<role>` > `models.default` > role env > `BUNKER_MODEL` > Claude Code's default. The model is shown when each role starts, in the run log, in the PR body and in `--ui`.
 
 ## 3. Create a scoped GitHub token
 
