@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.14.0 - 2026-10-29
+
+- fix(sandbox): remove per-run service networks on exit and in bunker clean (#555) (#559)
+- feat(sandbox): deny-by-default egress allowlist for agent containers (#557)
+- feat(sandbox): drop capabilities, no-new-privileges and resource limits on sandbox containers (#558)
+- feat(sandbox): credential proxy so the agent never holds the real Claude token (#554)
+- fix(blocked): reuse near-duplicate open issues and tell agents to check landed work before filing a blocker (#543) (#553)
+- fix(models): repo .bunker/config.toml [models] beats the global BUNKER_*_MODEL env (#548)
+- feat(install): verify the release tag by default, --no-verify-tag to opt out (#536) (#546)
+
 ## v0.13.0 - 2026-10-28
 
 - feat(labels): bunker:exclude label so an issue is never triaged or picked up (#537) (#540)

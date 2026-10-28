@@ -9,7 +9,7 @@ bunker runs a Claude coding agent on each issue in its own git worktree and Dock
 ## How it works
 
 1. **You label an issue** `bunker:queued`. Only repo admins and maintainers can queue work; bunker checks who added the label.
-2. **An agent writes the change** in a sandbox: a fresh git worktree and a Docker container that never sees your GitHub token or SSH keys.
+2. **An agent writes the change** in a sandbox: a fresh git worktree and a Docker container that never sees your GitHub token, SSH keys or real Claude token, and can only reach an allowlist of hosts.
 3. **A second agent reviews it** and sends it back with required changes, for up to a few rounds.
 4. **Your tests run** in the sandbox with no network and no credentials. If they fail, the agent gets one fix round.
 5. **bunker opens a PR and arms GitHub auto-merge.** It merges only when the branch's required status check passes. Changes to CI, bunker's own config or agent instructions always wait for a person; anything it can't finish is labelled `bunker:failed` with the reason.
@@ -53,7 +53,7 @@ claude mcp add -s user bunker -- bunker mcp
 
 ## Safety
 
-bunker is built to be left running, so the defaults are strict. Only maintainers can queue work, and issues edited after labelling are refused. Comments from non-maintainers never reach the agent. The sandbox gets the repo's git internals read-only. Tests run without network or credentials. Changes to `.bunker/`, `.github/`, `.claude/`, `CLAUDE.md` and `AGENTS.md` always wait for human review. Each of these gates has a test that fails if the gate is removed. The full threat model and its trade-offs are in [docs/security.md](docs/security.md).
+bunker is built to be left running, so the defaults are strict. Only maintainers can queue work, and issues edited after labelling are refused. Comments from non-maintainers never reach the agent. The sandbox gets the repo's git internals read-only. The agent holds only a placeholder for the Claude token (a proxy outside the container adds the real one for the Anthropic API), its outbound traffic is limited to an allowlist, and its container drops all capabilities with `no-new-privileges` and process and memory limits. Tests run without network or credentials. Changes to `.bunker/`, `.github/`, `.claude/`, `CLAUDE.md` and `AGENTS.md` always wait for human review. Each of these gates has a test that fails if the gate is removed. The full threat model and its trade-offs are in [docs/security.md](docs/security.md).
 
 ## Built with bunker
 
