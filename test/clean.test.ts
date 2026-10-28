@@ -415,6 +415,29 @@ esac
     expect(log).not.toContain("rmi other");
   });
 
+  test("removes leftover bunker-net-* networks, and only those", async () => {
+    const { root, repo } = await setup();
+    await Bun.write(
+      join(root, "bin/docker"),
+      `#!/bin/sh
+echo "docker $*" >> "${root}/docker.log"
+case "$1 $2" in
+  "network ls") printf 'bridge\\nbunker-agent\\nbunker-net-aaaa\\nbunker-net-bbbb\\n';;
+esac
+`,
+    );
+    await chmod(join(root, "bin/docker"), 0o755);
+    const dry = await run(repo, {});
+    expect(dry.out).toContain("bunker-net-aaaa");
+    expect(await Bun.file(join(root, "docker.log")).text()).not.toContain("network rm");
+    await run(repo, { yes: true });
+    const log = await Bun.file(join(root, "docker.log")).text();
+    expect(log).toContain("network rm bunker-net-aaaa");
+    expect(log).toContain("network rm bunker-net-bbbb");
+    expect(log).not.toContain("network rm bunker-agent");
+    expect(log).not.toContain("network rm bridge");
+  });
+
   test("auto mode is quiet when there is nothing to do and skips under a live watch lock", async () => {
     const { repo } = await setup();
     const a = await leftover(repo, "aaaa0001");
