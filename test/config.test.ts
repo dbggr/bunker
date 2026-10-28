@@ -272,3 +272,8 @@ describe("services and prepare", () => {
     expect(() => parseConfig("services = 'x'")).toThrow("services must be a table");
   });
 });
+
+test("sandbox limits are read from [sandbox]", () => {
+  expect(parseConfig('[sandbox]\npids_limit = 512\nmemory = "4g"').config.sandbox).toEqual({ pids_limit: 512, memory: "4g" });
+  expect(() => parseConfig("[sandbox]\npids_limit = 0")).toThrow(ConfigError);
+});
