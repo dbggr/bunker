@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.13.0 - 2026-10-28
+
+- feat(labels): bunker:exclude label so an issue is never triaged or picked up (#537) (#540)
+- chore(ci): least-privilege ci.yml permissions and SHA-pinned actions (#539)
+- Agent bridge network can still reach LAN/RFC1918 (#538)
+- chore(install): verify the release tag with git verify-tag (warn by default, --verify-tag to require) (#528) (#534)
+- fix(triage): honour the triage marker only from bunker's own comments and neutralise </issue-body> in issue bodies (#527) (#532)
+- fix(sandbox): agent container uses host network, can reach localhost/LAN services (#531)
+- fix(verify): run --verify-on-host with an empty HOME and warn about the missing isolation (#525) (#529)
+- docs: add a 'good fit for bunker?' guide to concepts (#524)
+- fix(shepherd): refuse fixes that add review-path changes (package.json, lockfiles, Makefile, review_paths) (#520) (#522)
+- feat(review): human-review gate for gate code and files CI executes (review_paths) (#521)
+- docs: refresh built-itself stats in README, site home and v1-readiness (#518)
+- fix(watch): re-queue instead of failing any pre-flight step a stop interrupted (#513) (#516)
+
 ## v0.12.0 - 2026-10-20
 
 - fix(mcp): start_watch units run bare 'watch' — no --ui, --interval or --parallel, so the hub goes down (#511)
