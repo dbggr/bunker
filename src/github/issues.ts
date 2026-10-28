@@ -119,6 +119,18 @@ export async function resumeBlocked(cwd: string, env: Env): Promise<Queued[]> {
 
 const normTitle = (t: string) => t.toLowerCase().replace(/\s+/g, " ").trim();
 
+const STOP = new Set(["a", "an", "the", "of", "to", "for", "and", "in", "on", "now", "is", "be"]);
+const titleWords = (t: string) => new Set(t.replace(CONVENTIONAL_PREFIX, "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w && !STOP.has(w)));
+
+/** Whether two titles name the same work: equal once the conventional prefix and filler words are dropped, or sharing most of their words. */
+export function similarTitles(a: string, b: string): boolean {
+  if (normTitle(a) === normTitle(b)) return true;
+  const x = titleWords(a), y = titleWords(b);
+  if (!x.size || !y.size) return false;
+  const common = [...x].filter((w) => y.has(w)).length;
+  return common / (x.size + y.size - common) >= 0.7;
+}
+
 /** The open issue #n (with its title); undefined if it doesn't exist, is closed, or gh can't say. */
 export async function openIssue(n: number, cwd: string, env: Env): Promise<{ number: number; title: string } | undefined> {
   const v = await $`gh issue view ${n} --json number,title,state`.cwd(cwd).env(env).nothrow().quiet();
@@ -131,12 +143,13 @@ export async function openIssue(n: number, cwd: string, env: Env): Promise<{ num
   }
 }
 
-/** An open issue whose title equals `title` (case and spacing aside), so a blocker isn't filed twice. */
+/** An open issue whose title equals or closely resembles `title` (exact match preferred), so a blocker isn't filed twice. */
 export async function findOpenByTitle(title: string, cwd: string, env: Env, except?: number): Promise<{ number: number; title: string } | undefined> {
   const list = await $`gh issue list --state open --limit 1000 --json number,title`.cwd(cwd).env(env).nothrow().quiet();
   if (list.exitCode !== 0) return undefined;
   try {
-    const found = (JSON.parse(list.stdout.toString()) as { number: number; title: string }[]).find((i) => typeof i?.title === "string" && i.number !== except && normTitle(i.title) === normTitle(title));
+    const open = (JSON.parse(list.stdout.toString()) as { number: number; title: string }[]).filter((i) => typeof i?.title === "string" && i.number !== except);
+    const found = open.find((i) => normTitle(i.title) === normTitle(title)) ?? open.find((i) => similarTitles(i.title, title));
     return found ? { number: found.number, title: found.title } : undefined;
   } catch {
     return undefined;

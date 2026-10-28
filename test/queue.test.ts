@@ -399,6 +399,19 @@ describe("blocked issues", () => {
     expect(await Bun.file(createLog).exists()).toBe(false);
   });
 
+  test("a blocker whose title is a near-duplicate of an open issue (prefix, wording) reuses that issue", async () => {
+    const { repo, createLog } = await setup([...issues, [61, "chore: need the thing now", "2026-04-01T00:00:00Z"]]);
+    const r = await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: blockingAgent() });
+    expect(r.blockedBy).toEqual({ number: 61, title: "chore: need the thing now" });
+    expect(await Bun.file(createLog).exists()).toBe(false);
+  });
+
+  test("an unrelated open issue does not match", async () => {
+    const { repo } = await setup([...issues, [62, "Totally different feature work", "2026-04-01T00:00:00Z"]]);
+    const r = await runIssue({ cwd: repo, issue: 1, sandbox: noSandbox(), agent: blockingAgent() });
+    expect(r.blockedBy).toEqual({ number: 100, title: "Need the thing" });
+  });
+
   test("a blocker naming a missing or closed issue is not trusted: falls back to filing", async () => {
     const { repo } = await setup(issues);
     const root = join(repo, "..");
@@ -417,6 +430,7 @@ describe("blocked issues", () => {
     expect(prompts[0]).toContain("cannot be delivered at all");
     expect(prompts[0]).toContain("optional or secondary part");
     expect(prompts[0]).toContain("existing open issue");
+    expect(prompts[0]).toContain("already landed");
   });
 
   test("unblocks once the issue it was blocked on (a reused one) closes", async () => {
