@@ -55,7 +55,12 @@ export function startCredentialProxy(opts: CredentialProxyOptions): CredentialPr
       if (bearer === placeholders.CLAUDE_CODE_OAUTH_TOKEN && oauth) headers.set("authorization", `Bearer ${oauth}`);
       else if (key === placeholders.ANTHROPIC_API_KEY && apiKey) headers.set("x-api-key", apiKey);
       else return new Response("bunker credential proxy: unauthorized", { status: 401 });
-      return send(new Request(target.href, { method: req.method, headers, body: req.body, redirect: "manual" }));
+      const up = await send(new Request(target.href, { method: req.method, headers, body: req.body, redirect: "manual" }));
+      // fetch has already decoded the body: the encoding and length headers would no longer match it.
+      const out = new Headers(up.headers);
+      out.delete("content-encoding");
+      out.delete("content-length");
+      return new Response(up.body, { status: up.status, statusText: up.statusText, headers: out });
     },
   });
   server.unref();

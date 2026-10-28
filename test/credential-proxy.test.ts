@@ -77,3 +77,21 @@ test("the agent container's env holds a placeholder, not the real credential", a
   expect(args).toContain("CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-bunker-placeholder-");
   expect(args).toMatch(/ANTHROPIC_BASE_URL=http:\/\/127\.0\.0\.1:\d+/);
 });
+
+test("a gzip-encoded upstream response is readable through the proxy", async () => {
+  const upstream = Bun.serve({
+    port: 0,
+    fetch: () => new Response(Bun.gzipSync("hello from upstream"), { headers: { "content-encoding": "gzip" } }),
+  });
+  try {
+    const p = (proxy = startCredentialProxy({
+      hostname: "127.0.0.1",
+      credentials: { CLAUDE_CODE_OAUTH_TOKEN: REAL },
+      fetch: (r) => fetch(new Request(`http://127.0.0.1:${upstream.port}${new URL(r.url).pathname}`, r)),
+    }));
+    const res = await fetch(`${p.url}/v1/messages`, { headers: { authorization: `Bearer ${p.placeholders.CLAUDE_CODE_OAUTH_TOKEN}`, "accept-encoding": "gzip" } });
+    expect(await res.text()).toBe("hello from upstream");
+  } finally {
+    upstream.stop(true);
+  }
+});
