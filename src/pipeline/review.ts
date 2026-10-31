@@ -280,12 +280,15 @@ export async function review({
       const revPrompt = claim ? noChangePrompt(prompt, claim, base, revExtra) : reviewerPrompt(prompt, diff, base, stat, revExtra);
       const revResumed = resuming?.role === "reviewer" ? savedSession : undefined;
       resuming = undefined;
-      let rev = await agentStep({
+      const runReviewer = (resume?: typeof revResumed) => agentStep({
         agent: reviewer, sandbox, mode: "review", prompt: revPrompt, target: revTarget,
-        ...(revResumed ? { prev: revResumed, resumePrompt: "Your session stopped on the Claude usage limit, which has now reset. Continue the review and finish it." } : {}),
+        ...(resume ? { prev: resume, resumePrompt: "Your session stopped on the Claude usage limit, which has now reset. Continue the review and finish it." } : {}),
         ctx: revHook ? { ...ctx, onLine: revHook } : ctx,
         dest: join(store.dir, `reviewer-${i + 1}.jsonl`), timeouts,
       });
+      let rev = await runReviewer(revResumed);
+      // A reviewer that lost its connection mid-response gets one fresh attempt rather than failing an approved implementation.
+      if (rev.code !== 0) rev = await runReviewer();
       let revOut = interpret(reviewer, rev.stdout);
       const attempts: (Usage | undefined)[] = [];
       let parsed = extractOutput(revOut.text, verdictOutput);

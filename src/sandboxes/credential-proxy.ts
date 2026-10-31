@@ -14,6 +14,8 @@ export interface CredentialProxyOptions {
   port?: number;
   /** Upstream origin. Defaults to https://api.anthropic.com; only its host `api.anthropic.com` may receive credentials. */
   upstream?: string;
+  /** Seconds a connection may sit idle before Bun closes it. Defaults to 0 (never): a model that thinks for a while sends nothing, and Bun's own 10 s default cut those streams. */
+  idleTimeout?: number;
   /** Replaces fetch, for tests. */
   fetch?: (req: Request) => Promise<Response>;
 }
@@ -38,6 +40,7 @@ export function startCredentialProxy(opts: CredentialProxyOptions): CredentialPr
   const server = Bun.serve({
     hostname: opts.hostname,
     port: opts.port ?? 0,
+    idleTimeout: opts.idleTimeout ?? 0,
     async fetch(req) {
       const url = new URL(req.url);
       const path = url.pathname + url.search;
