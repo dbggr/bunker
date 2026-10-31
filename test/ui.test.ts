@@ -378,6 +378,55 @@ describe("hub page model", () => {
     expect(M.shepherd(r, "dbggr/bunker")).toEqual([{ issue: 9, pr: 20, action: "green", prUrl: "http://pr/20" }]);
   });
 
+  describe("today / all filter", () => {
+    const DAY = 24 * 3600_000;
+    const midnight = new Date(2026, 9, 19).getTime();
+    const setup = async () => {
+      const M = await load();
+      const r = M.newRepo();
+      const run = (issue: number, start: number, end?: number) => {
+        M.ingest(r, { at: start, type: "stage", issue, name: "implement" });
+        if (end !== undefined) M.ingest(r, { at: end, type: "stage", issue, name: "merged" });
+      };
+      run(1, NOW - 2 * DAY, NOW - 2 * DAY + 3600_000); // two days ago
+      run(2, NOW - 3600_000, NOW - 1800_000); // today
+      run(3, midnight - 3600_000, midnight + 3600_000); // finished across midnight
+      run(4, NOW - DAY); // in flight since yesterday
+      run(5, midnight - 7200_000, midnight - 3600_000); // yesterday
+      return { M, r };
+    };
+
+    test("default shows today's finished runs plus in-flight ones from any day", async () => {
+      const { M, r } = await setup();
+      const g = M.groups(r, NOW);
+      expect(g.finished.map((f: any) => f.issue).sort()).toEqual([2, 3]);
+      expect(g.running.map((x: any) => x.key)).toEqual(["#4"]);
+    });
+
+    test("all shows the full history", async () => {
+      const { M, r } = await setup();
+      expect(M.groups(r, NOW, true).finished.map((f: any) => f.issue).sort()).toEqual([1, 2, 3, 5]);
+    });
+
+    test("tab counts follow the filter; idle merges today stay today-only", async () => {
+      const M = await load();
+      const r = M.newRepo();
+      M.ingest(r, ev(wsnap({ failed: [{ issue: 8, status: "gave-up", reason: "x", at: NOW - 2 * DAY }] })));
+      expect(M.tab(r, NOW).kind).toBe("idle");
+      expect(M.tab(r, NOW, true)).toMatchObject({ kind: "failed", label: "1 failed" });
+      const s = await setup();
+      expect(s.M.idle(s.r, NOW).mergedToday).toBe(2);
+    });
+
+    test("page defaults to Today and remembers the choice in localStorage inside try/catch", async () => {
+      const html = await Bun.file(new URL("../src/ui/ui.html", import.meta.url)).text();
+      expect(html).toContain("let showAll = false");
+      expect(html).toMatch(/try \{[^}]*localStorage\.getItem/);
+      expect(html).toMatch(/try \{[^}]*localStorage\.setItem/);
+      for (const t of ["Today", "All"]) expect(html).toContain(`"${t}"`);
+    });
+  });
+
   test("awaiting-merge run shows as a waiting card, then merged moves it to Finished today", async () => {
     const M = await load();
     const r = M.newRepo();
