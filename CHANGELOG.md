@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- fix(sandbox): credential proxy no longer idles out long-quiet streams, and a reviewer that loses its connection is retried once (#570)
+
 ## v0.14.0 - 2026-10-29
 
 - test(sandbox): pin that containers never mount real Claude credential files (#552) (#560)

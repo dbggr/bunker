@@ -95,3 +95,33 @@ test("a gzip-encoded upstream response is readable through the proxy", async () 
     upstream.stop(true);
   }
 });
+
+// A fake upstream that streams a chunk, goes quiet for `pauseMs`, then streams the rest.
+function slowUpstream(pauseMs: number) {
+  return async () =>
+    new Response(
+      new ReadableStream({
+        async start(c) {
+          c.enqueue(new TextEncoder().encode("first,"));
+          await Bun.sleep(pauseMs);
+          c.enqueue(new TextEncoder().encode("second"));
+          c.close();
+        },
+      }),
+    );
+}
+
+async function readAll(url: string, token: string): Promise<string> {
+  try {
+    const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    return await res.text();
+  } catch {
+    return "CUT";
+  }
+}
+
+
+test("by default a stream with a long pause is delivered whole", async () => {
+  const p = (proxy = startCredentialProxy({ hostname: "127.0.0.1", credentials: { CLAUDE_CODE_OAUTH_TOKEN: REAL }, fetch: slowUpstream(12_000) }));
+  expect(await readAll(`${p.url}/v1/messages`, p.placeholders.CLAUDE_CODE_OAUTH_TOKEN)).toBe("first,second");
+});

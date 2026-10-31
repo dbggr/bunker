@@ -181,6 +181,22 @@ describe("review()", () => {
     expect(await branches(repo)).toContain(r.branch);
   });
 
+  test("a reviewer that dies mid-response is retried once and the approval stands", async () => {
+    const repo = await makeRepo();
+    const { agent, prompts } = fakeAgent((n) => (n === 1 ? "exit 1" : `echo '${APPROVE}'`));
+    const r = await review({ cwd: repo, prompt: "p", agent, sandbox: noSandbox() });
+    expect(r.status).toBe("approved");
+    expect(prompts.review).toHaveLength(2);
+  });
+
+  test("a reviewer that fails twice is not retried a third time", async () => {
+    const repo = await makeRepo();
+    const { agent, prompts } = fakeAgent(() => "exit 1");
+    const r = await review({ cwd: repo, prompt: "p", agent, sandbox: noSandbox() });
+    expect(r.status).toBe("failed");
+    expect(prompts.review).toHaveLength(2);
+  });
+
   test("merge conflict → conflict, branch kept", async () => {
     const repo = await makeRepo();
     // Implementer writes f1.txt in the worktree; meanwhile main gets its own f1.txt.
