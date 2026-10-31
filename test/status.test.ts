@@ -122,6 +122,21 @@ describe("collectStatus()", () => {
     expect(s.current.map((c) => c.issue)).toEqual([4]);
   });
 
+  test("a waiting-for-merge event arriving after the PR already merged does not list the run as in flight", async () => {
+    const r = repo();
+    const dir = join(r, ".bunker");
+    writeFileSync(join(dir, "watch.lock"), "4242");
+    const rec = createStatusRecorder(dir, { pid: 4242, version: "x" });
+    rec.event({ type: "meta", issue: 101, logPath: "/l/101.log", at: 1 });
+    rec.merged({ issue: 101 });
+    rec.event({ type: "stage", name: "waiting for merge", issue: 101, at: 3 });
+    expect((await collectStatus({ repo: r, alive: () => true })).current).toEqual([]);
+    // a fresh run of the same issue (reopened) is tracked again
+    rec.event({ type: "meta", issue: 101, logPath: "/l/101b.log", at: 4 });
+    rec.event({ type: "stage", name: "waiting for merge", issue: 101, at: 5 });
+    expect((await collectStatus({ repo: r, alive: () => true })).current.map((c) => c.issue)).toEqual([101]);
+  });
+
   test("shepherd decisions replace the previous list and show in the report", async () => {
     const r = repo();
     const dir = join(r, ".bunker");
