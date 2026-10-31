@@ -66,12 +66,21 @@ export function publishIssue(ctx: IssueRunContext, input: PublishInput): Promise
     return runVerify({ stale: true });
   };
 
+  /** The pushed ref must carry the agent's work: a branch still at the base means a commit was lost, and the worktree is kept. */
+  const ensureAgentCommit = async (): Promise<IssueResult | undefined> => {
+    const tip = (await $`git -C ${worktree} rev-parse --verify -q ${`refs/heads/${branch}`}`.nothrow().quiet().text()).trim();
+    if (tip && tip !== input.baseSha) return undefined;
+    return fail("failed", { review: result, error: `agent commit not on branch: ${branch} has no commits beyond the base; the worktree ${worktree} is kept` });
+  };
+
   const publish = async (): Promise<IssueResult> => {
     if (merge && mergeTurn) {
       const failed = await updateToLatest();
       if (failed) return failed;
     }
     emitStage({ onEvent }, "PR");
+    const lost = await ensureAgentCommit();
+    if (lost) return lost;
     const push = await $`git ${gitCfg} -C ${worktree} push -q ${token ? [] : ['-u']} ${remoteSha ? [`--force-with-lease=${branch}:${remoteSha}`] : []} ${remote} ${branch}`.env(env).nothrow().quiet();
     if (push.exitCode !== 0) return fail("failed", { review: result, error: `git push failed:\n${push.stderr}` });
 

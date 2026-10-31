@@ -823,6 +823,34 @@ describe("runIssue()", () => {
   });
 });
 
+describe("runIssue() agent commit not on the branch ref", () => {
+  const detached = (extra = "") => ({
+    command(_p, mode = "write") {
+      if (mode === "write") return ["sh", "-c", `b=$(git symbolic-ref --short HEAD); c=$(git rev-parse --path-format=absolute --git-common-dir); git checkout -q --detach && echo hi > feature.txt && git add . && git commit -qm "feat: impl"; ${extra}`];
+      return ["sh", "-c", `echo '${APPROVE}'`];
+    },
+  } as Agent);
+
+  test("recovers the commit from the worktree HEAD and the PR branch contains it", async () => {
+    const { repo, origin, prLog } = await setup(issue());
+    const r = await runIssue({ cwd: repo, issue: 7, agent: detached(), sandbox: noSandbox() });
+    expect(r.status).toBe("pr-opened");
+    expect(await Bun.file(prLog).exists()).toBe(true);
+    const log = (await $`git --git-dir=${origin} log --format=%s refs/heads/feature/7-add-feature`.text()).split("\n");
+    expect(log).toContain("feat: impl");
+  });
+
+  test("fails with the work kept when the ref cannot be updated", async () => {
+    const { repo, origin, prLog } = await setup(issue());
+    const r = await runIssue({ cwd: repo, issue: 7, agent: detached(`touch "$c/refs/heads/$b.lock"`), sandbox: noSandbox() });
+    expect(r.status).toBe("failed");
+    expect(r.error).toContain("agent commit not on branch");
+    expect(await Bun.file(prLog).exists()).toBe(false);
+    expect(await originBranches(origin)).not.toContain("feature/7-add-feature");
+    expect(statSync(r.worktree).isDirectory()).toBe(true);
+  });
+});
+
 describe("runIssue() --merge", () => {
   const run = (repo: string, extra: object = {}) =>
     runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: "true", merge: true, ciPollMs: 10, ...extra });

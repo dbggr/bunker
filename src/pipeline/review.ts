@@ -178,6 +178,22 @@ export async function review({
   let prev: Session | undefined;
   let copied: string[] = [];
   let undoSteering = async () => {};
+  let keepWorktree = false;
+  /**
+   * The agent commits on HEAD; the branch ref is what gets merged and pushed. If the ref update failed (read-only or locked
+   * .git, a concurrent pack-refs) the commit exists only in the worktree, so move the ref to HEAD when HEAD descends from it.
+   */
+  const syncBranchToHead = async (w: { path: string; branch: string }) => {
+    const rev = async (ref: string) => (await $`git -C ${w.path} rev-parse --verify -q ${ref}`.nothrow().quiet().text()).trim();
+    const head = await rev("HEAD");
+    const tip = await rev(`refs/heads/${w.branch}`);
+    if (!head || !tip || head === tip) return;
+    if ((await $`git -C ${w.path} merge-base --is-ancestor ${tip} ${head}`.nothrow().quiet()).exitCode !== 0) return;
+    const moved = await $`git -C ${w.path} update-ref refs/heads/${w.branch} ${head} ${tip}`.nothrow().quiet();
+    if (moved.exitCode === 0) return;
+    keepWorktree = true;
+    throw new Error(`agent commit not on branch: ${head} is in the worktree ${w.path} but ${w.branch} (${tip}) could not be updated: ${moved.stderr.toString().trim()}; worktree kept`);
+  };
   /** The step in flight, for the pause record. */
   let step: { role: "implementer" | "reviewer"; round: number; implOutput?: string; implSessionId?: string } = { role: "implementer", round: 1 };
   try {
@@ -221,6 +237,7 @@ export async function review({
         implOut = interpret(agent, impl.stdout);
         usages.push(implOut.usage);
         if (impl.code !== 0) throw new Error(`agent exited with ${impl.code}; work kept on ${wt.branch}`);
+        await syncBranchToHead(wt);
         const staged = await committedCopies(wt.path, base, copied);
         if (staged.length) throw new Error(`${copyRejection(staged)}; work kept on ${wt.branch}`);
         const total = await commitsBetween(cwd, base, wt.branch);
@@ -330,6 +347,7 @@ export async function review({
     await store.done();
     // A paused run keeps its worktree: whatever the agent had not committed yet is the work.
     if (pause) tmpWorktrees.delete(wt.path); // kept for the resume
+    else if (keepWorktree) tmpWorktrees.delete(wt.path); // the agent's commit is only in its HEAD
     else await worktreeAdmin(cwd, () => $`git -C ${cwd} worktree remove --force ${wt.path}`.quiet());
   }
   if (status === "approved") {
