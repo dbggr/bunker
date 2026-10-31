@@ -73,6 +73,8 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
   const { parallel = 1, ...fileInit } = init;
   let nextPassAt: number | undefined;
   let stopping = false;
+  // Issues whose PR merged after their run last reported: a late "waiting for merge" from that run must not bring it back.
+  const landed = new Set<number>();
   // Finished runs are kept across restarts for the history window, so a page replaying older history can still finish them.
   const kept = readStatusFile(dir);
   const since = Date.now() - HISTORY_MS;
@@ -104,6 +106,8 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
     /** Feed every run event through here. */
     event(e: BunkerEvent) {
       if (e.issue === undefined) return;
+      if (e.type === "meta") landed.delete(e.issue);
+      else if (e.type === "stage" && e.name === "waiting for merge" && landed.has(e.issue)) return;
       const i = state.current.findIndex((c) => c.issue === e.issue);
       if (e.type === "meta" && e.logPath && i >= 0) state.current[i]!.logPath = e.logPath;
       else if (e.type === "meta" && e.logPath) state.current.push({ issue: e.issue, stage: "setup", since: e.at, logPath: e.logPath });
@@ -120,6 +124,7 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
     /** `at` is when it really merged, for a merge found after the fact. */
     merged(r: Omit<MergedRun, "at"> & { at?: number }) {
       state.current = state.current.filter((c) => c.issue !== r.issue);
+      landed.add(r.issue);
       state.merged.push({ ...r, at: r.at ?? Date.now() });
       state.failed = state.failed.filter((f) => f.issue !== r.issue);
       save();
