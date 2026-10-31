@@ -687,6 +687,47 @@ describe("runWatch() shepherd stage", () => {
     expect(s.merged).toBe(1);
   });
 
+  describe("runs left waiting for merge when GitHub settles their PR later", () => {
+    const settle = (issue: number, over: object) => ({ ...bunkerPr(issue), state: "MERGED", mergedAt: new Date().toISOString(), closedAt: new Date().toISOString(), ...over });
+    const go = async (history: object[]) => {
+      const { repo, root } = await setup(three.slice(0, 1));
+      const ctl = new AbortController();
+      const lines: string[] = [];
+      await runWatch({
+        ...base, shepherd: true, cwd: repo, agent: fakeAgent(), signal: ctl.signal,
+        log: (l) => {
+          lines.push(l);
+          if (/pass 1 /.test(l)) Bun.write(join(root, "history.json"), JSON.stringify(history));
+          if (/pass 2 /.test(l)) ctl.abort();
+        },
+      });
+      const st = JSON.parse(await Bun.file(join(repo, ".bunker", "watch-status.json")).text());
+      return { st, gh: await Bun.file(join(root, "gh.log")).text() };
+    };
+    const pr = (st: any) => st.current.filter((c: any) => c.stage === "waiting for merge");
+
+    test("a PR that merges between passes leaves current and is recorded as merged", async () => {
+      const { st, gh } = await go([settle(1, {})]);
+      expect(pr(st)).toEqual([]);
+      expect(st.merged).toEqual([expect.objectContaining({ issue: 1 })]);
+      expect(gh).toContain("issue edit 1 --remove-label bunker:queued");
+    });
+
+    test("a PR closed unmerged leaves current and is recorded as failed, not merged", async () => {
+      const { st } = await go([settle(1, { state: "CLOSED", mergedAt: null })]);
+      expect(pr(st)).toEqual([]);
+      expect(st.merged).toEqual([]);
+      expect(st.failed).toEqual([expect.objectContaining({ issue: 1, status: "closed-unmerged" })]);
+    });
+
+    test("a PR still open stays waiting", async () => {
+      const { st } = await go([settle(1, { state: "OPEN", mergedAt: null, closedAt: null })]);
+      expect(pr(st)).toHaveLength(1);
+      expect(st.merged).toEqual([]);
+      expect(st.failed).toEqual([]);
+    });
+  });
+
   describe("reconciling PRs that finished while no watcher was looking", () => {
     const hist = (issue: number, over: object) => ({ ...bunkerPr(issue), state: "MERGED", mergedAt: new Date(Date.now() - 3_600_000).toISOString(), closedAt: new Date(Date.now() - 3_600_000).toISOString(), ...over });
     const start = async (history: object[], pre?: (repo: string) => void) => {
