@@ -92,7 +92,7 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
   save();
   return {
     /** The merged and failed records as they stand. */
-    snapshot: () => ({ merged: state.merged, failed: state.failed }),
+    snapshot: () => ({ merged: state.merged, failed: state.failed, current: state.current }),
     /** Ctrl-C was pressed: the hub shows the tab as stopping. */
     stopping() {
       stopping = true;

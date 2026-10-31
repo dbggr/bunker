@@ -274,6 +274,36 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       }
     }
   };
+  /**
+   * A run that ended `awaiting-merge` stays in `current` until its PR is seen to settle, and the shepherd only reports PRs it watched
+   * close. One batched lookup per pass settles every such entry: merged takes the in-run merge path, closed unmerged becomes failed.
+   */
+  const reconcileWaiting = async (): Promise<number> => {
+    const waiting = new Set(status.snapshot().current.filter((c) => c.stage === "waiting for merge").map((c) => c.issue));
+    if (!waiting.size) return 0;
+    const outcomes = await listRecentPrOutcomes(cwd, env, Date.now() - HISTORY_MS);
+    let landed = 0;
+    for (const o of outcomes ?? []) {
+      if (!waiting.has(o.issue)) continue;
+      if (o.outcome === "merged") {
+        landed++;
+        summary.merged++;
+        status.merged({ issue: o.issue, prUrl: o.url, at: o.at });
+        emit(opts.onEvent, { type: "stage", issue: o.issue, name: "merged" });
+        await clearLanded(o.issue, cwd, env);
+        log(`bunker: shepherd: PR #${o.pr} merged`);
+        notify(`bunker: PR #${o.pr} merged`, `#${o.issue} landed`);
+      } else {
+        const reason = `PR #${o.pr} was closed without merging`;
+        summary.failed++;
+        status.failed({ issue: o.issue, status: "closed-unmerged", reason, prUrl: o.url, at: o.at });
+        emit(opts.onEvent, { type: "stage", issue: o.issue, name: "failed", text: "closed-unmerged", reason });
+        log(`bunker: shepherd: ${reason}`);
+        notify(`bunker: PR #${o.pr} closed unmerged`, reason);
+      }
+    }
+    return landed;
+  };
   /** One shepherd pass: resumes whatever the open PRs need, whether this watcher or an earlier one opened them. Returns how many merged. */
   const shepherdPass = async (): Promise<number> => {
     if (!shepherd || stopped()) return 0;
@@ -331,6 +361,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
       await clearLanded(m.issue, cwd, env);
       await cleanMerged(cwd, env, m.branch);
     }
+    landed += await reconcileWaiting();
     if (p.paused) log(`bunker: shepherd: paused on the Claude usage limit${p.paused.resetAt ? ` until ${new Date(p.paused.resetAt).toISOString()}` : ""}`);
     return landed;
   };
