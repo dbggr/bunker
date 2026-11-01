@@ -6,3 +6,7 @@ review_paths = ["src/pipeline/steps/pr.ts", "src/worktree/steering.ts", "src/pip
 [watch]
 # daily spend cap for bunker's own watcher; beats ~/.config/bunker max_cost_day (#482)
 max_cost_day = 100
+
+[models]
+# Opus 5.5 for every bunker role in this repo (#605, same as the bunary repos); beats the global BUNKER_MODEL (#548)
+default = "claude-opus-5-5"
