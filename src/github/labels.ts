@@ -10,6 +10,8 @@ export const REVIEW_LABEL = "bunker:review";
 export const AWAITING_REVIEW_LABEL = "bunker:awaiting-review";
 export const BLOCKED_LABEL = "bunker-blocked";
 export const EXCLUDE_LABEL = "bunker:exclude";
+/** Overrides the tracking-issue refusal: the maintainer says this issue is work despite a task list of issue references. */
+export const FORCE_LABEL = "bunker:force";
 
 /** Only `bunker:queued` queues an issue (never `in-progress`, `failed` or `review`). */
 export const isQueuedLabel = (name: string) => name === QUEUED_LABEL;
@@ -27,6 +29,7 @@ const COLORS: Record<string, [string, string]> = {
   [REVIEW_LABEL]: ["D93F0B", "bunker will not auto-merge this PR; it waits for a human"],
   [AWAITING_REVIEW_LABEL]: ["FBCA04", "manual-merge mode: bunker keeps this PR green and never merges it"],
   [EXCLUDE_LABEL]: ["000000", "never for bunker: not triaged, queued or worked, even if also bunker:queued"],
+  [FORCE_LABEL]: ["5319E7", "queue this issue even though its task list only references other issues (a tracking issue)"],
 };
 
 /** `--color`/`--description` args for `gh label create` of a bunker label (none for other names). */
@@ -117,3 +120,5 @@ export async function sweepClosedQueued(cwd: string, env: Env): Promise<number[]
   }
   return cleared;
 }
+
+export const hasForceLabel = (labels: { name: string }[] | undefined) => !!labels?.some((l) => l.name === FORCE_LABEL);

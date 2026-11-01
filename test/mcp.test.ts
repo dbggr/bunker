@@ -27,6 +27,7 @@ function setup(over: Partial<McpDeps> = {}) {
     caps: async () => ({ day: 10, month: 100 }),
     spent: () => ({ day: 2.5, month: 20 }),
     addLabel: async (r, n) => void labels.push([r, n]),
+    labels: async () => [],
     ...over,
   };
   const mcp = createMcp(deps);
@@ -141,6 +142,13 @@ describe("mcp tools", () => {
     const { call, labels } = setup();
     expect((await call("queue_issue", { repo, issue: 5 })).isError).toBe(false);
     expect(labels).toEqual([[repo, 5]]);
+  });
+  test("queue_issue refuses an issue labelled bunker:exclude", async () => {
+    const { call, labels } = setup({ labels: async () => ["bug", "bunker:exclude"] });
+    const r = await call("queue_issue", { repo, issue: 5 });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("bunker:exclude");
+    expect(labels).toEqual([]);
   });
   test("queue_issue is refused at or over the daily cap", async () => {
     for (const day of [10, 11]) {

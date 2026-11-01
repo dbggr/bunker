@@ -5,7 +5,7 @@ import { loadRepoConfig } from "../core/config.ts";
 import { capsFrom } from "../core/settings.ts";
 import { DAY_MS, MONTH_MS, loadSpendCaps, spentWithin, type SpendCaps } from "../core/spend.ts";
 import { liveGhEnv } from "../github/identity.ts";
-import { ensureLabel, QUEUED_LABEL } from "../github/labels.ts";
+import { ensureLabel, EXCLUDE_LABEL, issueLabels, QUEUED_LABEL } from "../github/labels.ts";
 import { defaultHubPort, hubReachable, readToken } from "../ui/ui.ts";
 import { STATUS_FILE, type CurrentRun } from "../cli/commands/status.ts";
 
@@ -70,6 +70,8 @@ export interface McpDeps {
   caps: (repo: string) => Promise<SpendCaps>;
   spent: (repo: string) => { day: number; month: number };
   addLabel: (repo: string, issue: number) => Promise<void>;
+  /** Label names on the issue; undefined if they can't be read. */
+  labels: (repo: string, issue: number) => Promise<string[] | undefined>;
 }
 
 interface Tool {
@@ -185,6 +187,7 @@ export function createMcp(d: McpDeps) {
         const cap = (await d.caps(repo)).day;
         const spent = d.spent(repo).day;
         if (cap !== undefined && spent >= cap) throw new ToolError(`refused: spent $${spent.toFixed(2)} today, at or over the daily cap of $${cap}`);
+        if ((await d.labels(repo, issue))?.includes(EXCLUDE_LABEL)) throw new ToolError(`refused: #${issue} is labelled ${EXCLUDE_LABEL} (never for bunker); remove the label first`);
         await d.addLabel(repo, issue);
         return `queued #${issue} (${QUEUED_LABEL})`;
       },
@@ -261,6 +264,7 @@ export function liveDeps(): McpDeps {
       const file = join(bunkerDir(repo), "watch-spend.json");
       return { day: spentWithin(file, DAY_MS), month: spentWithin(file, MONTH_MS) };
     },
+    labels: (repo, issue) => issueLabels(issue, repo, liveGhEnv()),
     addLabel: async (repo, issue) => {
       const env = liveGhEnv();
       await ensureLabel(QUEUED_LABEL, repo, env);
