@@ -2,11 +2,16 @@ import { $ } from "bun";
 import { output } from "../core/output.ts";
 import type { Queued } from "../core/priority.ts";
 import { blockerRefs, isDone, isLiveShape, type Env, type IssueInfo } from "./issues.ts";
-import { hasExcludeLabel, hasQueuedLabel, QUEUED_LABEL } from "./labels.ts";
+import { AWAITING_REVIEW_LABEL, hasExcludeLabel, hasQueuedLabel, QUEUED_LABEL } from "./labels.ts";
 import { markTrust } from "./trust.ts";
 
 export async function listQueued(cwd: string, env: Env): Promise<Queued[]> {
   return listLabelled(QUEUED_LABEL, cwd, env);
+}
+
+/** Open `bunker:awaiting-review` issues: their PR waits for a human, so they are not queued. */
+export async function listAwaitingReview(cwd: string, env: Env): Promise<Queued[]> {
+  return listLabelled(AWAITING_REVIEW_LABEL, cwd, env);
 }
 
 async function listLabelled(label: string, cwd: string, env: Env): Promise<Queued[]> {

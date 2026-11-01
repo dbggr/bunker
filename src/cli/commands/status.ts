@@ -189,6 +189,8 @@ export interface StatusReport {
   current: { issue: number; stage: string; sinceMs: number; logPath?: string }[];
   /** Open `bunker:queued` issues in priority order; null when GitHub could not be asked. */
   queue: { number: number; title: string; priority: string; bug: boolean }[] | null;
+  /** Open `bunker:awaiting-review` issues (PR waits for a human), kept apart from the queue; null when GitHub could not be asked. */
+  awaitingReview: { number: number; title: string }[] | null;
   /** Open `bunker-blocked` issues and what each waits on; null when GitHub could not be asked. */
   blocked: { number: number; title: string; waitingOn: number[] }[] | null;
   merged: MergedRun[];
@@ -206,6 +208,8 @@ export interface StatusOptions {
   caps?: SpendCaps;
   /** The open `bunker:queued` issues, unordered; undefined when unavailable. */
   queue?: () => Promise<Queued[] | undefined>;
+  /** The open `bunker:awaiting-review` issues; undefined when unavailable. */
+  awaitingReview?: () => Promise<Queued[] | undefined>;
   /** The open `bunker-blocked` issues with their open blockers; undefined when unavailable. */
   blocked?: () => Promise<{ number: number; title: string; waitingOn: number[] }[] | undefined>;
   alive: (pid: number) => boolean;
@@ -213,7 +217,7 @@ export interface StatusOptions {
 }
 
 /** Read-only snapshot of the watcher, its runs, the queue and the spend. */
-export async function collectStatus({ repo, caps: configCaps = {}, queue, blocked, alive, now = Date.now() }: StatusOptions): Promise<StatusReport> {
+export async function collectStatus({ repo, caps: configCaps = {}, queue, awaitingReview, blocked, alive, now = Date.now() }: StatusOptions): Promise<StatusReport> {
   let caps = configCaps;
   const dir = join(repo, ".bunker");
   let lockPid: number | undefined;
@@ -234,6 +238,7 @@ export async function collectStatus({ repo, caps: configCaps = {}, queue, blocke
   // the running watcher's own caps (e.g. --max-cost-day) beat what config.toml says
   if (isAlive && mine?.caps) caps = mine.caps;
   const queued = queue ? await queue().catch(() => undefined) : undefined;
+  const awaiting = awaitingReview ? await awaitingReview().catch(() => undefined) : undefined;
   const blockedIssues = blocked ? await blocked().catch(() => undefined) : undefined;
   const spendFile = join(dir, "watch-spend.json");
   const spend = (ms: number, cap?: number) => ({ spentUsd: spentWithin(spendFile, ms), ...(cap === undefined ? {} : { capUsd: cap }) });
@@ -248,6 +253,7 @@ export async function collectStatus({ repo, caps: configCaps = {}, queue, blocke
           bug: isBug(q.labels),
         }))
       : null,
+    awaitingReview: awaiting ? awaiting.map((q) => ({ number: q.number, title: q.title })) : null,
     blocked: blockedIssues ?? null,
     merged: mine?.merged ?? [],
     noChange: mine?.noChange ?? [],
@@ -280,6 +286,10 @@ export function formatStatus(r: StatusReport): string {
   if (r.queue === null) out.push("  unavailable (gh could not list issues)");
   else if (!r.queue.length) out.push("  empty");
   else r.queue.forEach((q, i) => out.push(`  ${i + 1}. #${q.number} ${q.title}${q.priority !== "none" || q.bug ? ` (${[q.priority !== "none" ? q.priority : "", q.bug ? "bug" : ""].filter(Boolean).join(", ")})` : ""}`));
+  if (r.awaitingReview?.length) {
+    out.push("", `awaiting review: ${r.awaitingReview.length}`);
+    for (const a of r.awaitingReview) out.push(`  #${a.number} ${a.title}`);
+  }
   if (r.blocked?.length) {
     out.push("", `blocked: ${r.blocked.length}`);
     for (const b of r.blocked) out.push(`  #${b.number} ${b.title}${b.waitingOn.length ? ` · waiting on ${b.waitingOn.map((n) => `#${n}`).join(", ")}` : ""}`);
