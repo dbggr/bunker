@@ -7,7 +7,7 @@ import type { ReviewResult } from "./review.ts";
 import type { Timeouts, Sandbox } from "../sandboxes/exec.ts";
 import type { Agent, Usage } from "../agents/agent.ts";
 import { runIssueInner } from "./issue-run.ts";
-import { clearInProgress, markInProgress } from "../github/labels.ts";
+import { clearInProgress, markAwaitingReview, markInProgress } from "../github/labels.ts";
 
 export interface IssueOptions extends Timeouts {
   issue: number;
@@ -105,6 +105,7 @@ export async function runIssue(opts: IssueOptions): Promise<IssueResult> {
   try {
     const result = await issueScope.run(opts.issue, () => runIssueInner(opts, spent, (u) => (untrack = u)));
     other = result.status === "already-in-progress";
+    if (result.status === "needs-review" || result.status === "awaiting-review") await markAwaitingReview(opts.issue, cwd, env);
     return result;
   } catch (e) {
     // Whatever the agents already spent must not vanish with the error.

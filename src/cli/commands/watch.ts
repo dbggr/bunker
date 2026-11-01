@@ -22,7 +22,7 @@ import { countWaiting } from "../../github/queue.ts";
 import { latestBunkerLabeledAt } from "../../github/labeler.ts";
 import { createCanceller, activeIssues } from "./cancel.ts";
 import { markCancelled, takeCancelled, takeCancelRequests } from "../../core/cancel.ts";
-import { IN_PROGRESS_LABEL, clearLanded, ensureLabel, sweepClosedQueued, FAILED_LABEL, unqueue } from "../../github/labels.ts";
+import { IN_PROGRESS_LABEL, clearLanded, ensureLabel, releaseUnmergedReview, sweepClosedAwaitingReview, sweepClosedQueued, FAILED_LABEL, unqueue } from "../../github/labels.ts";
 import { repoId } from "../../ui/ui.ts";
 import { noNotify, withRepo, type Notify } from "../../core/notify.ts";
 
@@ -336,6 +336,10 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     if (Date.now() - lastSweep >= SWEEP_EVERY_MS) {
       lastSweep = Date.now();
       for (const n of await sweepClosedQueued(cwd, env)) log(`bunker: cleared bunker:queued from closed #${n}`);
+      for (const n of await sweepClosedAwaitingReview(cwd, env)) log(`bunker: cleared bunker:awaiting-review from closed #${n}`);
+      const outcomes = await listRecentPrOutcomes(cwd, env, Date.now() - HISTORY_MS);
+      const unmerged = new Set((outcomes ?? []).filter((o) => o.outcome !== "merged").map((o) => o.issue));
+      for (const n of await releaseUnmergedReview(unmerged, cwd, env)) log(`bunker: #${n}'s PR closed unmerged: cleared bunker:awaiting-review (relabel bunker:queued to retry)`);
     }
     if (reconcileDue) {
       reconcileDue = false;

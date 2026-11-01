@@ -374,7 +374,7 @@ bunker clean --yes --logs 14
 | `bunker:exclude` | set by you on an issue that is never for bunker (e.g. a maintainer-only decision): `triage` skips it, `queue` / `watch` skip it even if also `bunker:queued` (the queue output says why), and `triage --yes` never queues it |
 | `bunker:force` | set by you on an issue whose task list only references other issues: `queue` / `watch` refuse such a tracking issue (`skipped #N: tracking issue`, one comment) unless it carries this label; label tracking issues `bunker:exclude` instead |
 | `bunker:failed` | set on a failed issue instead of `bunker:queued`, never retried automatically; also set on a PR after 3 failed shepherd fix attempts |
-| `bunker:awaiting-review` | set on an open PR in manual-merge mode (`--no-merge`, `merge = "manual"`); bunker never merges it |
+| `bunker:awaiting-review` | set on an open PR in manual-merge mode (`--no-merge`, `merge = "manual"`); bunker never merges it. Also set on an issue whose run ended `needs-review` or `awaiting-review`, replacing `bunker:queued` and `bunker:in-progress`; `bunker status` lists these apart from the queue, and the label is removed once the PR merges or closes (relabel `bunker:queued` to retry after an unmerged close) |
 | `bunker:review` | set on a PR whose changes a human must review (bunker leaves auto-merge off); the shepherd leaves it for a human to merge |
 | `bunker-blocked` | set on an issue whose agent reported a blocked_by item; its blocker is filed as `discovered` |
 | `discovered` | set by `audit` on issues it files (with `severity:*`); `triage` checks them |
