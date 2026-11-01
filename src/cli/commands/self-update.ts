@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { buildLabel, bunkerHome } from "../../build-info.ts";
 import { pullBlocker, safePull } from "../../github/pull.ts";
+import { escapePath, unescapePath } from "../../mcp/server.ts";
 import { alive } from "./watch.ts";
 
 const version = (home: string) => {
@@ -60,6 +61,62 @@ export interface SelfUpdateOptions {
   home?: string;
   target?: string;
   build?: BuildFn;
+  /** Drain the running watch (finish its current steps, start no new work) instead of refusing, then restart it. */
+  whenIdle?: boolean;
+  /** With `whenIdle`: also drain and restart every active bunker watch unit on the machine. */
+  restartAll?: boolean;
+  watches?: WatchControl;
+}
+
+/** How self-update finds, drains and restarts watches. */
+export interface WatchControl {
+  /** Repos of the active `bunker-watch@` systemd user units. */
+  units(): Promise<string[]>;
+  /** SIGTERM the watch (finish in-flight steps, no new work) and wait for it to exit; false if it did not. */
+  stop(pid: number): Promise<boolean>;
+  restartUnit(repo: string): Promise<boolean>;
+}
+
+/** The PID in `<repo>/.bunker/watch.lock` when that watch is alive. */
+function watchPid(repo: string): number | undefined {
+  try {
+    const pid = Number(readFileSync(join(repo, ".bunker", "watch.lock"), "utf8").trim());
+    return Number.isInteger(pid) && pid > 0 && alive(pid) ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function liveWatches(): WatchControl {
+  const systemctl = async (...args: string[]) => {
+    try {
+      const p = Bun.spawn(["systemctl", "--user", ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+      const [out] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+      return { code: await p.exited, out };
+    } catch {
+      return { code: 127, out: "" };
+    }
+  };
+  return {
+    units: async () => {
+      const r = await systemctl("list-units", "--plain", "--no-legend", "bunker-watch@*.service");
+      return r.out.split("\n").flatMap((line) => {
+        const m = line.trim().match(/^bunker-watch@(\S+)\.service\s+\S+\s+active/);
+        return m ? [unescapePath(m[1]!)] : [];
+      });
+    },
+    stop: async (pid) => {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {}
+      // Unbounded on purpose: steps have their own timeouts, and Ctrl-C abandons the wait.
+      while (alive(pid)) await sleep(1000);
+      return true;
+    },
+    restartUnit: async (repo) => (await systemctl("restart", `bunker-watch@${escapePath(repo)}.service`)).code === 0,
+  };
 }
 
 function install(bin: string, target: string) {
@@ -90,17 +147,57 @@ export async function selfUpdate(opts: SelfUpdateOptions = {}): Promise<number> 
       return 2;
     }
   }
-  try {
-    const pid = Number(readFileSync(join(home, ".bunker", "watch.lock"), "utf8").trim());
-    if (Number.isInteger(pid) && pid > 0 && alive(pid)) {
-      console.error(`bunker: self-update refused: a bunker watch (pid ${pid}) is running for ${home}`);
-      return 2;
+  const watches = opts.watches ?? liveWatches();
+  const stopped: Stopped[] = [];
+  const own = watchPid(home);
+  if (own && !opts.whenIdle) {
+    console.error(`bunker: self-update refused: a bunker watch (pid ${own}) is running for ${home}; use --when-idle to let it finish its current steps, update, and restart it`);
+    return 2;
+  }
+  if (opts.whenIdle) {
+    const units = new Set(await watches.units());
+    const repos = opts.restartAll ? [...new Set([home, ...units])] : [home];
+    for (const repo of repos) {
+      const pid = watchPid(repo);
+      if (!pid) {
+        // Nothing running there, but --restart-all still brings its active unit onto the new binary.
+        if (units.has(repo) && opts.restartAll) stopped.push({ repo, unit: true });
+        continue;
+      }
+      console.log(`bunker: self-update: asking the watch in ${repo} (pid ${pid}) to finish its current steps…`);
+      if (!(await watches.stop(pid))) {
+        console.error(`bunker: self-update: the watch in ${repo} did not stop; not updating`);
+        await restartStopped(stopped, watches);
+        return 1;
+      }
+      stopped.push({ repo, unit: units.has(repo) });
     }
-  } catch {}
+  }
+  try {
+    return await apply(channel, home, build, opts.target);
+  } finally {
+    await restartStopped(stopped, watches);
+  }
+}
 
+interface Stopped {
+  repo: string;
+  /** Run by an active systemd unit, so it can be started again. */
+  unit: boolean;
+}
+
+async function restartStopped(stopped: Stopped[], watches: WatchControl) {
+  for (const { repo, unit } of stopped.splice(0)) {
+    if (unit && (await watches.restartUnit(repo))) console.log(`bunker: self-update: restarted the watch unit for ${repo}`);
+    else if (unit) console.error(`bunker: self-update: couldn't restart the watch unit for ${repo}`);
+    else console.log(`bunker: self-update: the watch in ${repo} was not a systemd unit; restart it with \`bunker watch\``);
+  }
+}
+
+async function apply(channel: string, home: string, build: BuildFn, targetOpt: string | undefined): Promise<number> {
   const oldVersion = version(home);
   const oldLabel = await buildLabel();
-  const target = opts.target ?? installTarget();
+  const target = targetOpt ?? installTarget();
   let newLabel: string;
 
   if (channel === "main") {

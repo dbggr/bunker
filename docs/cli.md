@@ -38,6 +38,8 @@ build and install the latest v* release tag
 | Flag | What it does | Default |
 | --- | --- | --- |
 | `--channel main` | pull main instead of the latest v* release tag | latest v* tag |
+| `--when-idle` | instead of refusing while a watch runs here: ask it to finish its current steps and start no new work, wait for it to exit, update, then restart it (a `bunker-watch@` systemd unit is restarted; any other watch is left for you to start) | refuse |
+| `--restart-all` | with `--when-idle`: drain and restart every active bunker watch unit on the machine, so all repos run the new binary | off |
 
 ```sh
 bunker self-update --channel main
@@ -202,7 +204,7 @@ stdio MCP server: manage local watches (systemd user units) from Claude
 
 | Flag | What it does | Default |
 | --- | --- | --- |
-| `bunker mcp` | stdio MCP server over systemd user units `bunker-watch@<repo>.service` (the template is installed on the first `start_watch`). Tools: `list_watches` (unit state, repo, current run, effective caps), `start_watch` and `restart_watch` (both take `interval`, `parallel`, `max_cost_day` and `max_cost_month`, written to the instance's `args.conf`, which the unit's `ExecStart` reads through `$BUNKER_WATCH_ARGS`; a systemd override that replaces `ExecStart` must keep that variable, `bunker doctor` flags one that drops it), `stop_watch`, `watch_logs` (last N lines), `spend` (today/month against the effective caps, each with its source: flag, repo or global), `queue_issue` (adds `bunker:queued`; refused at or over the daily spend cap). It never starts, stops or alters a run through the hub |  |
+| `bunker mcp` | stdio MCP server over systemd user units `bunker-watch@<repo>.service` (the template is installed on the first `start_watch`). Tools: `list_watches` (unit state, repo, current run, effective caps), `start_watch` and `restart_watch` (both take `interval`, `parallel`, `max_cost_day` and `max_cost_month`, written to the instance's `args.conf`, which the unit's `ExecStart` reads through `$BUNKER_WATCH_ARGS`; a systemd override that replaces `ExecStart` must keep that variable, `bunker doctor` flags one that drops it), `restart_watch` also takes `reload: true`, which sends SIGHUP (`systemctl reload`) so the spend caps are re-read without interrupting runs in flight; the same re-read happens at the start of every pass), `stop_watch`, `watch_logs` (last N lines), `spend` (today/month against the effective caps, each with its source: flag, repo or global), `queue_issue` (adds `bunker:queued`; refused at or over the daily spend cap). It never starts, stops or alters a run through the hub |  |
 
 ```sh
 claude mcp add bunker -- bunker mcp

@@ -41,6 +41,8 @@ export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "ke
   maxCostDayUsd?: number;
   /** Spend cap in notional USD per rolling 30 days. Defaults to no cap. */
   maxCostMonthUsd?: number;
+  /** Re-reads the spend caps (global config, repo `[watch]`, flags) at the start of each pass and on SIGHUP, so a changed cap applies without a restart or interrupting a run. */
+  reloadCaps?: () => Promise<SpendCaps>;
   /** Alias of `maxCostDayUsd`. */
   maxCostUsd?: number;
   /** Stop starting new issues after this long. Defaults to running until `signal` aborts. */
@@ -119,7 +121,7 @@ function acquireLock(file: string): () => void {
  * Works the `bunker:queued` queue with auto-merge, pass after pass, until aborted or `forMs` is up.
  * Any outcome other than `merged` relabels the issue `bunker:failed` so it is never retried by itself.
  */
-export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, triageEveryHours, auditor, maxIssues, cleanOnStart, stopOrphans, logsDays, log = console.log, notify: rawNotify = noNotify, mention, shepherd: shepherdOn = true, shepherdEveryMs = 60_000, manual, ...opts }: WatchOptions): Promise<WatchSummary> {
+export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, reloadCaps, forMs, signal, pull = false, auditEveryDays, triageEveryHours, auditor, maxIssues, cleanOnStart, stopOrphans, logsDays, log = console.log, notify: rawNotify = noNotify, mention, shepherd: shepherdOn = true, shepherdEveryMs = 60_000, manual, ...opts }: WatchOptions): Promise<WatchSummary> {
   const cwd = opts.cwd ?? process.cwd();
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const notify = withRepo(rawNotify, (await repoId(repo)).split("/").pop()!);
@@ -137,7 +139,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   await stopOrphans?.(log);
   if (cleanOnStart) await runClean({ cwd: repo, yes: true, auto: true, ...(logsDays === undefined ? {} : { logsDays }) });
 
-  const caps: SpendCaps = {
+  let caps: SpendCaps = {
     ...(maxCostDayUsd === undefined ? {} : { day: maxCostDayUsd }),
     ...(maxCostMonthUsd === undefined ? {} : { month: maxCostMonthUsd }),
   };
@@ -153,18 +155,40 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   const spendFile = join(dir, "watch-spend.json");
   const deadline = forMs === undefined ? Infinity : Date.now() + forMs;
   const stopped = () => !!signal?.aborted || Date.now() >= deadline;
+  let wake: (() => void) | undefined;
   const sleep = (ms: number) =>
     new Promise<void>((resolve) => {
       if (signal?.aborted) return resolve();
       const t = setTimeout(done, Math.max(0, Math.min(ms, deadline - Date.now())));
       signal?.addEventListener("abort", done, { once: true });
+      wake = done;
       function done() {
         clearTimeout(t);
         signal?.removeEventListener("abort", done);
+        if (wake === done) wake = undefined;
         resolve();
       }
     });
 
+  const showCaps = (c: SpendCaps) => [c.day === undefined ? undefined : `$${c.day}/day`, c.month === undefined ? undefined : `$${c.month}/month`].filter(Boolean).join(", ") || "none";
+  /** Swaps in freshly resolved caps; a failed read keeps the current ones. In-flight runs are untouched: only the next cap check sees them. */
+  const refreshCaps = async () => {
+    if (!reloadCaps) return;
+    let next: SpendCaps;
+    try {
+      next = await reloadCaps();
+    } catch (e) {
+      log(`bunker: could not reload the spend caps, keeping the current ones: ${e instanceof Error ? e.message : e}`);
+      return;
+    }
+    if (next.day === caps.day && next.month === caps.month) return;
+    caps = next;
+    status.setCaps(caps);
+    log(`bunker: spend caps reloaded: ${showCaps(caps)}`);
+    publishBudget();
+  };
+  const onHup = () => void refreshCaps().then(() => wake?.());
+  if (reloadCaps) process.on("SIGHUP", onHup);
   const capped = () => exceededCaps(spendFile, caps);
   /** The spend against the caps, for the hub: exact costs only. */
   const publishBudget = () => emit(opts.onEvent, { type: "budget", budget: budgetSnapshot(spendFile, caps) });
@@ -397,6 +421,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   publishBudget();
   try {
     while (!stopped()) {
+      await refreshCaps();
       const hit = capped();
       if (hit.length) {
         // Every exceeded window must free up before work resumes.
@@ -504,6 +529,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     notify("bunker: watch crashed", e instanceof Error ? e.message : String(e));
     throw e;
   } finally {
+    process.off("SIGHUP", onHup);
     release();
   }
   notify("bunker: watch stopped", `${summary.passes} pass(es) · ${summary.merged} merged · ${summary.failed} failed`);

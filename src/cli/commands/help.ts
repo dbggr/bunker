@@ -18,7 +18,9 @@ Usage:
   bunker audit                                file improvement ideas as \`discovered\` issues
   bunker triage [--yes]                       read-only agent verifies open \`discovered\` issues (dry run unless --yes)
   bunker clean [--yes] [--logs <days>] [--images] [--force]   remove leftover worktrees and branches (dry run unless --yes)
-  bunker self-update [--channel main]         build and install the latest v* release tag (--channel main: pull main instead)
+  bunker self-update [--channel main] [--when-idle [--restart-all]]
+                                              build and install the latest v* release tag (--channel main: pull main instead;
+                                              --when-idle: drain a running watch, update, restart it; --restart-all: every watch unit)
 
 Common options (all modes):
   --model <id>               model for every role (implementer, reviewer, auditor)
