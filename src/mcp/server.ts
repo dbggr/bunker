@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { loadRepoConfig } from "../core/config.ts";
-import { capsFrom } from "../core/settings.ts";
+import { capSources, capsFrom } from "../core/settings.ts";
 import { DAY_MS, MONTH_MS, loadSpendCaps, spentWithin, type SpendCaps } from "../core/spend.ts";
 import { liveGhEnv } from "../github/identity.ts";
 import { ensureLabel, QUEUED_LABEL } from "../github/labels.ts";
@@ -51,6 +51,17 @@ RestartSec=30
 WantedBy=default.target
 `;
 
+/** True when the drop-ins (in systemd's read order) leave an effective ExecStart without $BUNKER_WATCH_ARGS, which silently discards the flags start_watch writes. */
+export function execStartDropsArgs(dropIns: string[]): boolean {
+  let effective: string | undefined;
+  for (const text of dropIns)
+    for (const line of text.split("\n")) {
+      const m = line.trim().match(/^ExecStart=(.*)$/);
+      if (m) effective = m[1]!.trim() || undefined; // an empty ExecStart= resets the list
+    }
+  return effective !== undefined && !effective.includes("BUNKER_WATCH_ARGS");
+}
+
 export interface Run {
   code: number;
   stdout: string;
@@ -68,6 +79,8 @@ export interface McpDeps {
   readCurrent: (repo: string) => CurrentRun[];
   hubReachable: () => Promise<boolean>;
   caps: (repo: string) => Promise<SpendCaps>;
+  /** Where caps() took each window's cap: the repo's config.toml or the user-level one. */
+  capSources: (repo: string) => Promise<{ day?: "repo" | "user"; month?: "repo" | "user" }>;
   spent: (repo: string) => { day: number; month: number };
   addLabel: (repo: string, issue: number) => Promise<void>;
 }
@@ -82,6 +95,18 @@ interface Tool {
 class ToolError extends Error {}
 
 const repoProp = { type: "string", description: "Absolute path of the repository checkout" };
+const FLAGS = [
+  ["interval", "--interval", "integer"],
+  ["parallel", "--parallel", "integer"],
+  ["max_cost_day", "--max-cost-day", "number"],
+  ["max_cost_month", "--max-cost-month", "number"],
+] as const;
+const flagProps = {
+  interval: { type: "integer", description: "Minutes to sleep when no work is waiting (watch --interval)" },
+  parallel: { type: "integer", description: "Issues to work at once (watch --parallel)" },
+  max_cost_day: { type: "number", description: "USD cap per rolling 24 h (watch --max-cost-day); beats the repo and global config" },
+  max_cost_month: { type: "number", description: "USD cap per rolling 30 days (watch --max-cost-month); beats the repo and global config" },
+};
 const schema = (props: Record<string, object>, required: string[]) => ({ type: "object", properties: props, required });
 
 export function createMcp(d: McpDeps) {
@@ -96,6 +121,56 @@ export function createMcp(d: McpDeps) {
     return `${verb}: ${unitName(repo)}`;
   };
 
+  const argsPath = (repo: string) => join(d.unitDir, `${unitName(repo)}.d`, "args.conf");
+  const argsConf = (flags: Map<string, string>) => `[Service]\nEnvironment="BUNKER_WATCH_ARGS=${[...flags].map(([k, v]) => `${k} ${v}`).join(" ")}"\n`;
+  /** The flags in the instance's args.conf, by flag name. */
+  const readFlags = (repo: string) => {
+    const flags = new Map<string, string>();
+    const m = d.readUnit(argsPath(repo))?.match(/BUNKER_WATCH_ARGS=([^"\n]*)/);
+    for (const f of (m?.[1] ?? "").matchAll(/(--[\w-]+)\s+(\S+)/g)) flags.set(f[1]!, f[2]!);
+    return flags;
+  };
+  const flagsArg = (a: Record<string, unknown>) => {
+    const flags = new Map<string, string>();
+    for (const [k, flag, type] of FLAGS) {
+      const v = a[k];
+      if (v === undefined) continue;
+      const ok = typeof v === "number" && (type === "integer" ? Number.isInteger(v) : Number.isFinite(v)) && v > 0;
+      if (!ok) throw new ToolError(type === "integer" ? `${k} must be a positive integer` : `${k} must be a positive number of US dollars`);
+      flags.set(flag, String(v));
+    }
+    return flags;
+  };
+  /** Each window's effective cap and where it came from: the flag in args.conf, else the repo's config, else the global one. */
+  const effectiveCaps = async (repo: string) => {
+    const flags = readFlags(repo);
+    const caps = await d.caps(repo);
+    const src = await d.capSources(repo);
+    const one = (w: "day" | "month") => {
+      const f = Number(flags.get(`--max-cost-${w}`));
+      if (f > 0) return { cap: f, source: "flag" as const };
+      const cap = caps[w];
+      return { cap: cap ?? null, source: cap === undefined ? null : src[w] === "user" ? ("global" as const) : ("repo" as const) };
+    };
+    return { day: one("day"), month: one("month") };
+  };
+  /** Brings the template and the instance's args.conf up to date; true when anything changed (and systemd was reloaded). */
+  const syncUnit = async (repo: string, flags: Map<string, string>) => {
+    let changed = false;
+    const sync = (path: string, text: string) => {
+      if (d.readUnit(path) === text) return;
+      d.writeUnit(path, text);
+      changed = true;
+    };
+    sync(join(d.unitDir, `${PREFIX}.service`), UNIT_TEMPLATE(d.bunkerCommand(), process.env.PATH));
+    sync(argsPath(repo), argsConf(flags));
+    if (changed) {
+      const r = await d.run(["systemctl", "--user", "daemon-reload"]);
+      if (r.code !== 0) throw new ToolError(`systemctl daemon-reload failed: ${(r.stderr || r.stdout).trim()}`);
+    }
+    return changed;
+  };
+
   const tools: Tool[] = [
     {
       name: "list_watches",
@@ -104,52 +179,38 @@ export function createMcp(d: McpDeps) {
       async call() {
         const r = await d.run(["systemctl", "--user", "list-units", "--all", "--plain", "--no-legend", `${PREFIX}*.service`]);
         if (r.code !== 0) throw new ToolError(`systemctl list-units failed: ${(r.stderr || r.stdout).trim()}`);
-        const watches = r.stdout.split("\n").flatMap((line) => {
+        const found = r.stdout.split("\n").flatMap((line) => {
           const m = line.trim().match(/^(bunker-watch@(\S+)\.service)\s+(\S+)\s+(\S+)\s+(\S+)/);
           if (!m) return [];
           const repo = unescapePath(m[2]!);
           return [{ unit: m[1]!, repo, active: m[4]!, sub: m[5]!, current: d.readCurrent(repo) }];
         });
+        const watches = await Promise.all(found.map(async (w) => ({ ...w, caps: await effectiveCaps(w.repo) })));
         return JSON.stringify({ hub: await d.hubReachable(), watches }, null, 2);
       },
     },
     {
       name: "start_watch",
       description: "Start `bunker watch` for a repo as a systemd user unit; installs the bunker-watch@.service template if missing",
-      inputSchema: schema(
-        {
-          repo: repoProp,
-          interval: { type: "integer", description: "Minutes to sleep when no work is waiting (watch --interval)" },
-          parallel: { type: "integer", description: "Issues to work at once (watch --parallel)" },
-        },
-        ["repo"],
-      ),
+      inputSchema: schema({ repo: repoProp, ...flagProps }, ["repo"]),
       async call(a) {
         const repo = repoArg(a);
-        const flags: string[] = [];
-        for (const k of ["interval", "parallel"]) {
-          if (a[k] === undefined) continue;
-          if (typeof a[k] !== "number" || !Number.isInteger(a[k]) || (a[k] as number) < 1) throw new ToolError(`${k} must be a positive integer`);
-          flags.push(`--${k} ${a[k]}`);
-        }
         // Rewrite whatever is stale (an old template, a leftover drop-in) and restart so the new ExecStart/args apply to a running unit.
-        let changed = false;
-        const sync = (path: string, text: string) => {
-          if (d.readUnit(path) === text) return;
-          d.writeUnit(path, text);
-          changed = true;
-        };
-        sync(join(d.unitDir, `${PREFIX}.service`), UNIT_TEMPLATE(d.bunkerCommand(), process.env.PATH));
-        sync(join(d.unitDir, `${unitName(repo)}.d`, "args.conf"), `[Service]\nEnvironment="BUNKER_WATCH_ARGS=${flags.join(" ")}"\n`);
-        if (changed) {
-          const r = await d.run(["systemctl", "--user", "daemon-reload"]);
-          if (r.code !== 0) throw new ToolError(`systemctl daemon-reload failed: ${(r.stderr || r.stdout).trim()}`);
-        }
-        return systemctl(changed ? "restart" : "start", repo);
+        return systemctl((await syncUnit(repo, flagsArg(a))) ? "restart" : "start", repo);
       },
     },
     { name: "stop_watch", description: "Stop the bunker watch of a repo", inputSchema: schema({ repo: repoProp }, ["repo"]), call: (a) => systemctl("stop", repoArg(a)) },
-    { name: "restart_watch", description: "Restart the bunker watch of a repo", inputSchema: schema({ repo: repoProp }, ["repo"]), call: (a) => systemctl("restart", repoArg(a)) },
+    {
+      name: "restart_watch",
+      description: "Restart the bunker watch of a repo; any flag given (e.g. max_cost_day) is merged into the flags it already runs with",
+      inputSchema: schema({ repo: repoProp, ...flagProps }, ["repo"]),
+      async call(a) {
+        const repo = repoArg(a);
+        const given = flagsArg(a);
+        if (given.size) await syncUnit(repo, new Map([...readFlags(repo), ...given]));
+        return systemctl("restart", repo);
+      },
+    },
     {
       name: "watch_logs",
       description: "The last N journal lines of a repo's bunker watch",
@@ -165,13 +226,13 @@ export function createMcp(d: McpDeps) {
     },
     {
       name: "spend",
-      description: "Spend today (rolling 24 h) and this month (30 days) against the caps, in notional USD",
+      description: "Spend today (rolling 24 h) and this month (30 days) against the effective caps, in notional USD, with where each cap comes from (flag, repo, global)",
       inputSchema: schema({ repo: repoProp }, ["repo"]),
       async call(a) {
         const repo = repoArg(a);
-        const caps = await d.caps(repo);
+        const caps = await effectiveCaps(repo);
         const s = d.spent(repo);
-        return JSON.stringify({ day: { spent: s.day, cap: caps.day ?? null }, month: { spent: s.month, cap: caps.month ?? null } });
+        return JSON.stringify({ day: { spent: s.day, ...caps.day }, month: { spent: s.month, ...caps.month } });
       },
     },
     {
@@ -182,7 +243,7 @@ export function createMcp(d: McpDeps) {
         const repo = repoArg(a);
         const issue = a.issue;
         if (typeof issue !== "number" || !Number.isInteger(issue) || issue < 1) throw new ToolError("issue must be a positive integer");
-        const cap = (await d.caps(repo)).day;
+        const cap = (await effectiveCaps(repo)).day.cap ?? undefined;
         const spent = d.spent(repo).day;
         if (cap !== undefined && spent >= cap) throw new ToolError(`refused: spent $${spent.toFixed(2)} today, at or over the daily cap of $${cap}`);
         await d.addLabel(repo, issue);
@@ -256,6 +317,10 @@ export function liveDeps(): McpDeps {
     caps: async (repo) => {
       const cfg = (await loadRepoConfig(repo, { lenient: true })).config;
       return capsFrom(cfg.watch, await loadSpendCaps().catch(() => ({})));
+    },
+    capSources: async (repo) => {
+      const cfg = (await loadRepoConfig(repo, { lenient: true })).config;
+      return capSources(cfg.watch, await loadSpendCaps().catch(() => ({})));
     },
     spent: (repo) => {
       const file = join(bunkerDir(repo), "watch-spend.json");

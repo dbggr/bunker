@@ -146,7 +146,7 @@ export const SECTIONS: Section[] = [
       {
         cmd: "mcp",
         summary: "stdio MCP server: manage local watches (systemd user units) from Claude",
-        rows: [["`bunker mcp`", "stdio MCP server over systemd user units `bunker-watch@<repo>.service` (the template is installed on the first `start_watch`). Tools: `list_watches` (unit state, repo, current run), `start_watch`, `stop_watch`, `restart_watch`, `watch_logs` (last N lines), `spend` (today/month against the caps), `queue_issue` (adds `bunker:queued`; refused at or over the daily spend cap). It never starts, stops or alters a run through the hub"]],
+        rows: [["`bunker mcp`", "stdio MCP server over systemd user units `bunker-watch@<repo>.service` (the template is installed on the first `start_watch`). Tools: `list_watches` (unit state, repo, current run, effective caps), `start_watch` and `restart_watch` (both take `interval`, `parallel`, `max_cost_day` and `max_cost_month`, written to the instance's `args.conf`, which the unit's `ExecStart` reads through `$BUNKER_WATCH_ARGS`; a systemd override that replaces `ExecStart` must keep that variable, `bunker doctor` flags one that drops it), `stop_watch`, `watch_logs` (last N lines), `spend` (today/month against the effective caps, each with its source: flag, repo or global), `queue_issue` (adds `bunker:queued`; refused at or over the daily spend cap). It never starts, stops or alters a run through the hub"]],
         example: "claude mcp add bunker -- bunker mcp",
       },
       {
