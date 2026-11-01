@@ -14,7 +14,7 @@ import { addWorktree, repoInfo, runSetup, tmpWorktrees, worktreeAdmin, type Work
 import { sessionStore, type Session } from "../worktree/session.ts";
 import { restoreSteering } from "../worktree/steering.ts";
 import { agentStep } from "./agent-step.ts";
-import { UsageLimit, type Pause } from "./errors.ts";
+import { Interrupted, UsageLimit, type Pause } from "./errors.ts";
 
 export interface ReviewOptions extends Timeouts {
   prompt: string;
@@ -78,7 +78,7 @@ export interface ReviewRound {
 }
 
 export interface ReviewResult {
-  status: "approved" | "rejected" | "failed" | "conflict" | "bad-output" | "idle-timeout" | "paused-usage-limit";
+  status: "approved" | "rejected" | "failed" | "interrupted" | "conflict" | "bad-output" | "idle-timeout" | "paused-usage-limit";
   branch: string;
   commits: Commit[];
   rounds: ReviewRound[];
@@ -340,7 +340,7 @@ export async function review({
         ...(step.implSessionId ? { implSessionId: step.implSessionId } : {}),
       };
     } else {
-      status = e instanceof BadOutput ? "bad-output" : e instanceof IdleTimeout ? "idle-timeout" : "failed";
+      status = e instanceof Interrupted ? "interrupted" : e instanceof BadOutput ? "bad-output" : e instanceof IdleTimeout ? "idle-timeout" : "failed";
       error = redact(e instanceof Error ? e.message : String(e));
     }
   } finally {

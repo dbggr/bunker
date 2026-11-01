@@ -63,6 +63,11 @@ export async function implementIssue(ctx: IssueRunContext, input: ImplementInput
   log("raw agent events (stream-json lines follow, interleaved with the sections below)");
   const result = await review({ cwd: worktree, prompt, agent, reviewer, sandbox, maxRounds, ...timeouts, ...(resume !== undefined ? { resume } : {}), sessionsDir: join(repo, ".bunker", "sessions", String(number)), ...(paused ? { resumeFrom: paused } : {}), setup, ...(check ? { check } : {}), copyToWorktree: patterns, reviewerInstruction: REVIEWER_CONVENTION, noChange: { check: (v) => checkEvidence(v, { repo, baseSha, env: ctx.env, cwd: ctx.cwd, issue: number, prior: priorVerdicts(issue.comments) }) }, onEvent, onRaw: (line) => appendFileSync(logPath, redact(`${line}\n`)) });
   spent.usage = result.usage;
+  if (result.status === "interrupted") {
+    // A stop hit during a resume: the work stays on the branch and the next watch picks the issue up again.
+    emit(onEvent, { type: "note", text: `#${number}: interrupted by a stop signal; work kept on ${branch}` });
+    return { done: fail("interrupted", { review: result }) };
+  }
   if (result.status === "paused-usage-limit" && result.pause) {
     // Keep everything and remember where to pick up; the issue keeps its `bunker` label.
     mkdirSync(join(repo, ".bunker", "paused"), { recursive: true, mode: 0o700 });

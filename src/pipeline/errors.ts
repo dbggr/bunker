@@ -34,3 +34,10 @@ export class AgentFailure extends Error {
     super(message);
   }
 }
+
+/** Thrown when a stop signal arrived and the step must not start another agent session; the work so far is kept. */
+export class Interrupted extends Error {
+  constructor() {
+    super("interrupted by a stop signal; work kept");
+  }
+}

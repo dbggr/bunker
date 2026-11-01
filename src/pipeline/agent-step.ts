@@ -3,7 +3,8 @@ import { emit, type EventTarget } from "../core/events.ts";
 import { formatDuration, stdinOf, type Agent, type AgentMode } from "../agents/agent.ts";
 import { DEFAULT_COMPLETION_MS, IdleTimeout, agentLimits, timeoutMessage, type ExecContext, type Sandbox, type Timeouts } from "../sandboxes/exec.ts";
 import { captureSession, restoreSession, type Session } from "../worktree/session.ts";
-import { UsageLimit } from "./errors.ts";
+import { shutdown } from "../core/shutdown.ts";
+import { Interrupted, UsageLimit } from "./errors.ts";
 
 /**
  * Runs one agent command. With `prev`, first restores that session and resumes it with `resumePrompt`;
@@ -25,6 +26,8 @@ export async function agentStep(o: {
   timeouts?: Timeouts;
   /** Completion signals; one alone on the last output line marks the agent as finished. */
   signals?: string[];
+  /** A stop signal: once aborted, a failed resume ends the step as interrupted instead of starting a fresh session. Defaults to the process-wide one. */
+  signal?: AbortSignal | undefined;
 }): Promise<{ code: number; stdout: string; session?: Session }> {
   const timeouts = o.timeouts ?? {};
   const label = { ...(o.target.task !== undefined ? { task: o.target.task } : {}), ...(o.target.round !== undefined ? { round: o.target.round } : {}), ...(o.target.role ? { role: o.target.role } : {}) };
@@ -42,8 +45,11 @@ export async function agentStep(o: {
     res = await exec(o.agent.command(o.prompt, o.mode, { fork: o.fork.id }), o.prompt);
   }
   if (o.prev && !res) {
-    const fallback = (why: string) =>
+    const fallback = (why: string) => {
+      // A resume killed by the stop (SIGTERM reaches the container) is the stop's doing: no new session during shutdown.
+      if ((o.signal ?? shutdown.signal)?.aborted) throw new Interrupted();
       emit(o.target.onEvent, { type: "note", ...(o.target.task !== undefined ? { task: o.target.task } : {}), ...(o.target.round !== undefined ? { round: o.target.round } : {}), ...(o.target.role ? { role: o.target.role } : {}), text: `could not resume session ${o.prev!.id} (${why}); starting a fresh session` });
+    };
     try {
       await restoreSession(o.sandbox, o.ctx.worktree, o.prev);
       res = await exec(o.agent.command(o.resumePrompt ?? o.prompt, o.mode, { resume: o.prev.id }), o.resumePrompt ?? o.prompt);
@@ -52,7 +58,7 @@ export async function agentStep(o: {
         res = undefined;
       }
     } catch (e) {
-      if (e instanceof IdleTimeout) throw e;
+      if (e instanceof IdleTimeout || e instanceof Interrupted) throw e;
       fallback(redact(e instanceof Error ? e.message : String(e)));
     }
   }

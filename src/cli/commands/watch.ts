@@ -31,6 +31,8 @@ export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "ke
   shepherdEveryMs?: number;
   /** Remove leftover worktrees and branches (as `bunker clean --yes`) once the lock is held. */
   cleanOnStart?: boolean;
+  /** On start, stops agent containers left by a watcher that died; given the log function. */
+  stopOrphans?: (log: (line: string) => void) => Promise<void>;
   /** With cleanOnStart: also prune run logs older than this many days. */
   logsDays?: number;
   /** Sleep between passes. Defaults to 10 minutes. */
@@ -117,7 +119,7 @@ function acquireLock(file: string): () => void {
  * Works the `bunker:queued` queue with auto-merge, pass after pass, until aborted or `forMs` is up.
  * Any outcome other than `merged` relabels the issue `bunker:failed` so it is never retried by itself.
  */
-export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, triageEveryHours, auditor, maxIssues, cleanOnStart, logsDays, log = console.log, notify: rawNotify = noNotify, mention, shepherd: shepherdOn = true, shepherdEveryMs = 60_000, manual, ...opts }: WatchOptions): Promise<WatchSummary> {
+export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, triageEveryHours, auditor, maxIssues, cleanOnStart, stopOrphans, logsDays, log = console.log, notify: rawNotify = noNotify, mention, shepherd: shepherdOn = true, shepherdEveryMs = 60_000, manual, ...opts }: WatchOptions): Promise<WatchSummary> {
   const cwd = opts.cwd ?? process.cwd();
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const notify = withRepo(rawNotify, (await repoId(repo)).split("/").pop()!);
@@ -132,6 +134,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   // Crash recovery, whether or not the worktree cleanup runs: the lock is ours, so no `bunker watch` run of ours is live.
   const stale = await clearStaleInProgress(repo, liveGhEnv());
   if (stale.length) log(`bunker: cleared a stale bunker:in-progress from ${stale.map((n) => `#${n}`).join(", ")}`);
+  await stopOrphans?.(log);
   if (cleanOnStart) await runClean({ cwd: repo, yes: true, auto: true, ...(logsDays === undefined ? {} : { logsDays }) });
 
   const caps: SpendCaps = {
