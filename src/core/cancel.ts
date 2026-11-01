@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** The issue a run belongs to, for everything running inside it (agent steps, containers). */
@@ -16,6 +16,15 @@ export const cancelRequested = () => {
   const n = issueScope.getStore();
   return n !== undefined && cancelled.has(n);
 };
+
+/** Notes in the issue's latest run log that a human cancelled it, so interventions can be counted from the logs. */
+export function recordCancel(repo: string, issue: number): void {
+  const dir = join(repo, ".bunker", "runs");
+  try {
+    const latest = readdirSync(dir).filter((f) => f.startsWith(`${issue}-`) && f.endsWith(".log")).sort().at(-1);
+    if (latest) appendFileSync(join(dir, latest), "== cancelled by request ==\n\n");
+  } catch {}
+}
 
 /** Running containers (name) by the issue that started them. */
 export const containerIssues = new Map<string, number>();

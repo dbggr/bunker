@@ -22,7 +22,7 @@ import { runQueue, type QueueEntry, type QueueOptions } from "../../pipeline/que
 import { countWaiting } from "../../github/queue.ts";
 import { latestBunkerLabeledAt } from "../../github/labeler.ts";
 import { createCanceller, activeIssues } from "./cancel.ts";
-import { markCancelled, takeCancelled, takeCancelRequests } from "../../core/cancel.ts";
+import { markCancelled, recordCancel, takeCancelled, takeCancelRequests } from "../../core/cancel.ts";
 import { IN_PROGRESS_LABEL, clearLanded, ensureLabel, releaseUnmergedReview, sweepClosedAwaitingReview, sweepClosedQueued, FAILED_LABEL, unqueue } from "../../github/labels.ts";
 import { repoId } from "../../ui/ui.ts";
 import { noNotify, withRepo, type Notify } from "../../core/notify.ts";
@@ -157,6 +157,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   const cancelRun = createCanceller({
     active: () => activeIssues(status.snapshot().current),
     mark: markCancelled,
+    record: (n) => recordCancel(repo, n),
     stopContainers: (n) => opts.stopIssue?.(n),
     abandon: async (n) => opts.abandonIssue?.(n),
     unlabel: async (n) => void (await unqueue(n, cwd, env, ["--remove-label", IN_PROGRESS_LABEL])),
