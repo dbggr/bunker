@@ -2,7 +2,7 @@ import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMcp, escapePath, unescapePath, UNIT_TEMPLATE, type McpDeps } from "../src/mcp/server.ts";
+import { createMcp, escapePath, execStartDropsArgs, unescapePath, UNIT_TEMPLATE, type McpDeps } from "../src/mcp/server.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -25,6 +25,7 @@ function setup(over: Partial<McpDeps> = {}) {
     readCurrent: () => [{ issue: 7, stage: "verify", since: 1 }],
     hubReachable: async () => true,
     caps: async () => ({ day: 10, month: 100 }),
+    capSources: async () => ({ day: "repo", month: "user" }),
     spent: () => ({ day: 2.5, month: 20 }),
     addLabel: async (r, n) => void labels.push([r, n]),
     labels: async () => [],
@@ -60,7 +61,7 @@ describe("mcp tools", () => {
     const { call } = setup();
     const out = JSON.parse((await call("list_watches")).text);
     expect(out.hub).toBe(true);
-    expect(out.watches).toEqual([{ unit: `bunker-watch@${escapePath(repo)}.service`, repo, active: "active", sub: "running", current: [{ issue: 7, stage: "verify", since: 1 }] }]);
+    expect(out.watches).toEqual([{ unit: `bunker-watch@${escapePath(repo)}.service`, repo, active: "active", sub: "running", current: [{ issue: 7, stage: "verify", since: 1 }], caps: { day: { cap: 10, source: "repo" }, month: { cap: 100, source: "global" } } }]);
   });
   test("start_watch installs the template when missing, then starts (restart)", async () => {
     const { call, calls, writes } = setup();
@@ -136,7 +137,7 @@ describe("mcp tools", () => {
   });
   test("spend reports today and month against the caps", async () => {
     const { call } = setup();
-    expect(JSON.parse((await call("spend", { repo })).text)).toEqual({ day: { spent: 2.5, cap: 10 }, month: { spent: 20, cap: 100 } });
+    expect(JSON.parse((await call("spend", { repo })).text)).toEqual({ day: { spent: 2.5, cap: 10, source: "repo" }, month: { spent: 20, cap: 100, source: "global" } });
   });
   test("queue_issue labels the issue under the cap", async () => {
     const { call, labels } = setup();
@@ -172,5 +173,49 @@ describe("mcp tools", () => {
   test("no tool talks to the hub beyond a reachability check", () => {
     const src = readFileSync(join(import.meta.dir, "../src/mcp/server.ts"), "utf8");
     expect(src).not.toContain("/publish");
+  });
+});
+
+describe("watch caps", () => {
+  const dropin = `/units/bunker-watch@${escapePath(repo)}.service.d/args.conf`;
+  const args = (flags: string) => `[Service]\nEnvironment="BUNKER_WATCH_ARGS=${flags}"\n`;
+  test("the template's ExecStart passes $BUNKER_WATCH_ARGS", () => {
+    expect(UNIT_TEMPLATE(["/usr/bin/bunker"], "/bin")).toMatch(/^ExecStart=.*\$BUNKER_WATCH_ARGS$/m);
+  });
+  test("execStartDropsArgs flags an effective ExecStart without the variable", () => {
+    expect(execStartDropsArgs(["[Service]\nExecStart=\nExecStart=/bin/bunker watch\n"])).toBe(true);
+    expect(execStartDropsArgs(["[Service]\nExecStart=\nExecStart=/bin/bunker watch $BUNKER_WATCH_ARGS\n"])).toBe(false);
+    expect(execStartDropsArgs(["[Service]\nExecStart=/bin/bunker watch\n", "[Service]\nExecStart=\nExecStart=/bin/bunker watch $BUNKER_WATCH_ARGS\n"])).toBe(false);
+    expect(execStartDropsArgs(["[Service]\nRestart=always\n"])).toBe(false);
+  });
+  test("start_watch writes max_cost_day and max_cost_month as flags", async () => {
+    const { call, writes } = setup();
+    expect((await call("start_watch", { repo, max_cost_day: 5, max_cost_month: 80.5 })).isError).toBe(false);
+    expect(writes[dropin]).toBe(args("--max-cost-day 5 --max-cost-month 80.5"));
+  });
+  test("start_watch rejects a bad cap", async () => {
+    const { call } = setup();
+    for (const v of [0, -1, "5", null]) expect((await call("start_watch", { repo, max_cost_day: v })).isError).toBe(true);
+  });
+  test("restart_watch with a cap rewrites args.conf, keeping the other flags, and restarts", async () => {
+    const { call, writes, calls } = setup({ readUnit: (p) => (p === dropin ? args("--interval 1 --max-cost-day 3") : null) });
+    await call("restart_watch", { repo, max_cost_month: 40 });
+    expect(writes[dropin]).toBe(args("--interval 1 --max-cost-day 3 --max-cost-month 40"));
+    expect(calls.map((c) => c[2])).toEqual(["daemon-reload", "restart"]);
+  });
+  test("spend and list_watches show the effective cap and its source", async () => {
+    const { call } = setup({ readUnit: (p) => (p === dropin ? args("--max-cost-day 7") : null) });
+    expect(JSON.parse((await call("spend", { repo })).text)).toEqual({
+      day: { spent: 2.5, cap: 7, source: "flag" },
+      month: { spent: 20, cap: 100, source: "global" },
+    });
+    const w = JSON.parse((await call("list_watches")).text).watches[0];
+    expect(w.caps).toEqual({ day: { cap: 7, source: "flag" }, month: { cap: 100, source: "global" } });
+  });
+  test("a repo cap reports source repo; no cap reports null", async () => {
+    const { call } = setup();
+    expect(JSON.parse((await call("spend", { repo })).text).day.source).toBe("repo");
+    const none = setup({ caps: async () => ({}), capSources: async () => ({}) });
+    expect(JSON.parse((await none.call("spend", { repo })).text).day).toEqual({ spent: 2.5, cap: null, source: null });
   });
 });
