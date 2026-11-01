@@ -1,4 +1,5 @@
-import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { removedUserKeys, readUserConfigRaw, userConfigPath } from "../../core/user-config.ts";
 import { formatSpend, loadSpendCaps } from "../../core/spend.ts";
@@ -8,12 +9,13 @@ import { DEFAULT_MODEL_LABEL, resolveModels } from "../../agents/models.ts";
 import { DEFAULT_REVIEW_PATHS } from "../../worktree/steering.ts";
 import { ConfigError, effectiveSettings, formatValue, loadRepoConfig } from "../../core/config.ts";
 import { redact } from "../../core/redact.ts";
+import { execStartDropsArgs } from "../../mcp/server.ts";
 import { unpullable } from "../../sandboxes/services.ts";
 import { AGENT_NETWORK } from "../../sandboxes/container.ts";
 import { DEFAULT_EGRESS } from "../../sandboxes/egress.ts";
 import { bridgeName, egressDenied, firewallRules, proxyReachable, rulesBlock } from "../../sandboxes/firewall.ts";
 import { applyIdentity, identityKind } from "../../github/identity.ts";
-import { AWAITING_REVIEW_LABEL, EXCLUDE_LABEL, FAILED_LABEL, IN_PROGRESS_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
+import { AWAITING_REVIEW_LABEL, EXCLUDE_LABEL, FAILED_LABEL, FORCE_LABEL, IN_PROGRESS_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
 import { SKILL_ROLES, SkillError, resolveSkills, skillPaths } from "../../core/skills.ts";
 import { PRIORITY_LABELS } from "../../core/priority.ts";
 import { requiredCheck } from "../../core/required-check.ts";
@@ -26,8 +28,8 @@ export const OLD_LABELS: Record<string, string> = { bunker: QUEUED_LABEL, "bunke
 /** Filed on follow-ups and audit findings; filing falls back to no severity label without them, so they are optional. */
 export const SEVERITY_LABELS = ["severity:high", "severity:medium"] as const;
 /** Only manual-merge mode applies this one; it is created by bunker on first use, so it is optional too. */
-export const OPTIONAL_LABELS: readonly string[] = [...SEVERITY_LABELS, AWAITING_REVIEW_LABEL, EXCLUDE_LABEL];
-export const LABELS = [QUEUED_LABEL, IN_PROGRESS_LABEL, FAILED_LABEL, REVIEW_LABEL, AWAITING_REVIEW_LABEL, EXCLUDE_LABEL, "discovered", "bunker-blocked", ...PRIORITY_LABELS.map((p) => p.name), ...SEVERITY_LABELS] as const;
+export const OPTIONAL_LABELS: readonly string[] = [...SEVERITY_LABELS, AWAITING_REVIEW_LABEL, EXCLUDE_LABEL, FORCE_LABEL];
+export const LABELS = [QUEUED_LABEL, IN_PROGRESS_LABEL, FAILED_LABEL, REVIEW_LABEL, AWAITING_REVIEW_LABEL, EXCLUDE_LABEL, FORCE_LABEL, "discovered", "bunker-blocked", ...PRIORITY_LABELS.map((p) => p.name), ...SEVERITY_LABELS] as const;
 
 /** Total bytes of the files under `dir` (0 if missing); symlinks are not followed. */
 function dirSize(dir: string): number {
@@ -394,6 +396,26 @@ export async function runDoctor(opts: { cwd: string; env?: Env; fetch?: typeof g
   const where = (w: "day" | "month") => (sources[w] === "repo" ? ".bunker/config.toml" : sources[w] === "user" ? userConfigPath(env) : undefined);
   const from = (["day", "month"] as const).flatMap((w) => (where(w) ? [`${w} cap from ${where(w)}`] : []));
   add({ id: "spend", group: "spend", label: "spend so far", ok: true, required: false, detail: formatSpend(join(cwd, ".bunker", "watch-spend.json"), capsFrom(watchCaps, fileCaps)) + (from.length ? ` (${from.join(", ")}; --max-cost-day/--max-cost-month override)` : "") });
+
+  // a systemd override of bunker-watch@ that replaces ExecStart without $BUNKER_WATCH_ARGS silently drops the flags start_watch writes
+  const unitRoot = join(env.XDG_CONFIG_HOME || join(env.HOME || homedir(), ".config"), "systemd", "user");
+  const droppers: string[] = [];
+  try {
+    for (const dir of readdirSync(unitRoot).filter((n) => n.startsWith("bunker-watch@") && n.endsWith(".service.d")).sort()) {
+      const files = readdirSync(join(unitRoot, dir)).filter((f) => f.endsWith(".conf")).sort();
+      if (execStartDropsArgs(files.map((f) => readFileSync(join(unitRoot, dir, f), "utf8")))) droppers.push(...files.map((f) => `${dir}/${f}`));
+    }
+  } catch {}
+  if (existsSync(unitRoot) && readdirSync(unitRoot).some((n) => n.startsWith("bunker-watch@")))
+    add({
+      id: "watch-unit-args",
+      group: "config",
+      label: "watch unit passes $BUNKER_WATCH_ARGS",
+      ok: !droppers.length,
+      required: false,
+      ...(droppers.length ? { detail: `ExecStart overridden without it in ${droppers.join(", ")}` } : {}),
+      fix: "add $BUNKER_WATCH_ARGS to that ExecStart (or delete the override): without it start_watch's interval, parallel and cost caps have no effect",
+    });
 
   // storage under .bunker/ that pruning keeps in check
   for (const dir of ["runs", "sessions"]) add({ id: `${dir}-size`, group: "repo", label: `.bunker/${dir}/ size`, ok: true, required: false, detail: formatBytes(dirSize(join(cwd, ".bunker", dir))) });

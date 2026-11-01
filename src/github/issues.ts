@@ -183,3 +183,13 @@ export async function listBlocked(cwd: string, env: Env): Promise<{ number: numb
   }
   return out;
 }
+
+/** `- [ ] #N` / `- [x] owner/repo#N` task items; anything else after the checkbox is a real task. */
+const TASK_ITEM = /^\s*[-*+]\s+\[[ xX]\]\s+(.*)$/;
+const ISSUE_REF_ONLY = /^(?:[\w.-]+\/[\w.-]+)?#\d+\s*$/;
+
+/** True when the body has a task list and every item in it is only a reference to another issue: a tracking issue (epic), not work. */
+export function isTrackingIssue(body: string | null | undefined): boolean {
+  const items = (body ?? "").split("\n").flatMap((l) => TASK_ITEM.exec(l)?.[1] ?? []);
+  return items.length > 0 && items.every((t) => ISSUE_REF_ONLY.test(t.trim()));
+}
