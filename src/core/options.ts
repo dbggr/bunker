@@ -44,6 +44,8 @@ export const options = {
   port: { type: "string" },
   "ui-keep": { type: "boolean", default: false },
   channel: { type: "string" },
+  "when-idle": { type: "boolean", default: false },
+  "restart-all": { type: "boolean", default: false },
   yes: { type: "boolean", default: false },
   logs: { type: "string" },
   images: { type: "boolean", default: false },
