@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { emit } from "../../core/events.ts";
 import { addSpend, budgetSnapshot, DAY_MS, exceededCaps, formatSpend, type SpendCaps } from "../../core/spend.ts";
 import { safePull } from "../../github/pull.ts";
+import { settleOrphanedRuns } from "../../pipeline/settle-runs.ts";
 import { clearStaleInProgress, runClean } from "./clean.ts";
 import { codeSpan, redact } from "../../core/redact.ts";
 import { failureReason, oneLine } from "../../core/reason.ts";
@@ -171,6 +172,9 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     status.event(e);
     userOnEvent?.(e);
   };
+  // A killed watcher leaves its runs without a closing line; the lock is ours, so none of them is live.
+  const settled = settleOrphanedRuns(repo, opts.onEvent);
+  if (settled.length) log(`bunker: settled the interrupted run${settled.length === 1 ? "" : "s"} of ${settled.map((n) => `#${n}`).join(", ")}`);
 
   const env = liveGhEnv();
   const spendFile = join(dir, "watch-spend.json");

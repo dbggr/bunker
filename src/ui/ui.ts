@@ -16,6 +16,15 @@ export interface Hub {
   stop: () => Promise<void>;
 }
 
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+
 /** A run's handle on a hub: its events go there, tagged with the repo. */
 export interface Publisher {
   onEvent: OnEvent;
@@ -161,6 +170,51 @@ export function startHub({ port = defaultHubPort(), token, historyLimit = HISTOR
     }
   }
 
+  /** Stores an event (memory and disk) and sends it to the connected pages. */
+  const record = (repo: string, event: any) => {
+    const msg = JSON.stringify({ repo, event: clean(event) });
+    const list = add(repo, event, msg, Date.now());
+    if (historyDir) {
+      try {
+        const file = historyFile(historyDir, repo);
+        mkdirSync(historyDir, { recursive: true, mode: 0o700 });
+        const fresh = !existsSync(file);
+        appendFileSync(file, lineOf(repo, list[list.length - 1]!), { mode: 0o600 });
+        if (fresh) chmodSync(file, 0o600);
+        // Keep the file near the in-memory size.
+        const n = (appended.get(repo) ?? 0) + 1;
+        appended.set(repo, n);
+        if (n > historyLimit) {
+          compact(repo);
+          appended.set(repo, 0);
+        }
+      } catch {}
+    }
+    server.publish("events", msg);
+  };
+
+  /**
+   * A watcher that is gone (its pid, as it reported it, is dead) owns no running run: close every run of that repo
+   * that never got a closing stage, so a killed watcher can't leave a run showing as running forever.
+   */
+  const settleDead = () => {
+    for (const [repo, list] of [...history]) {
+      let pid: number | undefined;
+      const open = new Map<string, any>();
+      for (const { msg } of [...list].sort((a, b) => a.seq - b.seq)) {
+        const e = JSON.parse(msg).event;
+        if (e.type === "watcher") pid = e.watcher?.pid;
+        else if (e.type === "stage" && (e.issue !== undefined || e.audit)) {
+          const key = e.audit ? "audit" : String(e.issue);
+          if (["merged", "done", "failed", "interrupted", "waiting for merge", "awaiting review"].includes(e.name)) open.delete(key);
+          else open.set(key, e);
+        }
+      }
+      if (typeof pid !== "number" || alive(pid)) continue;
+      for (const e of open.values()) record(repo, { type: "stage", name: "interrupted", ...(e.audit ? { audit: true } : { issue: e.issue }), at: Date.now(), text: "the watcher stopped before this run finished" });
+    }
+  };
+
   const server = Bun.serve({
     hostname: HOST,
     port,
@@ -185,26 +239,7 @@ export function startHub({ port = defaultHubPort(), token, historyLimit = HISTOR
         if (typeof body?.repo !== "string" || !body.repo || typeof body.event !== "object" || !body.event || typeof body.event.type !== "string") {
           return new Response("bad request", { status: 400 });
         }
-        const repo = redact(body.repo);
-        const msg = JSON.stringify({ repo, event: clean(body.event) });
-        const list = add(repo, body.event, msg, Date.now());
-        if (historyDir) {
-          try {
-            const file = historyFile(historyDir, repo);
-            mkdirSync(historyDir, { recursive: true, mode: 0o700 });
-            const fresh = !existsSync(file);
-            appendFileSync(file, lineOf(repo, list[list.length - 1]!), { mode: 0o600 });
-            if (fresh) chmodSync(file, 0o600);
-            // Keep the file near the in-memory size.
-            const n = (appended.get(repo) ?? 0) + 1;
-            appended.set(repo, n);
-            if (n > historyLimit) {
-              compact(repo);
-              appended.set(repo, 0);
-            }
-          } catch {}
-        }
-        server.publish("events", msg);
+        record(redact(body.repo), body.event);
         return new Response(null, { status: 204 });
       }
       if (req.method !== "GET") return new Response("read-only", { status: 405 });
@@ -225,11 +260,17 @@ export function startHub({ port = defaultHubPort(), token, historyLimit = HISTOR
       message() {},
     },
   });
+  settleDead();
+  const sweep = setInterval(settleDead, 30_000);
+  sweep.unref?.();
   return {
     url: `http://${HOST}:${server.port}`,
     viewUrl: viewUrlFor(server.port!, token),
     server,
-    stop: async () => void (await server.stop(true)),
+    stop: async () => {
+      clearInterval(sweep);
+      await server.stop(true);
+    },
   };
 }
 

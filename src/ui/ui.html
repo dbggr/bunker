@@ -152,7 +152,7 @@ const Model = (() => {
   const TRACK = ["setup", "implement", "review", "verify", "PR", "merge"];
   const AUDIT_TRACK = ["setup", "audit", "filing"];
   const day0 = (now) => new Date(now).setHours(0, 0, 0, 0);
-  const isDone = (s) => s === "merged" || s === "done" || s === "failed";
+  const isDone = (s) => s === "merged" || s === "done" || s === "failed" || s === "interrupted";
   function newRepo() { return { runs: new Map(), queueText: "", blocked: new Map(), shepherd: new Map(), notes: [], spend: undefined, watcher: undefined }; }
   function run(r, issue) {
     let x = r.runs.get(issue);
@@ -191,6 +191,7 @@ const Model = (() => {
       if (e.model) i.model = e.model;
       i.done = isDone(e.name);
       if (e.name === "failed") i.reason = e.reason || e.text || "";
+      if (e.name === "interrupted") i.reason = "interrupted" + (e.text ? ": " + e.text : "");
       i.log.push({ t: e.at, kind: "stage", text: "— " + e.name + (e.model ? " · " + e.model : "") + (e.text ? " (" + e.text + ")" : "") + (e.reason ? ": " + e.reason : "") });
       if (i.done) { i.est = undefined; i.tokens = 0; }
     } else if (e.type === "meta") {
@@ -245,11 +246,11 @@ const Model = (() => {
       if (!x.done || (x.end || 0) < since) continue;
       if (x.kind === "audit") {
         const n = x.filed.length;
-        audits.push({ kind: "audit", key: x.key, issue: undefined, title: x.title || "Audit", outcome: x.stage === "failed" ? "failed" : "audit · " + n + (n === 1 ? " issue" : " issues") + " filed", reason: x.reason, prUrl: "", filed: x.filed, at: x.end, elapsed: x.end - x.start, cost: x.cost });
+        audits.push({ kind: "audit", key: x.key, issue: undefined, title: x.title || "Audit", outcome: x.stage === "failed" || x.stage === "interrupted" ? "failed" : "audit · " + n + (n === 1 ? " issue" : " issues") + " filed", reason: x.reason, prUrl: "", filed: x.filed, at: x.end, elapsed: x.end - x.start, cost: x.cost });
         continue;
       }
       const issue = Number(String(x.key).slice(1));
-      add(issue, { issue, title: x.title, outcome: x.stage === "failed" ? "failed" : "merged", reason: x.reason, prUrl: x.url, at: x.end, elapsed: x.end - x.start, cost: x.cost });
+      add(issue, { issue, title: x.title, outcome: x.stage === "failed" || x.stage === "interrupted" ? "failed" : "merged", reason: x.reason, prUrl: x.url, at: x.end, elapsed: x.end - x.start, cost: x.cost });
     }
     if (w) {
       for (const m of w.merged) if (m.at >= since) add(m.issue, { issue: m.issue, title: title(r, m.issue), outcome: "merged", reason: "", prUrl: m.prUrl || "", at: m.at, ...stats(r, m.issue) });
@@ -305,7 +306,7 @@ const Model = (() => {
   function shepherd(r, name) {
     let rows;
     if (r.watcher) rows = r.watcher.shepherd.map((s) => ({ ...s }));
-    else rows = [...r.shepherd.values()].filter((s) => { const x = r.runs.get("#" + s.issue); return !(x && (x.stage === "merged" || x.stage === "failed")); }).map((s) => ({ ...s }));
+    else rows = [...r.shepherd.values()].filter((s) => { const x = r.runs.get("#" + s.issue); return !(x && (x.stage === "merged" || x.stage === "failed" || x.stage === "interrupted")); }).map((s) => ({ ...s }));
     const sl = slug(name);
     if (sl) for (const s of rows) if (!s.prUrl) s.prUrl = refUrl(sl, "pull", s.pr);
     return rows;
