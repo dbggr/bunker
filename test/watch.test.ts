@@ -115,6 +115,25 @@ describe("parseDuration()", () => {
   });
 });
 
+describe("runWatch() settles the runs a killed watcher left open", () => {
+  test("a run log with no final status is closed as interrupted; a finished one is untouched", async () => {
+    const { repo } = await setup([]);
+    const runs = join(repo, ".bunker", "runs");
+    mkdirSync(runs, { recursive: true });
+    const open = join(runs, "58-2026-11-01T10-00-00-000Z.log");
+    const done = join(runs, "59-2026-11-01T10-00-00-000Z.log");
+    writeFileSync(open, "== issue #58: x ==\nbranch b\n\n");
+    writeFileSync(done, "== issue #59: y ==\n\n== final status: merged ==\n\n");
+    const events: { type: string; name?: string; issue?: number }[] = [];
+    const ctl = new AbortController();
+    ctl.abort();
+    await runWatch({ ...base, cwd: repo, agent: fakeAgent(), signal: ctl.signal, onEvent: (e) => events.push(e) });
+    expect(readFileSync(open, "utf8")).toContain("== final status: interrupted ==");
+    expect(readFileSync(done, "utf8")).not.toContain("interrupted");
+    expect(events.filter((e) => e.type === "stage").map((e) => `${e.issue}:${e.name}`)).toEqual(["58:interrupted"]);
+  });
+});
+
 describe("runWatch() --audit-every", () => {
   const auditor = (calls: string[]): Agent => ({
     command(prompt) {

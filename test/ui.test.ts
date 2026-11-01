@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { mkdtempSync, statSync, readFileSync } from "node:fs";
+import { mkdtempSync, statSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connectHub, ensureHub, hubReachable, readToken, repoIdFromUrl, startHub, type Hub } from "../src/ui/ui.ts";
@@ -653,5 +653,36 @@ describe("ensureHub()", () => {
     } finally {
       await other.stop(true);
     }
+  });
+});
+
+describe("startHub() settles the runs of a dead watcher", () => {
+  const watcherEvent = (pid: number) => ({ type: "watcher", at: 1, watcher: { pid, version: "1", startedAt: 1, parallel: 1, merged: [], noChange: [], failed: [], shepherd: [] } });
+  const seed = (dir: string, pid: number) => {
+    const lines = [watcherEvent(pid), { type: "stage", name: "implement", issue: 58, at: 2 }].map((event) => JSON.stringify({ t: Date.now(), repo: "o/r", event }));
+    writeFileSync(join(dir, "o_r.jsonl"), lines.join("\n") + "\n");
+  };
+  const stages = async (viewUrl: string) => {
+    const { ws, messages } = await connect(viewUrl);
+    await Bun.sleep(100);
+    ws.close();
+    return messages.filter((m) => m.event.type === "stage").map((m) => `${m.event.issue}:${m.event.name}`);
+  };
+
+  test("a run whose watcher pid is dead gets a closing interrupted stage, kept in the history", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bunker-hub-"));
+    seed(dir, 2_000_000_000);
+    hub = startHub({ port: 0, token: TOKEN, historyDir: dir });
+    expect(await stages(hub.viewUrl)).toEqual(["58:implement", "58:interrupted"]);
+    await hub.stop();
+    hub = startHub({ port: 0, token: TOKEN, historyDir: dir });
+    expect(await stages(hub.viewUrl)).toEqual(["58:implement", "58:interrupted"]);
+  });
+
+  test("a run whose watcher is alive is left running", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bunker-hub-"));
+    seed(dir, process.pid);
+    hub = startHub({ port: 0, token: TOKEN, historyDir: dir });
+    expect(await stages(hub.viewUrl)).toEqual(["58:implement"]);
   });
 });

@@ -789,6 +789,18 @@ describe("runIssue()", () => {
     await expect(runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox() })).rejects.toThrow(/gh issue view 7 failed/);
   });
 
+  test("an interrupted run emits a closing interrupted stage and logs its final status", async () => {
+    const { repo } = await setup(issue());
+    await $`git -C ${repo} remote set-url origin /nonexistent/origin.git`.quiet();
+    const ctl = new AbortController();
+    ctl.abort();
+    const events: { type: string; name?: string; issue?: number }[] = [];
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), signal: ctl.signal, onEvent: (e) => events.push(e) });
+    expect(r.status).toBe("interrupted");
+    expect(events.filter((e) => e.type === "stage" && e.name === "interrupted").map((e) => e.issue)).toEqual([7]);
+    expect(await Bun.file(r.logPath!).text()).toContain("== final status: interrupted ==");
+  });
+
   test("default-branch fetch killed by a stop → interrupted, not a failure", async () => {
     const { repo } = await setup(issue());
     await $`git -C ${repo} remote set-url origin /nonexistent/origin.git`.quiet();
