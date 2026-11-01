@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkLabeler } from "../src/github/labeler.ts";
-import { sweepClosedQueued, hasQueuedLabel, isQueuedLabel, markInProgress, unqueue, clearLanded } from "../src/github/labels.ts";
+import { sweepClosedQueued, hasQueuedLabel, isQueuedLabel, markInProgress, unqueue, clearLanded, markAwaitingReview, sweepClosedAwaitingReview, releaseUnmergedReview } from "../src/github/labels.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -90,6 +90,42 @@ describe("clearLanded", () => {
     const log = await g.log();
     expect(log).toContain("issue edit 5 --remove-label bunker:queued");
     expect(log).toContain("issue edit 5 --remove-label bunker:in-progress");
+    expect(log).toContain("issue edit 5 --remove-label bunker:awaiting-review");
+  });
+});
+
+describe("awaiting-review label transitions", () => {
+  async function gh(list: string) {
+    const root = await mkdtemp(join(tmpdir(), "bunker-await-"));
+    dirs.push(root);
+    await Bun.write(join(root, "gh"), `#!/bin/sh\necho "$*" >> "${root}/log"\nif [ "$1 $2" = "issue list" ]; then echo '${list}'; exit 0; fi\nif [ "$1 $2" = "issue view" ]; then echo '{"labels":[{"name":"bunker:queued"},{"name":"bunker:in-progress"}]}'; exit 0; fi\nexit 0\n`);
+    await chmod(join(root, "gh"), 0o755);
+    return { env: { ...process.env, PATH: `${root}:${process.env.PATH}` } as Record<string, string>, log: () => Bun.file(join(root, "log")).text() };
+  }
+
+  test("markAwaitingReview swaps queued and in-progress for awaiting-review", async () => {
+    const g = await gh("[]");
+    await markAwaitingReview(9, process.cwd(), g.env);
+    const log = await g.log();
+    expect(log).toContain("label create bunker:awaiting-review");
+    expect(log).toContain("issue edit 9 --remove-label bunker:queued --add-label bunker:awaiting-review --remove-label bunker:in-progress");
+  });
+
+  test("sweepClosedAwaitingReview removes the label from closed issues", async () => {
+    const g = await gh('[{"number":3}]');
+    expect(await sweepClosedAwaitingReview(process.cwd(), g.env)).toEqual([3]);
+    const log = await g.log();
+    expect(log).toContain("--state closed");
+    expect(log).toContain("issue edit 3 --remove-label bunker:awaiting-review");
+  });
+
+  test("releaseUnmergedReview clears the label of open issues whose PR closed unmerged, without re-queueing", async () => {
+    const g = await gh('[{"number":3},{"number":4}]');
+    expect(await releaseUnmergedReview(new Set([4]), process.cwd(), g.env)).toEqual([4]);
+    const log = await g.log();
+    expect(log).toContain("issue edit 4 --remove-label bunker:awaiting-review");
+    expect(log).not.toContain("issue edit 3");
+    expect(log).not.toContain("--add-label bunker:queued");
   });
 });
 

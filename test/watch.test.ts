@@ -840,7 +840,8 @@ describe("runWatch() shepherd stage", () => {
     await runWatch({ ...base, shepherd: true, cwd: repo, agent: fakeAgent(), signal: ctl.signal, log: (l) => { if (/pass 3 /.test(l)) ctl.abort(); } });
     const gh = await Bun.file(join(root, "gh.log")).text();
     expect(gh).toContain("issue edit 41 --remove-label bunker:queued --remove-label bunker:in-progress");
-    expect(gh.match(/--state closed/g)?.length).toBe(1);
+    expect(gh.match(/--label bunker:queued --state closed/g)?.length).toBe(1);
+    expect(gh.match(/--label bunker:awaiting-review --state closed/g)?.length).toBe(1);
   });
 
   test("manual-merge mode: PRs end labelled bunker:awaiting-review with a notification, nothing is armed or merged", async () => {

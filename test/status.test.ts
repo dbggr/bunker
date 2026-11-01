@@ -54,6 +54,21 @@ describe("reason extraction", () => {
   });
 });
 
+describe("awaiting-review issues", () => {
+  test("are reported apart from the queue", async () => {
+    const s = await collectStatus({ repo: repo(), alive: () => false, queue: async () => [], awaitingReview: async () => [{ number: 83, title: "ORM", createdAt: "", labels: [] }] });
+    expect(s.queue).toEqual([]);
+    expect(s.awaitingReview).toEqual([{ number: 83, title: "ORM" }]);
+    const text = formatStatus(s);
+    expect(text).toContain("awaiting review: 1");
+    expect(text).toContain("#83 ORM");
+  });
+
+  test("null when GitHub could not be asked", async () => {
+    expect((await collectStatus({ repo: repo(), alive: () => false })).awaitingReview).toBeNull();
+  });
+});
+
 describe("collectStatus()", () => {
   const dead = () => false;
 
@@ -176,6 +191,7 @@ describe("collectStatus()", () => {
         { number: 12, title: "bug", priority: "high", bug: true },
         { number: 11, title: "low one", priority: "low", bug: false },
       ],
+      awaitingReview: null,
       blocked: null,
       merged: [{ issue: 3, prUrl: "https://github.com/o/r/pull/9", at: expect.any(Number) }],
       noChange: [],
