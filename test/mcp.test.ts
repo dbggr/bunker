@@ -195,6 +195,17 @@ describe("watch caps", () => {
     expect(writes[dropin]).toBe(args("--interval 1 --max-cost-day 3 --max-cost-month 40"));
     expect(calls.map((c) => c[2])).toEqual(["daemon-reload", "restart"]);
   });
+  test("restart_watch with reload sends SIGHUP (systemctl reload) instead of restarting", async () => {
+    const { call, writes, calls } = setup({ readUnit: (p) => (p === dropin ? args("--max-cost-day 3") : null) });
+    expect((await call("restart_watch", { repo, reload: true, max_cost_day: 9 })).isError).toBe(false);
+    expect(writes[dropin]).toBe(args("--max-cost-day 9"));
+    expect(calls.map((c) => c[2])).toEqual(["daemon-reload", "reload"]);
+  });
+  test("the template reloads with SIGHUP and tells the watch where args.conf is", () => {
+    const unit = UNIT_TEMPLATE(["/usr/bin/bunker"], "/bin");
+    expect(unit).toContain("ExecReload=/bin/kill -HUP $MAINPID");
+    expect(unit).toContain("BUNKER_WATCH_ARGS_FILE=%E/systemd/user/%n.d/args.conf");
+  });
   test("spend and list_watches show the effective cap and its source", async () => {
     const { call } = setup({ readUnit: (p) => (p === dropin ? args("--max-cost-day 7") : null) });
     expect(JSON.parse((await call("spend", { repo })).text)).toEqual({

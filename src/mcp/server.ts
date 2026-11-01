@@ -42,7 +42,9 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%f
+Environment=BUNKER_WATCH_ARGS_FILE=%E/systemd/user/%n.d/args.conf
 ${path ? `Environment=${quoteExec(`PATH=${path}`)}\n` : ""}PassEnvironment=GH_TOKEN GITHUB_TOKEN ANTHROPIC_API_KEY
+ExecReload=/bin/kill -HUP $MAINPID
 ExecStart=${[...bunker.map(quoteExec), "watch", "--ui", "$BUNKER_WATCH_ARGS"].join(" ")}
 Restart=on-failure
 RestartSec=30
@@ -202,13 +204,13 @@ export function createMcp(d: McpDeps) {
     { name: "stop_watch", description: "Stop the bunker watch of a repo", inputSchema: schema({ repo: repoProp }, ["repo"]), call: (a) => systemctl("stop", repoArg(a)) },
     {
       name: "restart_watch",
-      description: "Restart the bunker watch of a repo; any flag given (e.g. max_cost_day) is merged into the flags it already runs with",
-      inputSchema: schema({ repo: repoProp, ...flagProps }, ["repo"]),
+      description: "Restart the bunker watch of a repo; any flag given (e.g. max_cost_day) is merged into the flags it already runs with. With reload: true it sends SIGHUP instead, so the caps are re-read without interrupting the runs in flight (interval and parallel still need a restart)",
+      inputSchema: schema({ repo: repoProp, ...flagProps, reload: { type: "boolean", description: "Send SIGHUP (systemctl reload) instead of restarting: spend caps are re-read, running steps are not interrupted" } }, ["repo"]),
       async call(a) {
         const repo = repoArg(a);
         const given = flagsArg(a);
         if (given.size) await syncUnit(repo, new Map([...readFlags(repo), ...given]));
-        return systemctl("restart", repo);
+        return systemctl(a.reload === true ? "reload" : "restart", repo);
       },
     },
     {
