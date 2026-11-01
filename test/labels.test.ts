@@ -131,3 +131,12 @@ test("bunker:exclude has create args and is an init label", async () => {
   expect(labelCreateArgs(EXCLUDE_LABEL)).toContain("--color");
   expect(LABELS).toContain(EXCLUDE_LABEL);
 });
+
+test("bunker:force is a known label, checked by doctor", async () => {
+  const { FORCE_LABEL, labelCreateArgs } = await import("../src/github/labels.ts");
+  const { LABELS, OPTIONAL_LABELS } = await import("../src/cli/commands/doctor.ts");
+  expect(FORCE_LABEL).toBe("bunker:force");
+  expect(labelCreateArgs(FORCE_LABEL)).toContain("--color");
+  expect(LABELS).toContain(FORCE_LABEL);
+  expect(OPTIONAL_LABELS).toContain(FORCE_LABEL);
+});
