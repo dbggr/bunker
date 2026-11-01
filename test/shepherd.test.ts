@@ -563,6 +563,57 @@ describe("shepherd pass", () => {
     expect(pass.entries[0]).toMatchObject({ action: "skipped" });
   });
 
+  const conflictedReview = async (w: World) => {
+    const sha = await w.branch("fix/7-thing", { "a.txt": "branch\n" });
+    await w.branch("tmp-main", { "a.txt": "main\n" });
+    await $`git -C ${w.repo} push -q origin tmp-main:main`;
+    w.state.prs.push(prJson(10, "fix/7-thing", sha, { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY", labels: [{ name: "bunker:review" }], autoMergeRequest: null }));
+    w.save();
+    return sha;
+  };
+  const savedState = (w: World) => JSON.parse(readFileSync(join(w.root, "state.json"), "utf8"));
+
+  test("conflicting bunker:review PR → resolved and pushed, label kept, auto-merge never touched", async () => {
+    const w = await world();
+    await conflictedReview(w);
+    const resolve = `printf 'both\\n' > a.txt && git add a.txt && git commit -qm "merge: resolve conflict"`;
+    const pass = await shepherd(w, fakeAgent(resolve)).pass();
+    expect(pass.entries[0]).toMatchObject({ action: "resolved-conflict" });
+    expect((await $`git -C ${w.origin} show fix/7-thing:a.txt`.text())).toBe("both\n");
+    expect(w.calls().some((c) => /auto|label|merge/i.test(c) && !c.startsWith("pr list"))).toBe(false);
+  });
+
+  test("a bunker:review resolution that touches a review path is pushed and flagged in a comment", async () => {
+    const w = await world();
+    await Bun.write(join(w.repo, ".bunker/config.toml"), 'review_paths = ["gate/**"]\n');
+    await $`git -C ${w.repo} add . && git -C ${w.repo} commit -q -m cfg && git -C ${w.repo} push -q origin main`;
+    await conflictedReview(w);
+    const resolve = `printf 'both\\n' > a.txt && mkdir -p gate && echo x > gate/g.txt && git add . && git commit -qm "merge: resolve conflict"`;
+    const pass = await shepherd(w, fakeAgent(resolve)).pass();
+    expect(pass.entries[0]).toMatchObject({ action: "resolved-conflict" });
+    expect(savedState(w).comments[10].some((c: string) => c.includes("gate/g.txt"))).toBe(true);
+  });
+
+  test("a failed bunker:review resolution comments once with the files and waits for the head or base to change", async () => {
+    const w = await world();
+    await conflictedReview(w);
+    const prompts: string[] = [];
+    expect((await shepherd(w, fakeAgent("true", prompts)).pass()).entries[0]).toMatchObject({ action: "failed" });
+    const comments: string[] = savedState(w).comments[10];
+    expect(comments.filter((c) => c.includes("a.txt"))).toHaveLength(1);
+    expect(savedState(w).labels[10] ?? []).not.toContain("bunker:failed");
+    // The comment is on the PR now: the next pass leaves it alone.
+    w.state.prs[0].comments = comments.map((body) => ({ body }));
+    w.save();
+    expect((await shepherd(w, fakeAgent("true", prompts)).pass()).entries[0]).toMatchObject({ action: "skipped" });
+    expect(prompts).toHaveLength(1);
+    // The base moves: it is tried again.
+    await w.branch("tmp-main2", { "b.txt": "more\n" }, "tmp-main");
+    await $`git -C ${w.repo} push -q origin tmp-main2:main`;
+    expect((await shepherd(w, fakeAgent("true", prompts)).pass()).entries[0]).toMatchObject({ action: "failed" });
+    expect(prompts).toHaveLength(2);
+  });
+
   test("conflict → an agent resolves it in the PR's worktree, verify runs, the changed diff is reviewed again, the merge is pushed", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "a.txt": "branch\n" });
