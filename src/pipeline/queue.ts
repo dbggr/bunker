@@ -1,7 +1,7 @@
 import { liveGhEnv } from "../github/identity.ts";
-import { EXCLUDE_LABEL, hasExcludeLabel, hasQueuedLabel } from "../github/labels.ts";
+import { ensureLabel, EXCLUDE_LABEL, FORCE_LABEL, hasExcludeLabel, hasForceLabel, hasQueuedLabel } from "../github/labels.ts";
 import { enforceLabeler } from "../github/labeler.ts";
-import { blockerRefs, isDone, isLiveShape, resumeBlocked, type IssueInfo } from "../github/issues.ts";
+import { blockerRefs, isDone, isLiveShape, isTrackingIssue, resumeBlocked, type IssueInfo } from "../github/issues.ts";
 import { markTrust } from "../github/trust.ts";
 import { listQueued } from "../github/queue.ts";
 import { listBunkerPrs } from "../github/prs.ts";
@@ -60,6 +60,17 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
     excludedNoted.add(n);
     emit(opts.onEvent, { type: "note", text: `skipping #${n}: labelled ${EXCLUDE_LABEL}` });
   };
+  const trackingNoted = new Set<number>();
+  const TRACKING_MARK = "<!-- bunker:tracking-issue -->";
+  /** Logs and comments (once) that a tracking issue is refused; an earlier comment, from this or a previous run, counts. */
+  const refuseTracking = async (n: number, comments: { body: string }[] | undefined) => {
+    if (trackingNoted.has(n)) return;
+    trackingNoted.add(n);
+    emit(opts.onEvent, { type: "note", text: `skipped #${n}: tracking issue` });
+    if (comments?.some((c) => c.body?.includes(TRACKING_MARK))) return;
+    const body = `${TRACKING_MARK}\nbunker skipped this issue: its task list only references other issues, so it looks like a tracking issue. Queue the issues it lists instead. Label this one \`${EXCLUDE_LABEL}\` to silence this, or \`${FORCE_LABEL}\` to have bunker implement it anyway.`;
+    await $`gh issue comment ${n} --body ${body}`.cwd(cwd).env(env).nothrow().quiet();
+  };
   const listIssues = async () => {
     const all = await listQueued(cwd, env);
     all.filter((q) => hasExcludeLabel(q.labels)).forEach((q) => noteExcluded(q.number));
@@ -69,6 +80,7 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
   const resumedNow = new Map<number, Queued>();
   const addResumed = (qs: Queued[]) => qs.forEach((q) => resumedNow.set(q.number, q));
   addResumed(await resumeBlocked(cwd, env));
+  await ensureLabel(FORCE_LABEL, cwd, env);
   for (const p of PRIORITY_LABELS) await $`gh label create ${p.name} --description ${"bunker queue priority"} --color ${p.color}`.cwd(cwd).env(env).nothrow().quiet();
   // The list can lag with a partial result too, so always list twice and merge.
   const first = await listIssues();
@@ -194,6 +206,10 @@ export async function runQueue({ limit = 5, listRetryMs = 3000, keepGoing, shoul
     if (live.state !== "OPEN" || !hasQueuedLabel(live.labels)) continue;
     if (hasExcludeLabel(live.labels)) {
       noteExcluded(q.number);
+      continue;
+    }
+    if (!hasForceLabel(live.labels) && isTrackingIssue(live.body)) {
+      await refuseTracking(q.number, live.comments);
       continue;
     }
     let waiting: number | undefined;
