@@ -22,6 +22,8 @@ import { collectStatus, formatStatus } from "./commands/status.ts";
 import { listAwaitingReview, listQueued } from "../github/queue.ts";
 import { listBlocked } from "../github/issues.ts";
 import { alive } from "./commands/watch.ts";
+import { activeIssues } from "./commands/cancel.ts";
+import { requestCancel } from "../core/cancel.ts";
 import { guardFlags, type CliValues } from "./args.ts";
 import { createShepherd } from "../pipeline/shepherd.ts";
 import { rerunHint } from "./pipeline-commands.ts";
@@ -183,4 +185,30 @@ export async function shepherdCommand(values: CliValues) {
   if (pass.paused) console.log(`bunker: paused on the Claude usage limit; ${rerunHint(pass.paused.resetAt)}`);
   if (pass.usage) console.log(`bunker: cost ${formatUsage(pass.usage)}`);
   process.exit(pass.paused ? 3 : pass.entries.some((e) => e.action === "gave-up" || e.action === "failed") ? 1 : 0);
+}
+
+export async function cancelCommand(values: CliValues, positionals: string[]) {
+  const others = Object.entries(values).filter(([k, v]) => k !== "verbose" && v !== false && v !== undefined);
+  const issue = Number(positionals[1]);
+  if (others.length || positionals.length !== 2 || !Number.isInteger(issue) || issue < 1) {
+    console.error("bunker: usage: bunker cancel <issue-number>");
+    process.exit(2);
+  }
+  const repo = (await $`git -C ${process.cwd()} rev-parse --show-toplevel`.nothrow().quiet().text()).trim();
+  if (!repo) {
+    console.error("bunker: cancel must be run inside a git repository");
+    process.exit(2);
+  }
+  const report = await collectStatus({ repo, alive });
+  if (!report.watcher.alive) {
+    console.error("bunker: no bunker watch is running here; nothing to cancel");
+    process.exit(1);
+  }
+  if (!activeIssues(report.current).includes(issue)) {
+    console.error(`bunker: #${issue} has no active run in this watch`);
+    process.exit(1);
+  }
+  requestCancel(repo, issue);
+  console.log(`bunker: asked the watch to cancel #${issue}; its container is stopped, the work kept as a stale tag and the labels removed within seconds`);
+  process.exit(0);
 }

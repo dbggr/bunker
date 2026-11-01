@@ -13,6 +13,7 @@ Usage:
   bunker watch                                keep working the queue unattended (implies --merge)
   bunker shepherd                             one pass over the open bunker PRs: fix red CI, update behind branches, resolve conflicts
   bunker status [--json]                      read-only watch summary: watcher, current run, queue, merged/failed with reasons, spend
+  bunker cancel <n>                           stop one issue's run in the running watch (work kept as a stale tag, labels removed)
   bunker mcp                                  stdio MCP server: manage local watches (systemd user units) from Claude
   bunker ui [--port <n>]                      shared live view: one tab per repo (default port 4321)
   bunker audit                                file improvement ideas as \`discovered\` issues
@@ -152,7 +153,12 @@ mcp:
   bunker mcp                 stdio MCP server over systemd user units bunker-watch@<repo>.service (installed on first start_watch). Tools:
                              list_watches, start_watch and restart_watch (also set max_cost_day, max_cost_month, interval, parallel), stop_watch,
                              watch_logs, spend (caps with their source), queue_issue (refused at or over the
-                             daily spend cap). It never starts, stops or alters a run through the hub. Add it: claude mcp add bunker -- bunker mcp
+                             daily spend cap), unqueue_issue (no-op while the issue runs), cancel_run (as bunker cancel). It never starts, stops or alters a run through the hub. Add it: claude mcp add bunker -- bunker mcp
+
+cancel:
+  bunker cancel <n>          run in the repo while \`bunker watch\` runs. Stops that issue's containers, keeps its work as a
+                             bunker/stale/<n>-<timestamp> tag, removes bunker:in-progress and bunker:queued and comments that it was
+                             cancelled; other runs go on and the issue is not marked bunker:failed. Exit 1 if nothing is running for it.
 
 status:
   bunker status              read-only, run in the repo. Prints whether \`bunker watch\` is alive (from .bunker/watch.lock: pid, version,

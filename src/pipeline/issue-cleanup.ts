@@ -23,6 +23,20 @@ export function cleanupInterrupted(): void {
   }
 }
 
+/** Commits what is uncommitted in the worktree and tags the branch `bunker/stale/<n>-<timestamp>`; undefined when there is no work (or the tag failed). */
+export async function tagStale(l: Pick<Live, "repo" | "worktree" | "branch" | "base">, number: number): Promise<string | undefined> {
+  const git = (...args: string[]) => $`git -C ${l.repo} ${args}`.nothrow().quiet();
+  const commits = Number((await git("rev-list", "--count", `${l.base}..${l.branch}`)).stdout.toString().trim()) || 0;
+  const dirty = existsSync(l.worktree) && (await $`git -C ${l.worktree} status --porcelain`.nothrow().quiet()).stdout.toString().trim() !== "";
+  if (dirty) {
+    await $`git -C ${l.worktree} add -A`.nothrow().quiet();
+    await $`git -C ${l.worktree} -c user.name=bunker -c user.email=bunker@localhost commit -q -m ${"wip: uncommitted changes from an interrupted bunker run"}`.nothrow().quiet();
+  }
+  if (commits === 0 && !dirty) return undefined;
+  const tag = `bunker/stale/${number}-${stamp()}`;
+  return (await git("tag", tag, l.branch)).exitCode === 0 ? tag : undefined;
+}
+
 /**
  * A forced stop: keep what the interrupted runs of this issue did as a `bunker/stale/<n>-<timestamp>` tag (uncommitted changes are
  * committed first), then remove the worktree and branch. Returns the tag, if there was work to keep.

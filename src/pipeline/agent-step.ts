@@ -1,3 +1,4 @@
+import { cancelRequested } from "../core/cancel.ts";
 import { redact } from "../core/redact.ts";
 import { emit, type EventTarget } from "../core/events.ts";
 import { formatDuration, stdinOf, type Agent, type AgentMode } from "../agents/agent.ts";
@@ -34,6 +35,8 @@ export async function agentStep(o: {
   const ctx: ExecContext = { ...o.ctx, ...(o.target.role === "implementer" || o.target.role === "reviewer" ? { role: o.target.role } : {}), limits: agentLimits(timeouts, o.signals) };
   /** Runs the command; a killed one throws IdleTimeout, a hung-but-finished one is noted and counts as done. */
   const exec = async (cmd: string[], prompt: string) => {
+    // A cancelled run (`bunker cancel`) starts no further session, not even a retry of one its killed container ended.
+    if (cancelRequested()) throw new Interrupted();
     const r = await o.sandbox.exec(cmd, { ...ctx, ...stdinOf(o.agent, prompt, o.mode) });
     if (r.timedOut) throw new IdleTimeout(timeoutMessage(o.target.role ?? "agent", r.timedOut, timeouts));
     if (r.hung) emit(o.target.onEvent, { type: "note", ...label, text: `warning: agent did not exit ${formatDuration(timeouts.completionTimeoutMs ?? DEFAULT_COMPLETION_MS)} after finishing; killed it and treating the step as completed` });

@@ -15,6 +15,8 @@ import { addWorktree, repoInfo, runSetup, tmpWorktrees, worktreeAdmin, type Work
 import { sessionStore, type Session } from "../worktree/session.ts";
 import { restoreSteering } from "../worktree/steering.ts";
 import { agentStep } from "./agent-step.ts";
+import { cancelRequested, issueScope } from "../core/cancel.ts";
+import { tagStale } from "./issue-cleanup.ts";
 import { Interrupted, UsageLimit, type Pause } from "./errors.ts";
 
 export interface ReviewOptions extends Timeouts {
@@ -347,11 +349,14 @@ export async function review({
         ...(step.implSessionId ? { implSessionId: step.implSessionId } : {}),
       };
     } else {
-      status = e instanceof Interrupted ? "interrupted" : e instanceof BadOutput ? "bad-output" : e instanceof IdleTimeout ? "idle-timeout" : "failed";
+      status = e instanceof Interrupted || cancelRequested() ? "interrupted" : e instanceof BadOutput ? "bad-output" : e instanceof IdleTimeout ? "idle-timeout" : "failed";
       error = redact(e instanceof Error ? e.message : String(e));
       failedStep = inSetup ? "setup" : `${step.role} round ${step.round}`;
     }
   } finally {
+    // A cancelled run keeps what it did as a stale tag; the worktree below is removed.
+    const owner = issueScope.getStore();
+    if (owner !== undefined && cancelRequested()) await tagStale({ repo: cwd, worktree: wt.path, branch: wt.branch, base }, owner).catch(() => {});
     await store.done();
     // A paused run keeps its worktree: whatever the agent had not committed yet is the work.
     if (pause) tmpWorktrees.delete(wt.path); // kept for the resume

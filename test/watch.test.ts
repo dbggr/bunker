@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { $ } from "bun";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { noSandbox, type Agent, type Sandbox } from "../src/index.ts";
 import { parseDuration, runWatch } from "../src/cli/commands/watch.ts";
+import { requestCancel } from "../src/core/cancel.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -1005,5 +1006,60 @@ describe("runWatch() notifications", () => {
       log: (l) => { if (/pass 1 /.test(l)) ctl.abort(); },
     });
     expect(await Bun.file(join(root, "comments.log")).text()).not.toContain("@");
+  });
+});
+
+describe("runWatch() cancel", () => {
+  // The agent runs on the host here (no container), so "stopping its container" is killing its `sleep`.
+  const slowAgent = (phase: "write" | "review", pidFile: string): Agent => ({
+    command(_prompt, mode = "write") {
+      const hang = `echo $$ > ${pidFile}; exec sleep 30`;
+      if (mode === "write") return ["sh", "-c", phase === "write" ? hang : `echo hi > f-$(date +%s%N).txt && git add . && git commit -qm "feat: impl"`];
+      return ["sh", "-c", phase === "review" ? hang : `echo '${APPROVE}'`];
+    },
+  });
+
+  for (const phase of ["write", "review"] as const) {
+    test(`cancelling during ${phase === "write" ? "implement" : "review"} ends that run without failing it`, async () => {
+      const { repo, root } = await setup(three.slice(0, 1));
+      const ctl = new AbortController();
+      const lines: string[] = [];
+      const pidFile = join(root, "agent.pid");
+      let requested = false;
+      const done = runWatch({
+        ...base, cwd: repo, agent: slowAgent(phase, pidFile), signal: ctl.signal, cancelPollMs: 50, log: (l) => lines.push(l),
+        stopIssue: () => process.kill(Number(readFileSync(pidFile, "utf8"))),
+        abandonIssue: async () => undefined,
+        onEvent: (e) => {
+          const stage = phase === "write" ? "implement" : "review";
+          if (!requested && e.type === "stage" && e.issue === 1 && e.name === stage) {
+            requested = true;
+            setTimeout(() => requestCancel(repo, 1), 800);
+          }
+        },
+      });
+      for (let i = 0; i < 200 && !lines.some((l) => l.includes("#1 cancelled")); i++) await Bun.sleep(100);
+      ctl.abort();
+      await done;
+      expect(lines.some((l) => l.includes("#1 cancelled"))).toBe(true);
+      const gh = await Bun.file(join(root, "gh.log")).text();
+      expect(gh).toMatch(/issue edit 1 .*--remove-label bunker:queued/);
+      expect(gh).toMatch(/--remove-label bunker:in-progress/);
+      expect(gh).not.toContain("--add-label bunker:failed");
+      expect(await Bun.file(join(root, "comments.log")).text()).toContain("cancelled");
+      expect(await Bun.file(join(root, "comments.log")).text()).not.toContain("did not merge");
+    });
+  }
+
+  test("a request for an issue that is not running is ignored", async () => {
+    const { repo } = await setup(three.slice(0, 1));
+    const ctl = new AbortController();
+    const lines: string[] = [];
+    const done = runWatch({ ...base, cwd: repo, agent: fakeAgent(), signal: ctl.signal, cancelPollMs: 20, log: (l) => lines.push(l) });
+    requestCancel(repo, 99);
+    for (let i = 0; i < 100 && !lines.some((l) => l.includes("cancel #99")); i++) await Bun.sleep(50);
+    ctl.abort();
+    await done;
+    expect(lines.some((l) => l.includes("cancel #99: no active run"))).toBe(true);
   });
 });
