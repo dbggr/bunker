@@ -38,6 +38,8 @@ build and install the latest v* release tag
 | Flag | What it does | Default |
 | --- | --- | --- |
 | `--channel main` | pull main instead of the latest v* release tag | latest v* tag |
+| `--when-idle` | instead of refusing while a watch runs here: ask it to finish its current steps and start no new work, wait for it to exit, update, then restart it (a `bunker-watch@` systemd unit is restarted; any other watch is left for you to start) | refuse |
+| `--restart-all` | with `--when-idle`: drain and restart every active bunker watch unit on the machine, so all repos run the new binary | off |
 
 ```sh
 bunker self-update --channel main
@@ -214,7 +216,7 @@ stdio MCP server: manage local watches (systemd user units) from Claude
 
 | Flag | What it does | Default |
 | --- | --- | --- |
-| `bunker mcp` | stdio MCP server over systemd user units `bunker-watch@<repo>.service` (the template is installed on the first `start_watch`). Tools: `list_watches` (unit state, repo, current run, effective caps), `start_watch` and `restart_watch` (both take `interval`, `parallel`, `max_cost_day` and `max_cost_month`, written to the instance's `args.conf`, which the unit's `ExecStart` reads through `$BUNKER_WATCH_ARGS`; a systemd override that replaces `ExecStart` must keep that variable, `bunker doctor` flags one that drops it), `stop_watch`, `watch_logs` (last N lines), `spend` (today/month against the effective caps, each with its source: flag, repo or global), `queue_issue` (adds `bunker:queued`; refused at or over the daily spend cap), `unqueue_issue` (removes `bunker:queued`; does nothing, with a message pointing to `cancel_run`, when the issue is running), `cancel_run` (as `bunker cancel`). It never starts, stops or alters a run through the hub |  |
+| `bunker mcp` | stdio MCP server over systemd user units `bunker-watch@<repo>.service` (the template is installed on the first `start_watch`). Tools: `list_watches` (unit state, repo, current run, effective caps), `start_watch` and `restart_watch` (both take `interval`, `parallel`, `max_cost_day` and `max_cost_month`, written to the instance's `args.conf`, which the unit's `ExecStart` reads through `$BUNKER_WATCH_ARGS`; a systemd override that replaces `ExecStart` must keep that variable, `bunker doctor` flags one that drops it), `restart_watch` also takes `reload: true`, which sends SIGHUP (`systemctl reload`) so the spend caps are re-read without interrupting runs in flight; the same re-read happens at the start of every pass), `stop_watch`, `watch_logs` (last N lines), `spend` (today/month against the effective caps, each with its source: flag, repo or global), `queue_issue` (adds `bunker:queued`; refused at or over the daily spend cap), `unqueue_issue` (removes `bunker:queued`; does nothing, with a message pointing to `cancel_run`, when the issue is running), `cancel_run` (as `bunker cancel`). It never starts, stops or alters a run through the hub |  |
 
 ```sh
 claude mcp add bunker -- bunker mcp
@@ -375,7 +377,7 @@ bunker clean --yes --logs 14
 | `bunker:force` | set by you on an issue whose task list only references other issues: `queue` / `watch` refuse such a tracking issue (`skipped #N: tracking issue`, one comment) unless it carries this label; label tracking issues `bunker:exclude` instead |
 | `bunker:failed` | set on a failed issue instead of `bunker:queued`, never retried automatically; also set on a PR after 3 failed shepherd fix attempts |
 | `bunker:awaiting-review` | set on an open PR in manual-merge mode (`--no-merge`, `merge = "manual"`); bunker never merges it. Also set on an issue whose run ended `needs-review` or `awaiting-review`, replacing `bunker:queued` and `bunker:in-progress`; `bunker status` lists these apart from the queue, and the label is removed once the PR merges or closes (relabel `bunker:queued` to retry after an unmerged close) |
-| `bunker:review` | set on a PR whose changes a human must review (bunker leaves auto-merge off); the shepherd leaves it for a human to merge |
+| `bunker:review` | set on a PR whose changes a human must review (bunker leaves auto-merge off); the shepherd only updates its branch and resolves conflicts, a human merges it |
 | `bunker-blocked` | set on an issue whose agent reported a blocked_by item; its blocker is filed as `discovered` |
 | `discovered` | set by `audit` on issues it files (with `severity:*`); `triage` checks them |
 | `priority:high`, `priority:medium`, `priority:low` | order the queue; no priority sits between medium and low; `bug` issues go first within a priority |

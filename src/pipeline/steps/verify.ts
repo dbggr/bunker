@@ -1,3 +1,4 @@
+import { exitLabel } from "../../core/exit.ts";
 import { redact } from "../../core/redact.ts";
 import { emit, emitStage } from "../../core/events.ts";
 import { tailLines, testCounts } from "../../core/output.ts";
@@ -53,15 +54,15 @@ async function verifyOnce(ctx: IssueRunContext, input: VerifyInput, extra: Parti
   // The issue worktree is a fresh checkout too (the agent ran in review()'s own), so it needs setup as well.
   const prep = await runSetup(sandbox, { worktree, gitCommonDir }, setup, timeouts);
   if (prep) {
-    log(`setup (exit ${prep.code})`, prep.stdout);
+    log(`setup (exit ${exitLabel(prep.code)})`, prep.stdout);
     if (prep.timedOut) {
       const error = timeoutMessage("setup", prep.timedOut, timeouts);
       failNote(error, prep.stdout);
       return done(fail("idle-timeout", { review: result, ...extra, error }));
     }
     if (prep.code !== 0) {
-      failNote(`setup failed (exit ${prep.code})`, prep.stdout);
-      return done(fail("failed", { review: result, ...extra, error: `setup failed (exit ${prep.code}):\n${tailLines(prep.stdout).slice(-VERIFY_TAIL)}` }));
+      failNote(`setup failed (exit ${exitLabel(prep.code)})`, prep.stdout);
+      return done(fail("failed", { review: result, ...extra, error: `setup failed (exit ${exitLabel(prep.code)}):\n${tailLines(prep.stdout).slice(-VERIFY_TAIL)}` }));
     }
   }
   const services = input.services && Object.keys(input.services).length ? input.services : undefined;
@@ -82,15 +83,15 @@ async function verifyOnce(ctx: IssueRunContext, input: VerifyInput, extra: Parti
     }
     if (input.prepare) {
       const out = await sandbox.exec(["sh", "-c", `(${input.prepare}) 2>&1`], { worktree, gitCommonDir, limits: stepLimits(timeouts), isolate: !verifyNetwork, ...(set ? { network: set.network } : {}) });
-      log(`prepare (exit ${out.code})`, out.stdout);
+      log(`prepare (exit ${exitLabel(out.code)})`, out.stdout);
       if (out.timedOut) {
         const error = timeoutMessage("prepare", out.timedOut, timeouts);
         failNote(error, out.stdout);
         return done(fail("idle-timeout", { review: result, ...extra, error }));
       }
       if (out.code !== 0) {
-        failNote(`prepare failed (exit ${out.code})`, out.stdout);
-        return done(fail("failed", { review: result, ...extra, error: `prepare failed (exit ${out.code}):\n${tailLines(out.stdout).slice(-VERIFY_TAIL)}` }));
+        failNote(`prepare failed (exit ${exitLabel(out.code)})`, out.stdout);
+        return done(fail("failed", { review: result, ...extra, error: `prepare failed (exit ${exitLabel(out.code)}):\n${tailLines(out.stdout).slice(-VERIFY_TAIL)}` }));
       }
     }
     return await runCommands(set?.network);
@@ -127,16 +128,16 @@ async function verifyOnce(ctx: IssueRunContext, input: VerifyInput, extra: Parti
     code = out.code;
     text = out.stdout;
   }
-  log(`verify ${label} (exit ${code})`, text);
+  log(`verify ${label} (exit ${exitLabel(code)})`, text);
   if (timedOut) {
     const error = timeoutMessage("verify", timedOut, timeouts);
     failNote(error, text);
     return done(fail("idle-timeout", { review: result, ...extra, error, verifyOutput: tailLines(text).slice(-VERIFY_TAIL) }));
   }
   if (code !== 0) {
-    failNote(`verify failed (exit ${code})`, text);
+    failNote(`verify failed (exit ${exitLabel(code)})`, text);
     const verifyOutput = tailLines(text).slice(-VERIFY_TAIL);
-    if (attempt < attempts) return { kind: "retry", text: redact(`verify failed (exit ${code}):\n${verifyOutput}`) };
+    if (attempt < attempts) return { kind: "retry", text: redact(`verify failed (exit ${exitLabel(code)}):\n${verifyOutput}`) };
     return done(fail("verify-failed", { review: result, ...extra, verifyOutput }));
   }
   const counts = testCounts(text);

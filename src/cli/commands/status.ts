@@ -93,6 +93,11 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
   return {
     /** The merged and failed records as they stand. */
     snapshot: () => ({ merged: state.merged, failed: state.failed, current: state.current }),
+    /** The caps changed (a reload): the status file shows the ones in force. */
+    setCaps(caps: SpendCaps) {
+      state.caps = caps;
+      save();
+    },
     /** Ctrl-C was pressed: the hub shows the tab as stopping. */
     stopping() {
       stopping = true;

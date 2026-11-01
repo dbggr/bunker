@@ -32,6 +32,8 @@ const MARK = {
   fix: "<!-- bunker-shepherd:fix -->",
   conflict: "<!-- bunker-shepherd:conflict -->",
   gaveUp: "<!-- bunker-shepherd:gave-up -->",
+  /** A review-held PR's conflict resolution failed at this head and base: not tried again until one moves. */
+  reviewConflict: (head: string, base: string) => `<!-- bunker-shepherd:review-conflict:${head}:${base} -->`,
   review: (id: string) => `<!-- bunker-shepherd:review:${id} -->`,
 };
 
@@ -361,18 +363,21 @@ export function createShepherd(o: ShepherdOptions) {
    * Checks the PR branch out in a throwaway worktree, runs `edit` on it (agent work, verify), and pushes what it produced.
    * `edit` returns the commit count it made or throws Refused with the reason the work is not pushed.
    */
-  const inWorktree = async (pr: BunkerPr, edit: (w: { worktree: string; repo: string; gitCommonDir: string; baseSha: string; headSha: string; identity: string[] }) => Promise<void>): Promise<void> => {
+  /** The remote the shepherd fetches from and pushes to: origin, or its https URL when a token is in use. */
+  const remoteOf = async (repo: string): Promise<string> => {
+    if (!token) return "origin";
+    const url = (await $`git -C ${repo} remote get-url origin`.nothrow().quiet().text()).trim();
+    const m = /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(url);
+    return m ? `https://github.com/${m[1]}.git` : "origin";
+  };
+
+  const inWorktree = async (pr: BunkerPr, edit: (w: { worktree: string; repo: string; gitCommonDir: string; baseSha: string; headSha: string; identity: string[] }) => Promise<void>, onReviewPaths?: (files: string[]) => void): Promise<void> => {
     const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
     const gitCommonDir = (await $`git -C ${repo} rev-parse --path-format=absolute --git-common-dir`.text()).trim();
     const exclude = join(gitCommonDir, "info", "exclude");
     const excluded = (await Bun.file(exclude).exists()) ? await Bun.file(exclude).text() : "";
     if (!excluded.split("\n").includes("/.worktrees/")) await appendFile(exclude, `${excluded && !excluded.endsWith("\n") ? "\n" : ""}/.worktrees/\n`);
-    let remote = "origin";
-    if (token) {
-      const url = (await $`git -C ${repo} remote get-url origin`.nothrow().quiet().text()).trim();
-      const m = /github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/.exec(url);
-      if (m) remote = `https://github.com/${m[1]}.git`;
-    }
+    const remote = await remoteOf(repo);
     const headRef = `refs/bunker/shepherd/${pr.number}`;
     const baseRef = `refs/bunker/shepherd/${pr.number}-base`;
     const fetched = await $`git ${gitCfg} -C ${repo} fetch -q --no-write-fetch-head ${remote} ${`+refs/heads/${pr.branch}:${headRef}`} ${`+refs/heads/${pr.base}:${baseRef}`}`.env(env).nothrow().quiet();
@@ -404,7 +409,8 @@ export function createShepherd(o: ShepherdOptions) {
       const own = async (rev: string, from: string) => (await $`git -C ${worktree} diff -z --name-only --no-renames ${from} ${rev}`.nothrow().quiet()).stdout.toString().split("\0").filter(Boolean);
       const before = new Set((await own(headSha, (await $`git -C ${worktree} merge-base ${baseSha} ${headSha}`.nothrow().quiet().text()).trim() || baseSha)).filter((f) => isReviewPath(f, reviewPaths)));
       const added = (await own(tip, baseSha)).filter((f) => isReviewPath(f, reviewPaths) && !before.has(f));
-      if (added.length) throw new Refused(`the fix would change ${added.slice(0, 5).join(", ")}, which only a human may change`);
+      if (added.length && onReviewPaths) onReviewPaths(added);
+      else if (added.length) throw new Refused(`the fix would change ${added.slice(0, 5).join(", ")}, which only a human may change`);
       const push = await $`git ${gitCfg} -C ${worktree} push -q ${`--force-with-lease=refs/heads/${pr.branch}:${headSha}`} ${remote} ${`HEAD:refs/heads/${pr.branch}`}`.env(env).nothrow().quiet();
       if (push.exitCode !== 0) throw new Refused(`git push failed:\n${push.stderr}`);
     } finally {
@@ -512,11 +518,24 @@ export function createShepherd(o: ShepherdOptions) {
   };
 
   /** Merges the base into the PR branch; an agent resolves conflicts, verify runs, and a changed diff is reviewed again. */
-  const resolveConflict = async (pr: BunkerPr): Promise<ShepherdEntry> => {
-    const attempts = attemptsOf(pr, MARK.conflict, isOwn);
-    if (attempts >= max) return giveUp(pr, `the merge conflict with ${pr.base} is still there after ${attempts} attempt(s)`);
-    await mark(pr, `${MARK.conflict}\nbunker: resolving a conflict with ${codeSpan(pr.base)} (attempt ${attempts + 1} of ${max}).`);
-    note(pr, `resolving a conflict with ${pr.base}`);
+  const resolveConflict = async (pr: BunkerPr, held = false): Promise<ShepherdEntry> => {
+    let failMarker = "";
+    const conflicted: string[] = [];
+    const flagged: string[] = [];
+    if (held) {
+      // A review-held PR is never given up on: a failed resolution is reported once, then left until its head or base moves.
+      const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
+      const ls = await $`git ${gitCfg} -C ${repo} ls-remote ${await remoteOf(repo)} ${`refs/heads/${pr.base}`}`.env(env).nothrow().quiet();
+      const baseNow = ls.exitCode === 0 ? ls.stdout.toString().split(/\s/)[0] ?? "" : "";
+      failMarker = MARK.reviewConflict(pr.headSha, baseNow);
+      if (baseNow && pr.comments.some((c) => isOwn(c.author) && c.body.includes(failMarker))) return entry(pr, "skipped", "bunker:review: the conflict resolution failed at this head and base");
+      note(pr, `resolving a conflict with ${pr.base} (held for review: auto-merge stays off)`);
+    } else {
+      const attempts = attemptsOf(pr, MARK.conflict, isOwn);
+      if (attempts >= max) return giveUp(pr, `the merge conflict with ${pr.base} is still there after ${attempts} attempt(s)`);
+      await mark(pr, `${MARK.conflict}\nbunker: resolving a conflict with ${codeSpan(pr.base)} (attempt ${attempts + 1} of ${max}).`);
+      note(pr, `resolving a conflict with ${pr.base}`);
+    }
     try {
       await inWorktree(pr, async (w) => {
         const verify = await setupAndVerify(w, true);
@@ -524,6 +543,7 @@ export function createShepherd(o: ShepherdOptions) {
         const unmerged = async () => (await $`git -C ${w.worktree} diff --name-only --diff-filter=U`.text()).split("\n").filter(Boolean);
         if (merged.exitCode !== 0) {
           const files = await unmerged();
+          conflicted.push(...files);
           if (!files.length) throw new Refused(`git merge failed:\n${merged.stderr}${merged.stdout}`);
           await runAgent(o.agent, "write",
             `Merging ${pr.base} into the branch ${pr.branch} of pull request #${pr.number} left conflicts in:\n${files.map((f) => `- ${f}`).join("\n")}\n\n` +
@@ -546,10 +566,17 @@ export function createShepherd(o: ShepherdOptions) {
           const verdict = extractOutput(text, verdictOutput);
           if (!verdict.ok || !verdict.value.approved) throw new Refused(`the reviewer did not approve the conflict resolution: ${verdict.ok ? verdict.value.required_changes.join("; ") : verdict.error}`);
         }
-      });
+      }, held ? (files) => flagged.push(...files) : undefined);
+      if (flagged.length) await comment(pr, `bunker: resolving the conflict with ${codeSpan(pr.base)} changed human-review path(s): ${flagged.slice(0, 10).map((f) => codeSpan(f)).join(", ")}. Please check them before merging.`);
       return entry(pr, "resolved-conflict");
     } catch (e) {
-      if (e instanceof Refused) return entry(pr, "failed", e.message);
+      if (e instanceof Refused) {
+        if (held) {
+          const baseSha = failMarker.slice(0, -4).split(":").pop() ?? "";
+          if (baseSha) await mark(pr, `${failMarker}\nbunker: could not resolve the conflict with ${codeSpan(pr.base)} on this PR. Conflicting files: ${conflicted.length ? conflicted.map((f) => codeSpan(f)).join(", ") : "(none reported)"}. Reason: ${codeSpan(e.message.split("\n")[0] ?? "")}. The PR stays labelled \`${REVIEW_LABEL}\`; bunker will try again when its head or the base changes.`);
+        }
+        return entry(pr, "failed", e.message);
+      }
       throw e;
     }
   };
@@ -565,9 +592,10 @@ export function createShepherd(o: ShepherdOptions) {
     await resolveOwn();
     const skip = skipReason(pr);
     if (skip) {
-      // Updating the branch changes no PR content, so a review-gated PR still gets it (but no code fixes).
+      // A review-gated PR still gets its branch updated and its conflicts resolved (no auto-merge, no other code fixes).
       const reviewGated = pr.labels.includes(REVIEW_LABEL) && !pr.labels.includes(FAILED_LABEL) && !pr.isDraft;
-      if (reviewGated && pr.mergeState === "BEHIND" && pr.mergeable !== "CONFLICTING") return updateBranch(pr);
+      if (reviewGated && (pr.mergeable === "CONFLICTING" || pr.mergeState === "DIRTY")) return resolveConflict(pr, true);
+      if (reviewGated && pr.mergeState === "BEHIND") return updateBranch(pr);
       return entry(pr, "skipped", skip);
     }
     if (pr.mergeable === "CONFLICTING" || pr.mergeState === "DIRTY") return resolveConflict(pr);

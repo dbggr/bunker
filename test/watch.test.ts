@@ -373,6 +373,40 @@ describe("runWatch()", () => {
     expect(lines.some((l) => /monthly spend cap/i.test(l))).toBe(true);
   });
 
+  test("a cap raised mid-watch takes effect on a SIGHUP without a restart", async () => {
+    const { repo } = await setup(three);
+    let cap = 20;
+    const lines: string[] = [];
+    const ctl = new AbortController();
+    const s = await runWatch({
+      ...base, cwd: repo, agent: fakeAgent({ cost: 15 }), maxCostDayUsd: 20, reloadCaps: async () => ({ day: cap }), forMs: 30_000, signal: ctl.signal,
+      log: (l) => {
+        lines.push(l);
+        if (/spend cap reached/i.test(l) && cap === 20) { cap = 500; process.emit("SIGHUP"); }
+        if (/pass \d+ .*\$500/.test(l)) ctl.abort();
+      },
+    });
+    expect(s.merged).toBe(3);
+    expect(lines.some((l) => /spend caps reloaded/i.test(l))).toBe(true);
+    expect(lines.some((l) => /pass \d+ .*\$500/.test(l))).toBe(true);
+  });
+
+  test("a reload while a run is in flight leaves the run alone and the next pass shows the new cap", async () => {
+    const { repo } = await setup(three.slice(0, 1));
+    let cap = 100;
+    const lines: string[] = [];
+    const ctl = new AbortController();
+    let sent = false;
+    const s = await runWatch({
+      ...base, cwd: repo, agent: fakeAgent({ slow: 1 }), maxCostDayUsd: 100, reloadCaps: async () => ({ day: cap }), forMs: 30_000, signal: ctl.signal,
+      onEvent: (e) => { if (!sent && e.type === "stage") { sent = true; cap = 250; process.emit("SIGHUP"); } },
+      log: (l) => { lines.push(l); if (/pass 1 /.test(l)) ctl.abort(); },
+    });
+    expect(s.merged).toBe(1);
+    expect(s.failed).toBe(0);
+    expect(lines.some((l) => /pass 1 .*\$250/.test(l))).toBe(true);
+  });
+
   test("no caps: never stops, and the pass summary reports spend", async () => {
     const { repo } = await setup(three);
     await Bun.write(join(repo, ".bunker", "watch-spend.json"), JSON.stringify([{ at: Date.now() - 1000, usd: 500 }]));
