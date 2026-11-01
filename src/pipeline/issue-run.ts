@@ -76,7 +76,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
     if (status === "merged") emitStage({ onEvent }, "merged");
     else if (status === "awaiting-merge") emitStage({ onEvent }, "waiting for merge", extra.prUrl);
     else if (status === "awaiting-review") emitStage({ onEvent }, "awaiting review", extra.prUrl);
-    else if (!["pr-opened", "needs-review", "awaiting-merge", "awaiting-review", "no-change"].includes(status)) {
+    else if (!["pr-opened", "interrupted", "needs-review", "awaiting-merge", "awaiting-review", "no-change"].includes(status)) {
       const reason = failureReason(status, logPath, { ...(extra.error ? { error: extra.error } : {}), ...(extra.verifyOutput ? { verifyOutput: extra.verifyOutput } : {}) });
       emit(onEvent, { type: "stage", name: "failed", text: status, reason });
     }
@@ -228,6 +228,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
     Object.assign(result, { rounds: [...result.rounds, ...fix.rounds], commits: [...result.commits, ...fix.commits], ...(usage ? { usage } : {}), ...(fix.implSession ? { implSession: fix.implSession } : {}) });
     spent.usage = result.usage;
     if (fix.status === "approved") return undefined;
+    if (fix.status === "interrupted") return fail("interrupted", { review: result });
     const error = fix.status === "paused-usage-limit" ? `paused on the Claude usage limit during the verify fix round: ${fix.error ?? ""}` : fix.error;
     return fail(fix.status === "paused-usage-limit" ? "failed" : fix.status, { review: result, ...(error ? { error } : {}) });
   };

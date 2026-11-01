@@ -10,7 +10,8 @@ import { review } from "../pipeline/review.ts";
 import { run, runAll } from "../pipeline/run.ts";
 import { worktreeAdmin } from "../worktree/admin.ts";
 import { SkillError, loadSkills } from "../core/skills.ts";
-import { docker, stopLiveContainers } from "../sandboxes/container.ts";
+import { docker, stopLiveContainers, stopOrphanedContainers } from "../sandboxes/container.ts";
+import { shutdown } from "../core/shutdown.ts";
 import { abandonLive } from "../pipeline/issue-cleanup.ts";
 import { createInterrupt } from "./commands/interrupt.ts";
 import { noSandbox } from "../sandboxes/no-sandbox.ts";
@@ -302,6 +303,8 @@ if (values.audit) {
 } else if (watchOpts) {
   const reviewer = reviewerAgent();
   const ctl = new AbortController();
+  shutdown.signal = ctl.signal;
+  const repoRoot = (await $`git rev-parse --show-toplevel`.text()).trim();
   // The first signal stops new work and finishes the in-flight steps (exit 0); a second one kills the agents, re-queues and exits 130.
   const intr = createInterrupt({
     ctl,
@@ -320,7 +323,7 @@ if (values.audit) {
   const notify = desktopNotifier({ enabled: !values["no-notify"] && repoCfg.notify.enabled !== false && !process.env.BUNKER_TEST_NO_NOTIFY });
     const mention = await resolveMention(process.cwd(), liveGhEnv(), repoCfg.notify.github_user);
   try {
-    await runWatch({ notify, mention, onEvent: watchEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, manual, ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, logsDays: repoCfg.clean.logs_days ?? 30, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
+    await runWatch({ notify, mention, onEvent: watchEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, manual, ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, ...(values["no-sandbox"] ? {} : { stopOrphans: (l: (line: string) => void) => stopOrphanedContainers("docker", repoRoot, l) }), logsDays: repoCfg.clean.logs_days ?? 30, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();

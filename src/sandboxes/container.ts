@@ -115,6 +115,30 @@ export function stopLiveContainers() {
   liveNetworks.clear();
 }
 
+/** The issue number of a `.worktrees/<n>-<slug>` worktree. */
+const issueOf = (worktree: string) => /\/\.worktrees\/(\d+)-[^/]*$/.exec(worktree)?.[1];
+
+const pidAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+
+/** Stops containers labelled for `repo` whose watcher (bunker.pid) is gone: a killed watcher leaves its agents running. */
+export async function stopOrphanedContainers(bin: string, repo: string, log: (line: string) => void, alive: (pid: number) => boolean = pidAlive) {
+  const ps = Bun.spawn([bin, "ps", "--filter", `label=bunker.repo=${repo}`, "--format", '{{.Names}}\t{{.Label "bunker.pid"}}\t{{.Label "bunker.issue"}}'], { stdout: "pipe", stderr: "ignore" });
+  const [out] = await Promise.all([new Response(ps.stdout).text(), ps.exited]).catch(() => [""]);
+  for (const line of out.split("\n")) {
+    const [name, pid, issue] = line.split("\t");
+    if (!name || !pid || !/^\d+$/.test(pid) || alive(Number(pid))) continue;
+    await Bun.spawn([bin, "kill", name], { stdio: ["ignore", "ignore", "ignore"] }).exited;
+    log(`bunker: stopped orphaned container ${name}${issue ? ` (#${issue})` : ""}`);
+  }
+}
+
 /** The bridge non-isolated containers join. */
 export const AGENT_NETWORK = "bunker-agent";
 
@@ -265,6 +289,9 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
         bin, "run", "--rm", ...(stdin === undefined ? [] : ["-i"]), "--name", cname,
         ...userArgs,
         // Locked at creation: no capabilities, no privilege gain via setuid binaries, bounded processes and memory.
+        // Names the watcher that started it, so a later watch can stop the container if this one is killed.
+        "--label", `bunker.pid=${process.pid}`, "--label", `bunker.repo=${dirname(gitCommonDir)}`,
+        ...(issueOf(worktree) ? ["--label", `bunker.issue=${issueOf(worktree)}`] : []),
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "--pids-limit", String(opts.limits?.pids ?? DEFAULT_LIMITS.pids), "--memory", opts.limits?.memory ?? DEFAULT_LIMITS.memory,
         "-e", "HOME=/tmp",
