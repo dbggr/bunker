@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { combine, isFinished, parseRun, resolveRun, section4, totalsFor, wrongMergedPrs, type PrState, type Totals } from "./v1-readiness-lib.ts";
+import { combine, isFinished, isGatedLogged, parseRun, resolveRun, section4, totalsFor, wrongMergedPrs, type PrState, type Totals } from "./v1-readiness-lib.ts";
 
 const { values } = parseArgs({
   options: { runs: { type: "string", multiple: true }, repo: { type: "string", multiple: true }, since: { type: "string" }, json: { type: "boolean" }, refresh: { type: "boolean" } },
@@ -49,7 +49,8 @@ const classify = (status: string, reason = "") => CLASSES.find(([, re]) => re.te
 const count = <T>(xs: T[], f: (x: T) => string) => xs.reduce((m, x) => m.set(f(x), (m.get(f(x)) ?? 0) + 1), new Map<string, number>());
 const median = (xs: number[]) => (xs.length ? xs[Math.floor(xs.length / 2)]! : 0);
 
-interface Pr extends PrState { title: string; headRefName: string; body: string; createdAt: string }
+interface Pr extends PrState {
+  author?: { login: string }; title: string; headRefName: string; body: string; createdAt: string }
 interface WfRun { headBranch: string; conclusion: string; event: string; databaseId: number; createdAt: string }
 interface Ev { event: string; label?: { name: string }; actor?: { login: string }; created_at: string }
 interface MainRun { conclusion: string; headSha: string; createdAt: string }
@@ -69,7 +70,7 @@ async function analyze(runsDir: string, repo: string) {
   }
 
   // ---- GitHub: PRs, CI, re-queues ----
-  const prs = await gh<Pr[]>("prs", ["pr", "list", "-R", repo, "--state", "all", "--limit", "1000", "--json", "number,title,state,headRefName,body,createdAt,mergedAt,mergeCommit"]);
+  const prs = await gh<Pr[]>("prs", ["pr", "list", "-R", repo, "--state", "all", "--limit", "1000", "--json", "number,title,state,headRefName,body,createdAt,mergedAt,mergeCommit,author"]);
   const BUNKER_PR = /^Round \d+: /m; // every PR body bunker writes has its review rounds; hand-written ones don't
   const inWindow = prs.filter((p) => p.createdAt >= since);
   const bunkerPrs = inWindow.filter((p) => BUNKER_PR.test(p.body));
@@ -89,6 +90,16 @@ async function analyze(runsDir: string, repo: string) {
   const mainRuns = (await gh<MainRun[]>("main-ci", ["run", "list", "-R", repo, "--branch", "main", "--limit", "1000", "--json", "conclusion,headSha,createdAt"])).filter((r) => r.createdAt >= since);
   const redShas = mainRuns.filter((r) => r.conclusion === "failure").map((r) => r.headSha);
   const wrong = wrongMergedPrs(prs, redShas, reverts.map((l) => l.split("\t")[1]!));
+
+  // A gated run's PR that merged: did a human push commits to it? (a commit author other than the PR author)
+  const gatedPrNumbers = new Set(
+    readdirSync(runsDir).filter((f) => /^\d+-.+\.log$/.test(f)).map((f) => parseRun(f, readFileSync(join(runsDir, f), "utf8"))).filter((r) => isGatedLogged(r.loggedStatus) && r.prNumber !== undefined).map((r) => r.prNumber!),
+  );
+  for (const p of prs) {
+    if (!p.mergedAt || !gatedPrNumbers.has(p.number)) continue;
+    const logins = await gh<(string | null)[]>(`pr-commits-${p.number}`, ["api", `repos/${repo}/pulls/${p.number}/commits?per_page=100`, "--jq", "[.[] | .author.login]"]);
+    p.humanCommits = logins.some((l) => l !== null && l !== p.author?.login);
+  }
 
   // ---- runs (one log per runIssue attempt), awaiting-merge settled from the PR ----
   const prByNumber = new Map(prs.map((p) => [p.number, p]));
@@ -118,7 +129,7 @@ async function analyze(runsDir: string, repo: string) {
   const takenOver = handPrs.filter((p) => runs.some((r) => r.issue === Number(/Closes #(\d+)/i.exec(p.body)?.[1] ?? 0)));
   const requeueTotal = [...requeues.values()].reduce((a, b) => a + b, 0);
   const totals = totalsFor(repo, runs, { interventions: requeueTotal + takenOver.length, bunkerMergedPrs: merged.length, wrongMerges: merged.filter((p) => wrong.has(p.number)).length });
-  const failed = finished.filter((r) => r.status !== "merged");
+  const failed = finished.filter((r) => r.status !== "merged" && r.status !== "no-change" && r.status !== "blocked" && !isGatedLogged(r.status));
 
   const report = {
     repo,
@@ -126,7 +137,7 @@ async function analyze(runsDir: string, repo: string) {
     runs: {
       total: runs.length,
       byStatus: Object.fromEntries([...count(runs, (r) => r.status)].sort((a, b) => b[1] - a[1])),
-      successRate: finished.length ? totals.mergedRuns / finished.length : 0,
+      successRate: totals.countedRuns ? totals.successRuns / totals.countedRuns : 0,
       awaitingMerge: runs.filter((r) => r.status === "awaiting-merge").map((r) => `#${r.issue}`),
       withSecondRound: finished.filter((r) => r.rounds >= 2).length,
       verifyFailedAtLeastOnce: finished.filter((r) => r.verifyFailed).length,

@@ -51,4 +51,54 @@ describe("v1-readiness", () => {
     expect(md.split("\n")[0]).toBe("| Metric | o/a | o/b | combined |");
     expect(md).toContain("1 / 2 (50%)");
   });
+
+  describe("gated, no-change and blocked runs", () => {
+    const zero = { interventions: 0, bunkerMergedPrs: 0, wrongMerges: 0 };
+    const gated = (n: number, status: string) => run(`${n}-2026-10-19T10-00-00-000Z.log`, status, n * 10);
+    const totals = (...rs: ReturnType<typeof run>[]) => totalsFor("o/r", rs, zero);
+
+    test("needs-review / awaiting-review whose PR merged with no human commit is a success", () => {
+      for (const status of ["needs-review", "awaiting-review"]) {
+        const r = resolveRun(gated(1, status), prs({ number: 10, state: "MERGED", mergedAt: "x", humanCommits: false }), new Set());
+        const t = totals(r);
+        expect([r.status, t.successRuns, t.countedRuns, t.gatedRuns, t.interventions]).toEqual(["merged", 1, 1, 1, 0]);
+      }
+    });
+
+    test("a gated PR a human pushed commits to is an intervention, neither success nor failure", () => {
+      const r = resolveRun(gated(1, "needs-review"), prs({ number: 10, state: "MERGED", mergedAt: "x", humanCommits: true }), new Set());
+      const t = totals(r);
+      expect([r.status, t.successRuns, t.countedRuns, t.gatedRuns, t.interventions]).toEqual(["gated-intervened", 0, 0, 1, 1]);
+    });
+
+    test("a gated run still open or closed unmerged stays gated and out of the rate", () => {
+      const open = resolveRun(gated(1, "needs-review"), prs({ number: 10, state: "OPEN", mergedAt: null }), new Set());
+      const closed = resolveRun(gated(2, "awaiting-review"), prs({ number: 20, state: "CLOSED", mergedAt: null }), new Set());
+      const t = totals(open, closed, run("3-2026-10-19T10-00-00-000Z.log", "merged"));
+      expect([open.status, closed.status]).toEqual(["needs-review", "awaiting-review"]);
+      expect([t.finishedRuns, t.countedRuns, t.successRuns, t.gatedRuns]).toEqual([3, 1, 1, 2]);
+    });
+
+    test("a gated PR that turned main red is a wrong merge", () => {
+      expect(resolveRun(gated(1, "needs-review"), prs({ number: 10, state: "MERGED", mergedAt: "x" }), new Set([10])).status).toBe("wrong-merge");
+    });
+
+    test("no-change is a success", () => {
+      const t = totals(run("1-2026-10-19T10-00-00-000Z.log", "no-change"), run("2-2026-10-19T10-00-00-000Z.log", "rejected"));
+      expect([t.successRuns, t.countedRuns]).toEqual([1, 2]);
+    });
+
+    test("blocked is excluded from the denominator and counted in its own row", () => {
+      const t = totals(run("1-2026-10-19T10-00-00-000Z.log", "merged"), run("2-2026-10-19T10-00-00-000Z.log", "blocked"));
+      expect([t.successRuns, t.countedRuns, t.blockedRuns]).toEqual([1, 1, 1]);
+    });
+
+    test("§4 shows the success rate without them, plus gated and blocked rows", () => {
+      const t = totals(run("1-2026-10-19T10-00-00-000Z.log", "merged"), run("2-2026-10-19T10-00-00-000Z.log", "blocked"), gated(3, "needs-review"));
+      const md = section4([t]);
+      expect(md).toContain("| 1 / 1 (100%) | 1 / 1 (100%) |");
+      expect(md).toMatch(/\| Gated runs[^|]*\| 1 \| 1 \|/);
+      expect(md).toMatch(/\| Blocked runs[^|]*\| 1 \| 1 \|/);
+    });
+  });
 });

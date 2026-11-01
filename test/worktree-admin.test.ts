@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { worktreeAdmin, worktreeAdminLockPath } from "../src/worktree/admin.ts";
+import { mergeBack } from "../src/worktree/merge.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -69,4 +70,24 @@ test("still serializes calls within one process", async () => {
     order.push(`end${n}`);
   })));
   expect(order).toEqual(["start1", "end1", "start2", "end2", "start3", "end3"]);
+});
+
+test("mergeBack deletes the branch under the lock, waiting for a holder", async () => {
+  const dir = await repo();
+  await $`git -C ${dir} -c user.name=T -c user.email=t@e.com commit -q --allow-empty -m init`.quiet();
+  await $`git -C ${dir} branch feature/x`.quiet();
+  const lock = await worktreeAdminLockPath(dir);
+  const holder = Bun.spawn(["sleep", "30"]);
+  try {
+    writeFileSync(lock, String(holder.pid));
+    const p = mergeBack(dir, "feature/x", []);
+    await Bun.sleep(400);
+    expect((await $`git -C ${dir} branch --list feature/x`.text()).trim()).not.toBe("");
+    holder.kill();
+    await holder.exited;
+    await p;
+    expect((await $`git -C ${dir} branch --list feature/x`.text()).trim()).toBe("");
+  } finally {
+    holder.kill();
+  }
 });

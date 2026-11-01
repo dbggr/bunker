@@ -14,7 +14,17 @@ export interface Run {
   leftoverKept: boolean;
 }
 
-export interface PrState { number: number; state: string; mergedAt: string | null; mergeCommit?: { oid: string } | null }
+export interface PrState {
+  number: number;
+  state: string;
+  mergedAt: string | null;
+  mergeCommit?: { oid: string } | null;
+  /** A human pushed commits to the PR branch (not just approved/merged it). Unset when unknown. */
+  humanCommits?: boolean;
+}
+
+/** Runs that correctly stopped for a human: the PR touches a review path (needs-review) or manual-merge mode (awaiting-review). */
+export const isGatedLogged = (status: string) => status === "needs-review" || status === "awaiting-review";
 
 /** reasonFromLog, plus the line that explains a reason ending in ':' (e.g. "could not create worktree:" → the git error). */
 export function fullReason(status: string, text: string): string {
@@ -55,10 +65,17 @@ export function parseRun(file: string, text: string): Run {
 /**
  * Under `bunker watch` a run ends `awaiting-merge` (auto-merge armed) and GitHub merges the PR afterwards, so the log alone can't say
  * whether it succeeded. Settle it from the PR: merged → "merged", closed unmerged → "closed-unmerged", still open → stays "awaiting-merge"
- * (pending: not finished yet). A merged PR whose commit turned main red, or was reverted, is "wrong-merge" for any run.
+ * (pending: not finished yet). A gated run (needs-review/awaiting-review) whose PR merged is "merged" if a human only approved/merged it,
+ * "gated-intervened" if a human pushed commits; otherwise it stays gated. A merged PR whose commit turned main red, or was reverted, is "wrong-merge" for any run.
  */
 export function resolveRun(run: Run, prs: Map<number, PrState>, wrongMerges: Set<number>): Run {
   if (run.prNumber !== undefined && wrongMerges.has(run.prNumber) && (run.status === "merged" || run.status === "awaiting-merge")) return { ...run, status: "wrong-merge" };
+  if (isGatedLogged(run.status)) {
+    const g = run.prNumber === undefined ? undefined : prs.get(run.prNumber);
+    if (!g?.mergedAt) return run; // still waiting, or closed: stays gated
+    if (wrongMerges.has(g.number)) return { ...run, status: "wrong-merge" };
+    return { ...run, status: g.humanCommits ? "gated-intervened" : "merged" };
+  }
   if (run.status !== "awaiting-merge") return run;
   const pr = run.prNumber === undefined ? undefined : prs.get(run.prNumber);
   if (!pr) return run;
@@ -85,6 +102,13 @@ export const isFinished = (r: Run) => r.status !== "incomplete" && r.status !== 
 export interface Totals {
   repo: string;
   finishedRuns: number;
+  /** Finished runs minus gated-and-not-cleanly-merged and blocked ones: the denominator of the success rate. */
+  countedRuns: number;
+  /** Runs counted as success: merged, no-change, and gated runs a human merged without a code change. */
+  successRuns: number;
+  /** Runs that ended needs-review/awaiting-review (whatever happened to the PR afterwards). */
+  gatedRuns: number;
+  blockedRuns: number;
   mergedRuns: number;
   issuesAttempted: number;
   issuesMerged: number;
@@ -101,14 +125,21 @@ export function totalsFor(repo: string, runs: Run[], extra: { interventions: num
   const merged = [...byIssue.values()].filter((rs) => rs.some((r) => r.status === "merged"));
   const firstTry = merged.filter((rs) => rs.find(isFinished)?.status === "merged");
   const finished = runs.filter(isFinished);
+  const intervened = finished.filter((r) => r.status === "gated-intervened");
+  const counted = finished.filter((r) => r.status !== "blocked" && !isGatedLogged(r.status) && r.status !== "gated-intervened");
   return {
     repo,
     finishedRuns: finished.length,
+    countedRuns: counted.length,
+    successRuns: counted.filter((r) => r.status === "merged" || r.status === "no-change").length,
+    gatedRuns: finished.filter((r) => isGatedLogged(r.loggedStatus)).length,
+    blockedRuns: finished.filter((r) => r.status === "blocked").length,
     mergedRuns: finished.filter((r) => r.status === "merged").length,
     issuesAttempted: byIssue.size,
     issuesMerged: merged.length,
     firstTry: firstTry.length,
     ...extra,
+    interventions: extra.interventions + intervened.length,
     costUsd: runs.reduce((a, r) => a + r.costUsd, 0),
   };
 }
@@ -118,6 +149,10 @@ export function combine(rows: Totals[]): Totals {
   return {
     repo: "combined",
     finishedRuns: sum((t) => t.finishedRuns),
+    countedRuns: sum((t) => t.countedRuns),
+    successRuns: sum((t) => t.successRuns),
+    gatedRuns: sum((t) => t.gatedRuns),
+    blockedRuns: sum((t) => t.blockedRuns),
     mergedRuns: sum((t) => t.mergedRuns),
     issuesAttempted: sum((t) => t.issuesAttempted),
     issuesMerged: sum((t) => t.issuesMerged),
@@ -139,7 +174,9 @@ export function section4(rows: Totals[]): string {
     `| Metric | ${cols.map((t) => t.repo).join(" | ")} |`,
     `|${" --- |".repeat(cols.length + 1)}`,
     line("Wrong merges: main red after a bunker merge, or a revert (bar 0)", (t) => String(t.wrongMerges)),
-    line("Unattended success: merged / finished runs (bar ≥ 90%)", (t) => pct(t.mergedRuns, t.finishedRuns)),
+    line("Unattended success: (merged + no-change) / finished runs, gated and blocked excluded (bar ≥ 90%)", (t) => pct(t.successRuns, t.countedRuns)),
+    line("Gated runs: stopped at a human-review path (needs-review / awaiting-review), not counted as failures", (t) => String(t.gatedRuns)),
+    line("Blocked runs: waiting on another issue, excluded from the rate", (t) => String(t.blockedRuns)),
     line("Merged on the first finished attempt (bar ≥ 90%)", (t) => pct(t.firstTry, t.issuesMerged)),
     line("Human interventions per merged issue: re-queues + takeovers (bar ≤ 0.10)", (t) => (t.issuesMerged ? `${(t.interventions / t.issuesMerged).toFixed(2)} (${t.interventions} over ${t.issuesMerged})` : "n/a")),
     line("Escapes per merged bunker PR: wrong merges only, add §3 by hand (bar ≤ 5%)", (t) => pct(t.wrongMerges, t.bunkerMergedPrs)),
