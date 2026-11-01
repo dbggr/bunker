@@ -123,3 +123,85 @@ describe("selfUpdate", () => {
     expect(await selfUpdate({ home: f.repo, channel: "beta", build: fakeBuild([]) })).toBe(2);
   });
 });
+
+describe("selfUpdate --when-idle", () => {
+  /** A fake lock file as a running watch leaves it (the test process is alive). */
+  const lock = async (repo: string) => {
+    await Bun.write(join(repo, ".bunker", "watch.lock"), String(process.pid));
+  };
+  const control = (log: string[], units: string[] = []) => ({
+    units: async () => units,
+    stop: async (pid: number) => {
+      log.push(`stop ${pid}`);
+      return true;
+    },
+    restartUnit: async (repo: string) => {
+      log.push(`restart ${repo}`);
+      return true;
+    },
+  });
+
+  test("without the flag, the refusal names --when-idle", async () => {
+    const f = await fixture(["v1.0.0"]);
+    await lock(f.repo);
+    const errs: string[] = [];
+    const orig = console.error;
+    console.error = (...a: unknown[]) => void errs.push(a.join(" "));
+    try {
+      expect(await selfUpdate({ home: f.repo, build: fakeBuild([]) })).toBe(2);
+    } finally {
+      console.error = orig;
+    }
+    expect(errs.join("\n")).toContain("--when-idle");
+  });
+
+  test("drains the watch, updates, then restarts the unit it stopped", async () => {
+    const f = await fixture(["v1.0.0"]);
+    await lock(f.repo);
+    const log: string[] = [];
+    const c = control(log, [f.repo]);
+    const build = async (dir: string, home: string) => {
+      log.push("build");
+      return fakeBuild([])(dir, home);
+    };
+    const code = await selfUpdate({ home: f.repo, target: join(f.root, "b"), build, whenIdle: true, watches: c });
+    expect(code).toBe(0);
+    expect(log).toEqual([`stop ${process.pid}`, "build", `restart ${f.repo}`]);
+  });
+
+  test("a watch outside systemd is drained and updated but left for the user to restart", async () => {
+    const f = await fixture(["v1.0.0"]);
+    await lock(f.repo);
+    const log: string[] = [];
+    expect(await selfUpdate({ home: f.repo, target: join(f.root, "b"), build: fakeBuild([]), whenIdle: true, watches: control(log) })).toBe(0);
+    expect(log).toEqual([`stop ${process.pid}`]);
+  });
+
+  test("--restart-all drains and restarts every active unit", async () => {
+    const f = await fixture(["v1.0.0"]);
+    const other = await fixture(["v1.0.0"]);
+    await lock(other.repo);
+    const log: string[] = [];
+    const code = await selfUpdate({ home: f.repo, target: join(f.root, "b"), build: fakeBuild([]), whenIdle: true, restartAll: true, watches: control(log, [other.repo]) });
+    expect(code).toBe(0);
+    expect(log).toEqual([`stop ${process.pid}`, `restart ${other.repo}`]);
+  });
+
+  test("a drain that fails aborts before building", async () => {
+    const f = await fixture(["v1.0.0"]);
+    await lock(f.repo);
+    const seen: string[] = [];
+    const c = { ...control([]), stop: async () => false };
+    expect(await selfUpdate({ home: f.repo, target: join(f.root, "b"), build: fakeBuild(seen), whenIdle: true, watches: c })).toBe(1);
+    expect(seen).toEqual([]);
+  });
+
+  test("a failed update still restarts the watches it stopped", async () => {
+    const f = await fixture(["v1.0.0"]);
+    await lock(f.repo);
+    const log: string[] = [];
+    const code = await selfUpdate({ home: f.repo, target: join(f.root, "b"), build: async () => undefined, whenIdle: true, watches: control(log, [f.repo]) });
+    expect(code).toBe(1);
+    expect(log).toEqual([`stop ${process.pid}`, `restart ${f.repo}`]);
+  });
+});

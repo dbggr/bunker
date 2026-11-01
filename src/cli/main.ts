@@ -92,7 +92,7 @@ if (values.version) {
 }
 
 if (positionals.length === 1 && positionals[0] === "self-update") {
-  process.exit(await selfUpdate({ channel: values.channel }));
+  process.exit(await selfUpdate({ channel: values.channel, whenIdle: values["when-idle"], restartAll: values["restart-all"] }));
 }
 
 // `bunker doctor` (read-only checks) and `bunker init` (interactive onboarding). `bunker -- init` is the prompt "init".

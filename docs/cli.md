@@ -38,6 +38,8 @@ build and install the latest v* release tag
 | Flag | What it does | Default |
 | --- | --- | --- |
 | `--channel main` | pull main instead of the latest v* release tag | latest v* tag |
+| `--when-idle` | instead of refusing while a watch runs here: ask it to finish its current steps and start no new work, wait for it to exit, update, then restart it (a `bunker-watch@` systemd unit is restarted; any other watch is left for you to start) | refuse |
+| `--restart-all` | with `--when-idle`: drain and restart every active bunker watch unit on the machine, so all repos run the new binary | off |
 
 ```sh
 bunker self-update --channel main
