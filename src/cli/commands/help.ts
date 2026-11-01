@@ -148,7 +148,8 @@ init and doctor:
 
 mcp:
   bunker mcp                 stdio MCP server over systemd user units bunker-watch@<repo>.service (installed on first start_watch). Tools:
-                             list_watches, start_watch, stop_watch, restart_watch, watch_logs, spend, queue_issue (refused at or over the
+                             list_watches, start_watch and restart_watch (also set max_cost_day, max_cost_month, interval, parallel), stop_watch,
+                             watch_logs, spend (caps with their source), queue_issue (refused at or over the
                              daily spend cap). It never starts, stops or alters a run through the hub. Add it: claude mcp add bunker -- bunker mcp
 
 status:
