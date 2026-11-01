@@ -588,15 +588,21 @@ export function createShepherd(o: ShepherdOptions) {
 
   /** Merges the base into the branch here rather than through GitHub's update-branch API: that merge commit is the web-flow's and cannot carry the Bunker-Run trailer. */
   const updateBranch = async (pr: BunkerPr): Promise<ShepherdEntry> => {
+    let upToDate = false;
     try {
       await inWorktree(pr, async (w) => {
         const merged = await $`git ${w.identity} -C ${w.worktree} merge --no-edit ${w.baseSha}`.nothrow().quiet();
+        if (merged.exitCode === 0 && (await $`git -C ${w.worktree} rev-parse HEAD`.text()).trim() === w.headSha) {
+          upToDate = true;
+          throw new Refused("already up to date");
+        }
         if (merged.exitCode !== 0) {
           await $`git -C ${w.worktree} merge --abort`.nothrow().quiet();
           throw new Refused(`could not update the branch:\n${merged.stderr}${merged.stdout}`);
         }
       });
     } catch (e) {
+      if (upToDate) return entry(pr, "skipped", `already up to date with ${pr.base}`);
       if (e instanceof Refused) return entry(pr, "failed", `could not update the branch: ${e.message}`);
       throw e;
     }

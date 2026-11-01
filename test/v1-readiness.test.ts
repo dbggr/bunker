@@ -139,6 +139,15 @@ describe("interventions", () => {
       expect(handCommitState([bunker(1), webFlow])).toBe("hand");
     });
 
+    test("a legacy PR that a later bunker pass stamped is not a hand intervention", () => {
+      expect(handCommitState([hand, { ...hand, sha: "h2" }, bunker(1)])).toBe("clean");
+      expect(handCommitState([hand, webFlow, bunker(1), hand])).toBe("hand"); // a human commit after the first marked one still counts
+    });
+
+    test("a human commit after a marked one is a hand intervention", () => {
+      expect(handCommitState([bunker(1), hand])).toBe("hand");
+    });
+
     test("all commits marked → clean", () => {
       expect(handCommitState([bunker(1), bunker(2)])).toBe("clean");
     });

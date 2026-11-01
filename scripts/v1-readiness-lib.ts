@@ -16,13 +16,14 @@ export interface PrCommit { sha: string; message: string }
 
 /**
  * Did a human push to a bunker PR? Bunker marks every commit it makes with a `Bunker-Run` trailer, so once a PR has one, any commit
- * without it (a hand push, GitHub's "Update branch" merge) is a human's. A PR with no trailer at all predates the marking and is
+ * after the first marked one without it (a hand push, GitHub's "Update branch" merge) is a human's. A PR with no trailer at all predates the marking and is
  * "unknown": bunker's commits and the maintainer's shared one identity then, so nothing is guessed.
  */
 export function handCommitState(commits: PrCommit[]): "hand" | "clean" | "unknown" {
-  const marked = commits.filter((c) => hasRunTrailer(c.message)).length;
-  if (!marked) return "unknown";
-  return marked < commits.length ? "hand" : "clean";
+  const first = commits.findIndex((c) => hasRunTrailer(c.message));
+  if (first < 0) return "unknown";
+  // Unmarked commits before the first marked one predate the trailer (a legacy PR a later bunker pass stamped): not guessed at.
+  return commits.slice(first).some((c) => !hasRunTrailer(c.message)) ? "hand" : "clean";
 }
 
 /** One intervention per PR with hand commits; PRs that predate the trailer are counted apart. */

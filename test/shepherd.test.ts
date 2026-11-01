@@ -552,6 +552,17 @@ describe("shepherd pass", () => {
     expect(prompts).toHaveLength(0);
   });
 
+  test("flagged behind but already up to date → skipped, not failed, nothing pushed", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs.push(prJson(10, "fix/7-thing", sha, { mergeStateStatus: "BEHIND" }));
+    w.state.checks[10] = GREEN;
+    w.save();
+    const pass = await shepherd(w, fakeAgent(COMMIT_FIX)).pass();
+    expect(pass.entries[0]).toMatchObject({ action: "skipped" });
+    expect((await $`git -C ${w.origin} rev-parse fix/7-thing`.text()).trim()).toBe(sha);
+  });
+
   test("bunker:review PR behind the base → the branch is still updated, nothing else is touched", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });

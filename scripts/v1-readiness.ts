@@ -69,6 +69,13 @@ async function analyze(runsDir: string, repo: string) {
     return JSON.parse(out);
   }
 
+  /** `gh` output with one JSON object per line (paginated --jq '.[]'), cached by key. */
+  async function ghLines<T>(key: string, args: string[]): Promise<T[]> {
+    const file = join(cacheDir, `${key.replace(/[^a-z0-9_-]/gi, "_")}.jsonl`);
+    if (!existsSync(file)) await Bun.write(file, await $`gh ${args}`.text());
+    return readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as T);
+  }
+
   // ---- GitHub: PRs, CI, re-queues ----
   const prs = await gh<Pr[]>("prs", ["pr", "list", "-R", repo, "--state", "all", "--limit", "1000", "--json", "number,title,state,headRefName,body,createdAt,mergedAt,mergeCommit,author"]);
   const BUNKER_PR = /^Round \d+: /m; // every PR body bunker writes has its review rounds; hand-written ones don't
@@ -122,7 +129,7 @@ async function analyze(runsDir: string, repo: string) {
 
   // Hand commits on bunker PRs: only decidable for PRs whose bunker commits carry the Bunker-Run trailer (see handCommitState).
   const commitsByPr = new Map<number, PrCommit[]>();
-  for (const p of bunkerPrs) commitsByPr.set(p.number, await gh<PrCommit[]>(`pr-commit-messages-${p.number}`, ["api", `repos/${repo}/pulls/${p.number}/commits?per_page=100`, "--jq", "[.[] | {sha, message: .commit.message}]"]));
+  for (const p of bunkerPrs) commitsByPr.set(p.number, await ghLines<PrCommit>(`pr-commit-messages-${p.number}`, ["api", "--paginate", `repos/${repo}/pulls/${p.number}/commits?per_page=100`, "--jq", ".[] | {sha, message: .commit.message}"]));
   const handCommit = summariseHandCommits([...commitsByPr.values()]);
   const handCommitPrNumbers = bunkerPrs.filter((p) => handCommitState(commitsByPr.get(p.number)!) === "hand").map((p) => `#${p.number}`);
 
