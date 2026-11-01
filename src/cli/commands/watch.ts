@@ -20,7 +20,9 @@ import { cleanMerged, createShepherd } from "../../pipeline/shepherd.ts";
 import { runQueue, type QueueEntry, type QueueOptions } from "../../pipeline/queue.ts";
 import { countWaiting } from "../../github/queue.ts";
 import { latestBunkerLabeledAt } from "../../github/labeler.ts";
-import { clearLanded, ensureLabel, sweepClosedQueued, FAILED_LABEL, unqueue } from "../../github/labels.ts";
+import { createCanceller, activeIssues } from "./cancel.ts";
+import { markCancelled, takeCancelled, takeCancelRequests } from "../../core/cancel.ts";
+import { IN_PROGRESS_LABEL, clearLanded, ensureLabel, sweepClosedQueued, FAILED_LABEL, unqueue } from "../../github/labels.ts";
 import { repoId } from "../../ui/ui.ts";
 import { noNotify, withRepo, type Notify } from "../../core/notify.ts";
 
@@ -45,6 +47,12 @@ export interface WatchOptions extends Omit<QueueOptions, "merge" | "limit" | "ke
   maxCostUsd?: number;
   /** Stop starting new issues after this long. Defaults to running until `signal` aborts. */
   forMs?: number;
+  /** Kills the containers of one issue's run (`bunker cancel`). */
+  stopIssue?: (issue: number) => void;
+  /** Keeps one issue's worktree work as a stale tag and removes the worktree; returns the tag. */
+  abandonIssue?: (issue: number) => Promise<string | undefined>;
+  /** How often `.bunker/cancel` is checked for cancel requests. Defaults to 2 s. */
+  cancelPollMs?: number;
   /** Abort to finish the current step and stop. */
   signal?: AbortSignal;
   /** `git pull --ff-only` the checkout before each pass (when clean, on the default branch). */
@@ -119,7 +127,7 @@ function acquireLock(file: string): () => void {
  * Works the `bunker:queued` queue with auto-merge, pass after pass, until aborted or `forMs` is up.
  * Any outcome other than `merged` relabels the issue `bunker:failed` so it is never retried by itself.
  */
-export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, triageEveryHours, auditor, maxIssues, cleanOnStart, stopOrphans, logsDays, log = console.log, notify: rawNotify = noNotify, mention, shepherd: shepherdOn = true, shepherdEveryMs = 60_000, manual, ...opts }: WatchOptions): Promise<WatchSummary> {
+export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDayUsd = maxCostUsd, maxCostMonthUsd, forMs, signal, pull = false, auditEveryDays, triageEveryHours, auditor, maxIssues, cleanOnStart, stopOrphans, logsDays, cancelPollMs = 2000, log = console.log, notify: rawNotify = noNotify, mention, shepherd: shepherdOn = true, shepherdEveryMs = 60_000, manual, ...opts }: WatchOptions): Promise<WatchSummary> {
   const cwd = opts.cwd ?? process.cwd();
   const repo = (await $`git -C ${cwd} rev-parse --show-toplevel`.text()).trim();
   const notify = withRepo(rawNotify, (await repoId(repo)).split("/").pop()!);
@@ -143,6 +151,19 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
   };
   const status = createStatusRecorder(dir, { pid: process.pid, version: pkg.version, caps, parallel: opts.parallel ?? 1 }, (watcher) => emit(opts.onEvent, { type: "watcher", watcher }));
   signal?.addEventListener("abort", () => status.stopping(), { once: true });
+  const cancelRun = createCanceller({
+    active: () => activeIssues(status.snapshot().current),
+    mark: markCancelled,
+    stopContainers: (n) => opts.stopIssue?.(n),
+    abandon: async (n) => opts.abandonIssue?.(n),
+    unlabel: async (n) => void (await unqueue(n, cwd, env, ["--remove-label", IN_PROGRESS_LABEL])),
+    comment: async (n, body) => void (await $`gh issue comment ${n} --body ${body}`.cwd(cwd).env(env).nothrow().quiet()),
+    log,
+  });
+  const cancelTimer = setInterval(() => {
+    for (const n of takeCancelRequests(repo)) void cancelRun(n).catch((e) => log(`bunker: could not cancel #${n}: ${e instanceof Error ? e.message : e}`));
+  }, cancelPollMs);
+  cancelTimer.unref?.();
   const userOnEvent = opts.onEvent;
   opts.onEvent = (e) => {
     status.event(e);
@@ -421,6 +442,12 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
         onRefused: giveUp,
         shouldStop: () => stopped() || capped().length > 0,
         onResult: async (e) => {
+          // A cancelled run's result is not a failure; one that finished anyway keeps its own outcome.
+          if (takeCancelled(e.issue) && !["merged", "no-change", "awaiting-merge", "awaiting-review", "needs-review", "pr-opened"].includes(e.status)) {
+            giveUp(e.issue);
+            status.event({ type: "stage", issue: e.issue, name: "done", at: Date.now() });
+            return;
+          }
           const usd = ((e.review?.usage ?? e.usage)?.costUsd ?? 0) + (e.priorCostUsd ?? 0);
           if (usd > 0) record(usd);
           summary.spentUsd += usd;
@@ -500,6 +527,7 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     notify("bunker: watch crashed", e instanceof Error ? e.message : String(e));
     throw e;
   } finally {
+    clearInterval(cancelTimer);
     release();
   }
   notify("bunker: watch stopped", `${summary.passes} pass(es) · ${summary.merged} merged · ${summary.failed} failed`);

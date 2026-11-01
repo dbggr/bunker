@@ -1,3 +1,4 @@
+import { issueScope } from "../core/cancel.ts";
 import { liveGhEnv } from "../github/identity.ts";
 import type { OnEvent } from "../core/events.ts";
 import { AgentFailure } from "./errors.ts";
@@ -102,7 +103,7 @@ export async function runIssue(opts: IssueOptions): Promise<IssueResult> {
   await markInProgress(opts.issue, cwd, env);
   let other = false; // another run holds this issue and owns its label
   try {
-    const result = await runIssueInner(opts, spent, (u) => (untrack = u));
+    const result = await issueScope.run(opts.issue, () => runIssueInner(opts, spent, (u) => (untrack = u)));
     other = result.status === "already-in-progress";
     return result;
   } catch (e) {

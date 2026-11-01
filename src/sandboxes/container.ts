@@ -2,6 +2,7 @@ import { $ } from "bun";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { containerIssues, issueScope } from "../core/cancel.ts";
 import { output } from "../core/output.ts";
 import { gitMountArgs, guardGit } from "./git-guard.ts";
 import type { RoleSkills } from "../core/skills.ts";
@@ -319,8 +320,23 @@ export function containerSandbox(bin: string, userArgs: string[], opts: DockerOp
       };
       hookExit();
       liveContainers.set(cname, bin);
-      return teeStdout(proc, prefix, onLine, limits, kill).finally(() => liveContainers.delete(cname));
+      const owner = issueScope.getStore();
+      if (owner !== undefined) containerIssues.set(cname, owner);
+      return teeStdout(proc, prefix, onLine, limits, kill).finally(() => {
+        liveContainers.delete(cname);
+        containerIssues.delete(cname);
+      });
       });
     },
   };
+}
+
+/** Kills the containers (agent steps, services) started for `issue`; its run then unwinds on its own. */
+export function stopIssueContainers(issue: number) {
+  const quiet = { stdio: ["ignore", "ignore", "ignore"] satisfies ["ignore", "ignore", "ignore"] };
+  for (const [name, n] of containerIssues) {
+    if (n !== issue) continue;
+    const bin = liveContainers.get(name);
+    if (bin) Bun.spawnSync([bin, "kill", name], quiet);
+  }
 }

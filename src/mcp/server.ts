@@ -7,6 +7,8 @@ import { DAY_MS, MONTH_MS, loadSpendCaps, spentWithin, type SpendCaps } from "..
 import { liveGhEnv } from "../github/identity.ts";
 import { ensureLabel, QUEUED_LABEL } from "../github/labels.ts";
 import { defaultHubPort, hubReachable, readToken } from "../ui/ui.ts";
+import { requestCancel } from "../core/cancel.ts";
+import { activeIssues } from "../cli/commands/cancel.ts";
 import { STATUS_FILE, type CurrentRun } from "../cli/commands/status.ts";
 
 const PREFIX = "bunker-watch@";
@@ -70,6 +72,9 @@ export interface McpDeps {
   caps: (repo: string) => Promise<SpendCaps>;
   spent: (repo: string) => { day: number; month: number };
   addLabel: (repo: string, issue: number) => Promise<void>;
+  removeLabel: (repo: string, issue: number) => Promise<void>;
+  /** Asks the repo's watch to cancel the issue's run. */
+  requestCancel: (repo: string, issue: number) => void;
 }
 
 interface Tool {
@@ -90,6 +95,12 @@ export function createMcp(d: McpDeps) {
     if (typeof r !== "string" || !isAbsolute(r)) throw new ToolError("repo must be an absolute path");
     return r.replace(/(.)\/+$/, "$1");
   };
+  const issueArg = (a: Record<string, unknown>) => {
+    const issue = a.issue;
+    if (typeof issue !== "number" || !Number.isInteger(issue) || issue < 1) throw new ToolError("issue must be a positive integer");
+    return issue;
+  };
+  const isRunning = (repo: string, issue: number) => activeIssues(d.readCurrent(repo)).includes(issue);
   const systemctl = async (verb: string, repo: string) => {
     const r = await d.run(["systemctl", "--user", verb, unitName(repo)]);
     if (r.code !== 0) throw new ToolError(`systemctl ${verb} failed: ${(r.stderr || r.stdout).trim()}`);
@@ -180,13 +191,36 @@ export function createMcp(d: McpDeps) {
       inputSchema: schema({ repo: repoProp, issue: { type: "integer", description: "Issue number" } }, ["repo", "issue"]),
       async call(a) {
         const repo = repoArg(a);
-        const issue = a.issue;
-        if (typeof issue !== "number" || !Number.isInteger(issue) || issue < 1) throw new ToolError("issue must be a positive integer");
+        const issue = issueArg(a);
         const cap = (await d.caps(repo)).day;
         const spent = d.spent(repo).day;
         if (cap !== undefined && spent >= cap) throw new ToolError(`refused: spent $${spent.toFixed(2)} today, at or over the daily cap of $${cap}`);
         await d.addLabel(repo, issue);
         return `queued #${issue} (${QUEUED_LABEL})`;
+      },
+    },
+    {
+      name: "unqueue_issue",
+      description: `Remove ${QUEUED_LABEL} from an issue so the watch does not pick it up; does nothing when the issue is running (use cancel_run)`,
+      inputSchema: schema({ repo: repoProp, issue: { type: "integer", description: "Issue number" } }, ["repo", "issue"]),
+      async call(a) {
+        const repo = repoArg(a);
+        const issue = issueArg(a);
+        if (isRunning(repo, issue)) return `#${issue} is running; ${QUEUED_LABEL} was left alone. Use cancel_run to stop its run`;
+        await d.removeLabel(repo, issue);
+        return `unqueued #${issue} (${QUEUED_LABEL} removed)`;
+      },
+    },
+    {
+      name: "cancel_run",
+      description: "Cancel the run of one issue in the repo's watch: its container is stopped, its work kept as a stale tag, bunker:in-progress and bunker:queued removed and a comment says so. Other runs continue",
+      inputSchema: schema({ repo: repoProp, issue: { type: "integer", description: "Issue number" } }, ["repo", "issue"]),
+      async call(a) {
+        const repo = repoArg(a);
+        const issue = issueArg(a);
+        if (!isRunning(repo, issue)) throw new ToolError(`#${issue} has no active run in the watch of ${repo}`);
+        d.requestCancel(repo, issue);
+        return `cancel requested for #${issue}; the watch stops its run within seconds`;
       },
     },
   ];
@@ -260,6 +294,11 @@ export function liveDeps(): McpDeps {
     spent: (repo) => {
       const file = join(bunkerDir(repo), "watch-spend.json");
       return { day: spentWithin(file, DAY_MS), month: spentWithin(file, MONTH_MS) };
+    },
+    requestCancel,
+    removeLabel: async (repo, issue) => {
+      const r = await exec(["gh", "issue", "edit", String(issue), "--remove-label", QUEUED_LABEL], { cwd: repo, env: liveGhEnv() });
+      if (r.code !== 0) throw new ToolError(`gh issue edit failed: ${(r.stderr || r.stdout).trim()}`);
     },
     addLabel: async (repo, issue) => {
       const env = liveGhEnv();

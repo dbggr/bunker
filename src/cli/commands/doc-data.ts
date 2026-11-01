@@ -144,9 +144,15 @@ export const SECTIONS: Section[] = [
         example: "bunker status --json",
       },
       {
+        cmd: "cancel",
+        summary: "stop one issue's run in the running watch; the other runs continue",
+        rows: [["`bunker cancel <n>`", "run in the repo while `bunker watch` is running. The watch stops that issue's containers, keeps its work as a bunker/stale/<n>-<timestamp> tag, removes `bunker:in-progress` and `bunker:queued` and comments that the run was cancelled; the issue is not marked `bunker:failed` and the watch goes on with its other runs. Exits 1 when no watch is running or the issue has no active run (one waiting on GitHub for its merge or review has nothing to stop). Relabel `bunker:queued` to run it again"]],
+        example: "bunker cancel 42",
+      },
+      {
         cmd: "mcp",
         summary: "stdio MCP server: manage local watches (systemd user units) from Claude",
-        rows: [["`bunker mcp`", "stdio MCP server over systemd user units `bunker-watch@<repo>.service` (the template is installed on the first `start_watch`). Tools: `list_watches` (unit state, repo, current run), `start_watch`, `stop_watch`, `restart_watch`, `watch_logs` (last N lines), `spend` (today/month against the caps), `queue_issue` (adds `bunker:queued`; refused at or over the daily spend cap). It never starts, stops or alters a run through the hub"]],
+        rows: [["`bunker mcp`", "stdio MCP server over systemd user units `bunker-watch@<repo>.service` (the template is installed on the first `start_watch`). Tools: `list_watches` (unit state, repo, current run), `start_watch`, `stop_watch`, `restart_watch`, `watch_logs` (last N lines), `spend` (today/month against the caps), `queue_issue` (adds `bunker:queued`; refused at or over the daily spend cap), `unqueue_issue` (removes `bunker:queued`; does nothing, with a message pointing to `cancel_run`, when the issue is running), `cancel_run` (as `bunker cancel`). It never starts, stops or alters a run through the hub"]],
         example: "claude mcp add bunker -- bunker mcp",
       },
       {

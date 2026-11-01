@@ -10,6 +10,8 @@ const repo = "/home/me/my-repo";
 function setup(over: Partial<McpDeps> = {}) {
   const calls: string[][] = [];
   const labels: [string, number][] = [];
+  const unlabelled: [string, number][] = [];
+  const cancels: [string, number][] = [];
   const writes: Record<string, string> = {};
   const deps: McpDeps = {
     run: async (cmd) => {
@@ -27,6 +29,8 @@ function setup(over: Partial<McpDeps> = {}) {
     caps: async () => ({ day: 10, month: 100 }),
     spent: () => ({ day: 2.5, month: 20 }),
     addLabel: async (r, n) => void labels.push([r, n]),
+    removeLabel: async (r, n) => void unlabelled.push([r, n]),
+    requestCancel: (r, n) => void cancels.push([r, n]),
     ...over,
   };
   const mcp = createMcp(deps);
@@ -34,7 +38,7 @@ function setup(over: Partial<McpDeps> = {}) {
     const res = (await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } })) as any;
     return { text: res.result.content[0].text as string, isError: !!res.result.isError };
   };
-  return { calls, labels, writes, call, mcp };
+  return { calls, labels, unlabelled, cancels, writes, call, mcp };
 }
 
 describe("mcp protocol", () => {
@@ -44,7 +48,7 @@ describe("mcp protocol", () => {
     expect(init.result.capabilities.tools).toBeDefined();
     expect(init.result.serverInfo.name).toBe("bunker");
     const list = (await mcp.handle({ jsonrpc: "2.0", id: 2, method: "tools/list" })) as any;
-    expect(list.result.tools.map((t: any) => t.name).sort()).toEqual(["list_watches", "queue_issue", "restart_watch", "spend", "start_watch", "stop_watch", "watch_logs"]);
+    expect(list.result.tools.map((t: any) => t.name).sort()).toEqual(["cancel_run", "list_watches", "queue_issue", "restart_watch", "spend", "start_watch", "stop_watch", "unqueue_issue", "watch_logs"]);
     expect(((await mcp.handle({ jsonrpc: "2.0", id: 3, method: "ping" })) as any).result).toEqual({});
     expect(((await mcp.handle({ jsonrpc: "2.0", id: 4, method: "nope" })) as any).error.code).toBe(-32601);
     expect(await mcp.handle({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeUndefined();
@@ -136,6 +140,31 @@ describe("mcp tools", () => {
   test("spend reports today and month against the caps", async () => {
     const { call } = setup();
     expect(JSON.parse((await call("spend", { repo })).text)).toEqual({ day: { spent: 2.5, cap: 10 }, month: { spent: 20, cap: 100 } });
+  });
+  test("unqueue_issue removes the label from a queued issue", async () => {
+    const { call, unlabelled } = setup();
+    const r = await call("unqueue_issue", { repo, issue: 5 });
+    expect(r.isError).toBe(false);
+    expect(unlabelled).toEqual([[repo, 5]]);
+  });
+  test("unqueue_issue is a no-op for a running issue and points to cancel_run", async () => {
+    const { call, unlabelled } = setup();
+    const r = await call("unqueue_issue", { repo, issue: 7 });
+    expect(r.isError).toBe(false);
+    expect(r.text).toContain("cancel_run");
+    expect(unlabelled).toEqual([]);
+    expect((await call("unqueue_issue", { repo, issue: "x" })).isError).toBe(true);
+  });
+  test("cancel_run asks the watch to cancel an active run, and refuses other issues", async () => {
+    const { call, cancels } = setup();
+    expect((await call("cancel_run", { repo, issue: 7 })).isError).toBe(false);
+    expect(cancels).toEqual([[repo, 7]]);
+    expect((await call("cancel_run", { repo, issue: 8 })).isError).toBe(true);
+    expect(cancels).toHaveLength(1);
+  });
+  test("cancel_run refuses a run that only waits on GitHub", async () => {
+    const { call } = setup({ readCurrent: () => [{ issue: 7, stage: "waiting for merge", since: 1 }] });
+    expect((await call("cancel_run", { repo, issue: 7 })).isError).toBe(true);
   });
   test("queue_issue labels the issue under the cap", async () => {
     const { call, labels } = setup();

@@ -10,7 +10,7 @@ import { review } from "../pipeline/review.ts";
 import { run, runAll } from "../pipeline/run.ts";
 import { worktreeAdmin } from "../worktree/admin.ts";
 import { SkillError, loadSkills } from "../core/skills.ts";
-import { docker, stopLiveContainers, stopOrphanedContainers } from "../sandboxes/container.ts";
+import { docker, stopIssueContainers, stopLiveContainers, stopOrphanedContainers } from "../sandboxes/container.ts";
 import { shutdown } from "../core/shutdown.ts";
 import { abandonLive } from "../pipeline/issue-cleanup.ts";
 import { createInterrupt } from "./commands/interrupt.ts";
@@ -41,7 +41,7 @@ import { selfUpdate } from "./commands/self-update.ts";
 import { buildLabel } from "../build-info.ts";
 import pkg from "../../package.json" with { type: "json" };
 import { guardFlags } from "./args.ts";
-import { cleanCommand, doctorOrInitCommand, shepherdCommand, statusCommand, triageCommand, uiCommand } from "./subcommands.ts";
+import { cancelCommand, cleanCommand, doctorOrInitCommand, shepherdCommand, statusCommand, triageCommand, uiCommand } from "./subcommands.ts";
 import { issueCommand, queueCommand, rerunHint } from "./pipeline-commands.ts";
 
 // Every git bunker runs on the host ignores repo hooks and fsmonitor (see git-guard.ts).
@@ -103,6 +103,11 @@ if (!process.argv.slice(2).includes("--") && positionals.length === 1 && (positi
 // `bunker status`: read-only summary of the watcher, its runs, the queue and the spend.
 if (positionals.length === 1 && positionals[0] === "status") {
   await statusCommand(values);
+}
+
+// `bunker cancel <n>`: stops one issue's run in the running watch, leaving the others.
+if (positionals[0] === "cancel" && !process.argv.slice(2).includes("--")) {
+  await cancelCommand(values, positionals);
 }
 
 // `bunker mcp`: a stdio MCP server that manages local watches (systemd user units).
@@ -323,7 +328,7 @@ if (values.audit) {
   const notify = desktopNotifier({ enabled: !values["no-notify"] && repoCfg.notify.enabled !== false && !process.env.BUNKER_TEST_NO_NOTIFY });
     const mention = await resolveMention(process.cwd(), liveGhEnv(), repoCfg.notify.github_user);
   try {
-    await runWatch({ notify, mention, onEvent: watchEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, manual, ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, ...(values["no-sandbox"] ? {} : { stopOrphans: (l: (line: string) => void) => stopOrphanedContainers("docker", repoRoot, l) }), logsDays: repoCfg.clean.logs_days ?? 30, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
+    await runWatch({ notify, mention, onEvent: watchEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, manual, ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, ...(values["no-sandbox"] ? {} : { stopOrphans: (l: (line: string) => void) => stopOrphanedContainers("docker", repoRoot, l) }), logsDays: repoCfg.clean.logs_days ?? 30, signal: ctl.signal, stopIssue: stopIssueContainers, abandonIssue: abandonLive, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
