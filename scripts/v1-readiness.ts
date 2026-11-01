@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { combine, isFinished, isGatedLogged, parseRun, resolveRun, section4, totalsFor, wrongMergedPrs, type PrState, type Totals } from "./v1-readiness-lib.ts";
+import { combine, failedLabelsOf, handCommitState, handCommitsLine, isFinished, isGatedLogged, parseRun, requeuesOf, resolveRun, section4, summariseHandCommits, totalsFor, wrongMergedPrs, type PrCommit, type PrState, type Totals } from "./v1-readiness-lib.ts";
 
 const { values } = parseArgs({
   options: { runs: { type: "string", multiple: true }, repo: { type: "string", multiple: true }, since: { type: "string" }, json: { type: "boolean" }, refresh: { type: "boolean" } },
@@ -69,6 +69,13 @@ async function analyze(runsDir: string, repo: string) {
     return JSON.parse(out);
   }
 
+  /** `gh` output with one JSON object per line (paginated --jq '.[]'), cached by key. */
+  async function ghLines<T>(key: string, args: string[]): Promise<T[]> {
+    const file = join(cacheDir, `${key.replace(/[^a-z0-9_-]/gi, "_")}.jsonl`);
+    if (!existsSync(file)) await Bun.write(file, await $`gh ${args}`.text());
+    return readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as T);
+  }
+
   // ---- GitHub: PRs, CI, re-queues ----
   const prs = await gh<Pr[]>("prs", ["pr", "list", "-R", repo, "--state", "all", "--limit", "1000", "--json", "number,title,state,headRefName,body,createdAt,mergedAt,mergeCommit,author"]);
   const BUNKER_PR = /^Round \d+: /m; // every PR body bunker writes has its review rounds; hand-written ones don't
@@ -116,10 +123,15 @@ async function analyze(runsDir: string, repo: string) {
   const failedLabels = new Map<number, number>();
   for (const n of issueNums) {
     const evs = await gh<Ev[]>(`events-${n}`, ["api", "--paginate", `repos/${repo}/issues/${n}/events`]);
-    const added = evs.filter((e) => e.event === "labeled" && e.label?.name === "bunker").length;
-    requeues.set(n, Math.max(0, added - 1));
-    failedLabels.set(n, evs.filter((e) => e.event === "labeled" && e.label?.name === "bunker-failed").length);
+    requeues.set(n, requeuesOf(evs));
+    failedLabels.set(n, failedLabelsOf(evs));
   }
+
+  // Hand commits on bunker PRs: only decidable for PRs whose bunker commits carry the Bunker-Run trailer (see handCommitState).
+  const commitsByPr = new Map<number, PrCommit[]>();
+  for (const p of bunkerPrs) commitsByPr.set(p.number, await ghLines<PrCommit>(`pr-commit-messages-${p.number}`, ["api", "--paginate", `repos/${repo}/pulls/${p.number}/commits?per_page=100`, "--jq", ".[] | {sha, message: .commit.message}"]));
+  const handCommit = summariseHandCommits([...commitsByPr.values()]);
+  const handCommitPrNumbers = bunkerPrs.filter((p) => handCommitState(commitsByPr.get(p.number)!) === "hand").map((p) => `#${p.number}`);
 
   // ---- metrics ----
   const finished = runs.filter(isFinished);
@@ -128,7 +140,7 @@ async function analyze(runsDir: string, repo: string) {
   const ciFailedBunkerPrs = bunkerPrs.filter((p) => (ciByBranch.get(p.headRefName) ?? []).some((r) => r.conclusion === "failure"));
   const takenOver = handPrs.filter((p) => runs.some((r) => r.issue === Number(/Closes #(\d+)/i.exec(p.body)?.[1] ?? 0)));
   const requeueTotal = [...requeues.values()].reduce((a, b) => a + b, 0);
-  const totals = totalsFor(repo, runs, { interventions: requeueTotal + takenOver.length, bunkerMergedPrs: merged.length, wrongMerges: merged.filter((p) => wrong.has(p.number)).length });
+  const totals = totalsFor(repo, runs, { interventions: requeueTotal + takenOver.length + handCommit.handCommitPrs, bunkerMergedPrs: merged.length, wrongMerges: merged.filter((p) => wrong.has(p.number)).length });
   const failed = finished.filter((r) => r.status !== "merged" && r.status !== "no-change" && r.status !== "blocked" && !isGatedLogged(r.status));
 
   const report = {
@@ -163,7 +175,13 @@ async function analyze(runsDir: string, repo: string) {
     },
     reverts,
     main: { ciRuns: mainRuns.length, red: mainRuns.filter((r) => r.conclusion === "failure").map((r) => `${r.headSha.slice(0, 7)} ${r.createdAt}`) },
-    interventions: { requeues: requeueTotal, takenOverByHand: takenOver.map((p) => `#${p.number}`) },
+    interventions: {
+      requeues: requeueTotal,
+      takenOverByHand: takenOver.map((p) => `#${p.number}`),
+      cancelledOrInterruptedRuns: runs.filter((r) => r.status === "interrupted").map((r) => `#${r.issue} ${r.startedAt}`),
+      handCommitPrs: handCommitPrNumbers,
+      handCommits: handCommitsLine(handCommit),
+    },
     cost: {
       totalUsd: Number(totals.costUsd.toFixed(2)),
       perMergedIssueUsd: totals.issuesMerged ? Number((totals.costUsd / totals.issuesMerged).toFixed(2)) : 0,

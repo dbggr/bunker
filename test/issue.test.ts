@@ -244,6 +244,18 @@ describe("runIssue()", () => {
     expect(body).not.toContain("ghp_");
   });
 
+  test("every commit on the pushed branch carries the Bunker-Run trailer of the run's log", async () => {
+    const { repo, origin } = await setup(issue());
+    const r = await runIssue({ cwd: repo, issue: 7, agent: fakeAgent(APPROVE), sandbox: noSandbox(), verify: "test -f feature.txt" });
+    expect(r.status).toBe("pr-opened");
+    const runId = r.logPath!.split("/").at(-1)!.replace(/\.log$/, "");
+    const msg = await $`git -C ${origin} log --format=%B refs/heads/feature/7-add-feature ^main`.text();
+    expect(msg).toContain("feat: impl");
+    expect(msg).toContain(`Bunker-Run: ${runId}`);
+    expect(runId).toMatch(/^7-\d{4}-/);
+    expect((await $`git -C ${r.worktree} rev-parse HEAD`.text()).trim()).toBe((await $`git -C ${origin} rev-parse refs/heads/feature/7-add-feature`.text()).trim());
+  });
+
   test("approved + verify passes → pushed, PR opened", async () => {
     const { repo, origin, prLog } = await setup(issue());
     const prompts: string[] = [];

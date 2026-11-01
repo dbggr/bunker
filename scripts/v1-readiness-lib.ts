@@ -1,5 +1,38 @@
 /** Pure parts of scripts/v1-readiness.ts (run-log parsing, outcome resolution, the §4 table), kept apart so they can be tested. */
 import { reasonFromLog } from "../src/core/reason.ts";
+import { hasRunTrailer } from "../src/worktree/trailer.ts";
+
+export interface LabelEvent { event: string; label?: { name: string } }
+
+const labelled = (evs: LabelEvent[], names: string[]) => evs.filter((e) => e.event === "labeled" && e.label && names.includes(e.label.name)).length;
+
+/** Times a human re-queued an issue: `bunker:queued` (or its old name `bunker`) added again after the first. */
+export const requeuesOf = (evs: LabelEvent[]) => Math.max(0, labelled(evs, ["bunker:queued", "bunker"]) - 1);
+
+/** Times an issue was labelled failed: `bunker:failed`, or its old name `bunker-failed`. */
+export const failedLabelsOf = (evs: LabelEvent[]) => labelled(evs, ["bunker:failed", "bunker-failed"]);
+
+export interface PrCommit { sha: string; message: string }
+
+/**
+ * Did a human push to a bunker PR? Bunker marks every commit it makes with a `Bunker-Run` trailer, so once a PR has one, any commit
+ * after the first marked one without it (a hand push, GitHub's "Update branch" merge) is a human's. A PR with no trailer at all predates the marking and is
+ * "unknown": bunker's commits and the maintainer's shared one identity then, so nothing is guessed.
+ */
+export function handCommitState(commits: PrCommit[]): "hand" | "clean" | "unknown" {
+  const first = commits.findIndex((c) => hasRunTrailer(c.message));
+  if (first < 0) return "unknown";
+  // Unmarked commits before the first marked one predate the trailer (a legacy PR a later bunker pass stamped): not guessed at.
+  return commits.slice(first).some((c) => !hasRunTrailer(c.message)) ? "hand" : "clean";
+}
+
+/** One intervention per PR with hand commits; PRs that predate the trailer are counted apart. */
+export function summariseHandCommits(prs: PrCommit[][]) {
+  const states = prs.map(handCommitState);
+  return { handCommitPrs: states.filter((x) => x === "hand").length, unknownPrs: states.filter((x) => x === "unknown").length };
+}
+
+export const handCommitsLine = (s: { handCommitPrs: number; unknownPrs: number }) => `hand commits: ${s.handCommitPrs} (${s.unknownPrs} PRs predate the trailer, not counted)`;
 
 export interface Run {
   issue: number;
@@ -139,7 +172,8 @@ export function totalsFor(repo: string, runs: Run[], extra: { interventions: num
     issuesMerged: merged.length,
     firstTry: firstTry.length,
     ...extra,
-    interventions: extra.interventions + intervened.length,
+    // A run a human cancelled or stopped (`bunker cancel`, Ctrl-C) ends `interrupted`.
+    interventions: extra.interventions + intervened.length + finished.filter((r) => r.status === "interrupted").length,
     costUsd: runs.reduce((a, r) => a + r.costUsd, 0),
   };
 }
@@ -178,7 +212,7 @@ export function section4(rows: Totals[]): string {
     line("Gated runs: stopped at a human-review path (needs-review / awaiting-review), not counted as failures", (t) => String(t.gatedRuns)),
     line("Blocked runs: waiting on another issue, excluded from the rate", (t) => String(t.blockedRuns)),
     line("Merged on the first finished attempt (bar ≥ 90%)", (t) => pct(t.firstTry, t.issuesMerged)),
-    line("Human interventions per merged issue: re-queues + takeovers (bar ≤ 0.10)", (t) => (t.issuesMerged ? `${(t.interventions / t.issuesMerged).toFixed(2)} (${t.interventions} over ${t.issuesMerged})` : "n/a")),
+    line("Human interventions per merged issue: re-queues + takeovers + cancelled runs + hand commits on bunker PRs (bar ≤ 0.10)", (t) => (t.issuesMerged ? `${(t.interventions / t.issuesMerged).toFixed(2)} (${t.interventions} over ${t.issuesMerged})` : "n/a")),
     line("Escapes per merged bunker PR: wrong merges only, add §3 by hand (bar ≤ 5%)", (t) => pct(t.wrongMerges, t.bunkerMergedPrs)),
     line("Cost per merged issue (bar ≤ $2)", (t) => (t.issuesMerged ? `$${(t.costUsd / t.issuesMerged).toFixed(2)}` : "n/a")),
   ].join("\n");

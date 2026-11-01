@@ -1,4 +1,5 @@
 import { $ } from "bun";
+import { basename } from "node:path";
 import { waitForMerge } from "../../github/branches.ts";
 import { neutralise } from "../../core/redact.ts";
 import { addPrLabel, AWAITING_REVIEW_LABEL, ensureLabel, REVIEW_LABEL } from "../../github/labels.ts";
@@ -8,6 +9,7 @@ import { emit, emitStage } from "../../core/events.ts";
 import { tailLines } from "../../core/output.ts";
 import { isReviewPath } from "../../worktree/steering.ts";
 import { worktreeAdmin } from "../../worktree/admin.ts";
+import { stampCommits } from "../../worktree/trailer.ts";
 import type { Agent } from "../../agents/agent.ts";
 import type { ReviewResult } from "../review.ts";
 import type { IssueOptions, IssueResult } from "../issue.ts";
@@ -73,6 +75,18 @@ export function publishIssue(ctx: IssueRunContext, input: PublishInput): Promise
     return fail("failed", { review: result, error: `agent commit not on branch: ${branch} has no commits beyond the base; the worktree ${worktree} is kept` });
   };
 
+  /** Marks every commit bunker made on the branch (the agent's, its update-to-latest merge) with `Bunker-Run: <log name>`, so a commit without it is a human's. */
+  const stampBranch = async (): Promise<IssueResult | undefined> => {
+    const ref = `refs/heads/${branch}`;
+    const tip = (await $`git -C ${worktree} rev-parse ${ref}`.text()).trim();
+    const stamped = await stampCommits(worktree, tip, [baseSha], basename(ctx.logPath, ".log"));
+    if (stamped === tip) return undefined;
+    const moved = await $`git -C ${worktree} update-ref ${ref} ${stamped} ${tip}`.nothrow().quiet();
+    if (moved.exitCode !== 0) return fail("failed", { review: result, error: `could not add the Bunker-Run trailer to ${branch}:\n${moved.stderr}` });
+    await $`git -C ${worktree} reset -q --soft ${stamped}`.nothrow().quiet();
+    return undefined;
+  };
+
   const publish = async (): Promise<IssueResult> => {
     if (merge && mergeTurn) {
       const failed = await updateToLatest();
@@ -81,6 +95,8 @@ export function publishIssue(ctx: IssueRunContext, input: PublishInput): Promise
     emitStage({ onEvent }, "PR");
     const lost = await ensureAgentCommit();
     if (lost) return lost;
+    const unstamped = await stampBranch();
+    if (unstamped) return unstamped;
     const push = await $`git ${gitCfg} -C ${worktree} push -q ${token ? [] : ['-u']} ${remoteSha ? [`--force-with-lease=${branch}:${remoteSha}`] : []} ${remote} ${branch}`.env(env).nothrow().quiet();
     if (push.exitCode !== 0) return fail("failed", { review: result, error: `git push failed:\n${push.stderr}` });
 
