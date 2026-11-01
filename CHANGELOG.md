@@ -1,8 +1,14 @@
 # Changelog
 
-## Unreleased
+## v0.15.0 - 2026-11-01
 
-- fix(sandbox): credential proxy no longer idles out long-quiet streams, and a reviewer that loses its connection is retried once (#570)
+- fix(watch): start no new agent session after a stop signal and stop orphaned agent containers (#575) (#576)
+- fix(pipeline): recover an agent commit whose branch ref update failed, or fail with the worktree kept (#569) (#574)
+- fix(sandbox): disable Bun idleTimeout on the credential proxy and retry a reviewer that loses its connection (#570) (#573)
+- fix(watch): settle awaiting-merge runs when GitHub merges or closes the PR later (#567) (#571)
+- feat(ui): add Today/All toggle for the run list, remembered per browser (#572)
+- fix(watch): don't list a merged run as in flight when its waiting-for-merge event arrives late (#565) (#566)
+- fix(watch): join the hub when a simultaneous start wins the --ui port race (#564)
 
 ## v0.14.0 - 2026-10-29
 
