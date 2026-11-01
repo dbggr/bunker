@@ -1,3 +1,4 @@
+import { exitLabel } from "../core/exit.ts";
 import { $ } from "bun";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -91,6 +92,8 @@ export interface ReviewResult {
   /** The implementer's last session, to continue in a fix round. */
   implSession?: Session;
   error?: string;
+  /** With an error: the step that was running (`setup`, `implementer round 2`, `reviewer round 1`). */
+  failedStep?: string;
 }
 
 export const VERDICT_FORMAT =
@@ -173,6 +176,8 @@ export async function review({
   const usages: (Usage | undefined)[] = [];
   let status: ReviewResult["status"] = "rejected";
   let error: string | undefined;
+  let failedStep: string | undefined;
+  let inSetup = false;
   let approvedClaim: NoChange | undefined;
   const store = await sessionStore(sessionsDir);
   let prev: Session | undefined;
@@ -200,10 +205,12 @@ export async function review({
     copied = await copyIntoWorktree(cwd, wt.path, await copyPatterns(cwd, copyToWorktree));
     if (!resumeFrom) {
       emitStage({ onEvent }, "setup");
+      inSetup = true;
       const prep = await runSetup(sandbox, ctx, setup, timeouts);
       if (prep?.timedOut) throw new IdleTimeout(timeoutMessage("setup", prep.timedOut, timeouts));
-      if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${prep.code}):\n${tailLines(prep.stdout)}`);
+      if (prep && prep.code !== 0) throw new Error(`setup failed (exit ${exitLabel(prep.code)}):\n${tailLines(prep.stdout)}`);
     }
+    inSetup = false;
     // Resuming: the interrupted step continues its session; every earlier one is already in `rounds`.
     let resuming = resumeFrom;
     const savedSession = resumeFrom?.sessionId && resumeFrom.sessionFile ? { id: resumeFrom.sessionId, file: resumeFrom.sessionFile } : undefined;
@@ -236,7 +243,7 @@ export async function review({
         prev = impl.session;
         implOut = interpret(agent, impl.stdout);
         usages.push(implOut.usage);
-        if (impl.code !== 0) throw new Error(`agent exited with ${impl.code}; work kept on ${wt.branch}`);
+        if (impl.code !== 0) throw new Error(`implementer round ${i + 1} failed: agent exited with ${exitLabel(impl.code)}; work kept on ${wt.branch}`);
         await syncBranchToHead(wt);
         const staged = await committedCopies(wt.path, base, copied);
         if (staged.length) throw new Error(`${copyRejection(staged)}; work kept on ${wt.branch}`);
@@ -309,7 +316,7 @@ export async function review({
       await undoSteering();
       attempts.push(revOut.usage);
       usages.push(...attempts);
-      if (rev.code !== 0) throw new Error(`reviewer exited with ${rev.code}; work kept on ${wt.branch}`);
+      if (rev.code !== 0) throw new Error(`reviewer round ${i + 1} failed: reviewer exited with ${exitLabel(rev.code)}; work kept on ${wt.branch}`);
       if (!parsed.ok) throw new BadOutput(`reviewer gave bad output after ${maxRetries} retries: ${parsed.error}; work kept on ${wt.branch}`);
 
       const verdict = parsed.ok ? parsed.value : undefined;
@@ -342,6 +349,7 @@ export async function review({
     } else {
       status = e instanceof Interrupted ? "interrupted" : e instanceof BadOutput ? "bad-output" : e instanceof IdleTimeout ? "idle-timeout" : "failed";
       error = redact(e instanceof Error ? e.message : String(e));
+      failedStep = inSetup ? "setup" : `${step.role} round ${step.round}`;
     }
   } finally {
     await store.done();
@@ -355,5 +363,5 @@ export async function review({
     if (error) status = "conflict";
   }
   const usage = sumUsage(usages);
-  return { status, branch: wt.branch, commits, rounds, ...(usage ? { usage } : {}), ...(approvedClaim ? { noChange: approvedClaim } : {}), ...(prev ? { implSession: prev } : {}), ...(pause ? { pause } : {}), ...(error ? { error } : {}) };
+  return { status, branch: wt.branch, commits, rounds, ...(usage ? { usage } : {}), ...(approvedClaim ? { noChange: approvedClaim } : {}), ...(prev ? { implSession: prev } : {}), ...(pause ? { pause } : {}), ...(error ? { error } : {}), ...(failedStep ? { failedStep } : {}) };
 }
