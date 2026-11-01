@@ -17,7 +17,7 @@ import { createInterrupt } from "./commands/interrupt.ts";
 import { noSandbox } from "../sandboxes/no-sandbox.ts";
 import { formatDuration, formatUsage } from "../agents/agent.ts";
 import { claudeCode } from "../agents/claude.ts";
-import { loadRepoConfigOrExit } from "../core/config.ts";
+import { loadRepoConfig, loadRepoConfigOrExit } from "../core/config.ts";
 import { resolveModels } from "../agents/models.ts";
 import { runAudit } from "../pipeline/audit.ts";
 import { loadSpendCaps } from "../core/spend.ts";
@@ -92,7 +92,7 @@ if (values.version) {
 }
 
 if (positionals.length === 1 && positionals[0] === "self-update") {
-  process.exit(await selfUpdate({ channel: values.channel }));
+  process.exit(await selfUpdate({ channel: values.channel, whenIdle: values["when-idle"], restartAll: values["restart-all"] }));
 }
 
 // `bunker doctor` (read-only checks) and `bunker init` (interactive onboarding). `bunker -- init` is the prompt "init".
@@ -142,6 +142,18 @@ const manual = !!values["no-merge"] || (repoCfg.merge.mode === "manual" && (!!va
 if (manual && values.merge) {
   console.error('bunker: --merge conflicts with manual-merge mode (--no-merge or merge = "manual" in .bunker/config.toml)');
   process.exit(2);
+}
+/** The caps as a watch reload sees them: config re-read, flags from the unit's current args.conf (BUNKER_WATCH_ARGS_FILE) when there is one, else the ones it started with. */
+async function reloadWatchCaps(started: Record<string, any>, cwd: string) {
+  const flags: Record<string, any> = { ...started };
+  const file = process.env.BUNKER_WATCH_ARGS_FILE;
+  if (file) {
+    const args = (await Bun.file(file).text().catch(() => "")).match(/BUNKER_WATCH_ARGS=([^"\n]*)/)?.[1] ?? "";
+    for (const k of ["max-cost-day", "max-cost-month"]) delete flags[k];
+    for (const m of args.matchAll(/--(max-cost-day|max-cost-month)[ =](\S+)/g)) flags[m[1]!] = m[2];
+  }
+  const cfg = (await loadRepoConfig(cwd, { lenient: true })).config;
+  return resolveWatchSettings(flags, cfg.watch, await loadSpendCaps()).caps;
 }
 let watchOpts: { intervalMs: number; maxCostDayUsd?: number; maxCostMonthUsd?: number; forMs?: number; auditEveryDays?: number; triageEveryHours?: number } | undefined;
 if (values.watch) {
@@ -323,7 +335,7 @@ if (values.audit) {
   const notify = desktopNotifier({ enabled: !values["no-notify"] && repoCfg.notify.enabled !== false && !process.env.BUNKER_TEST_NO_NOTIFY });
     const mention = await resolveMention(process.cwd(), liveGhEnv(), repoCfg.notify.github_user);
   try {
-    await runWatch({ notify, mention, onEvent: watchEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, manual, ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, ...(values["no-sandbox"] ? {} : { stopOrphans: (l: (line: string) => void) => stopOrphanedContainers("docker", repoRoot, l) }), logsDays: repoCfg.clean.logs_days ?? 30, signal: ctl.signal, pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
+    await runWatch({ notify, mention, onEvent: watchEvent, agent, reviewer, sandbox, maxRounds, resume, setup: values.setup, verify: values.verify, verifyOnHost: values["verify-on-host"], verifyNetwork: repoCfg.verify_network === true, manual, ciTimeoutMin, ...timeouts, parallel, allowLabelers, cleanOnStart: true, ...(values["no-sandbox"] ? {} : { stopOrphans: (l: (line: string) => void) => stopOrphanedContainers("docker", repoRoot, l) }), logsDays: repoCfg.clean.logs_days ?? 30, signal: ctl.signal, reloadCaps: () => reloadWatchCaps(values, process.cwd()), pull: !values["no-pull"], maxIssues, auditor: claudeCode({ model: models.auditor, json: true }), ...watchOpts });
   } catch (e) {
     console.error(`bunker: ${e instanceof Error ? e.message : e}`);
     await publisher?.flush();
