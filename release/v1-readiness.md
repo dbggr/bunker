@@ -106,11 +106,28 @@ Pointing bunker at repos it wasn't built on (a private Symfony library, a privat
 ## 4. Reliability bar for 1.0
 
 **Soak status (#199):**
-- **Started** 2026-10-18T23:57:25Z with v0.9.0 watchers, daytime `bunker watch`. **Ends** 2026-11-01 at the earliest, if the bar below holds the whole window.
+- **Started** 2026-10-18T23:57:25Z with v0.9.0 watchers, daytime `bunker watch`. **Ended** 2026-11-01 with the bar not met (end reading below); to be restarted.
 - **Repos:** bunker; a private Symfony library (setup in `backend/`, PHPUnit needs Postgres, gated by CI); a private Node/Bun tool. The public bunary-dev packages (core, http, cli, orm, auth) were onboarded during the window and have run audits through bunker; they count from when they joined, not from the soak start.
 - **Interventions so far** (count against the bar): re-queueing a failed hello-world issue after the private library's broken first config; clearing `bunker:failed` on the private library's stuck PR after the shepherd fixes (#441/#446/#447/#450) landed; restarting watchers to pick up those fixes. The private library's ruleset was also recreated by hand after #425.
 - **Measuring:** `bun scripts/v1-readiness.ts --since 2026-10-18T23:57:25Z --refresh`, per repo with `--runs <repo>/.bunker/runs --repo <owner/name>` (several of each give one report per repo plus a combined row, #454). The escapes row counts wrong merges only; add section 3's escapes by hand.
 - **First reading (bunker repo only, day 1, 2026-10-19 ~05:30Z):** wrong merges 0 · unattended success 11 / 13 (85%, bar ≥ 90%) · merged on the first finished attempt 10 / 11 · interventions per merged issue 0.00 · cost per merged issue $0.72. Partial: one day, one repo, and escapes not yet added from section 3 (several of this week's are bunker-merged code, so that row is above 5%). Full per-repo tables at the midpoint (~2026-10-25) and the end.
+- **End reading (2026-11-01, full window, all repos; #599):** `bun scripts/v1-readiness.ts --since 2026-10-18T23:57:25Z --refresh` with one `--runs`/`--repo` pair per repo. The bunary-dev packages count from 2026-10-19, when they joined.
+
+  | Metric | bunker | private Symfony lib | private Node/Bun tool | bunary cli | bunary http | bunary core | bunary orm | bunary auth | combined |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | Wrong merges (bar 0) | 0 | 1 | 0 | 0 | 5 | 3 | 0 | 0 | **9** ✗ |
+  | Unattended success (bar ≥ 90%) | 53 / 71 (75%) | 10 / 12 (83%) | 12 / 13 (92%) | 11 / 16 (69%) | 15 / 25 (60%) | 0 / 4 (0%) | 9 / 18 (50%) | 10 / 15 (67%) | **120 / 174 (69%)** ✗ |
+  | Merged on the first finished attempt (bar ≥ 90%) | 51 / 53 (96%) | 10 / 10 | 12 / 12 | 9 / 11 (82%) | 12 / 15 (80%) | 0 / 0 | 9 / 9 | 9 / 10 (90%) | **112 / 120 (93%)** ✓ |
+  | Interventions per merged issue (bar ≤ 0.10) | 0.02 | 0.00 | 0.00 | 0.00 | 0.07 | n/a | 0.00 | 0.00 | 0.02 reported, **undercounted** ✗ |
+  | Escapes per merged bunker PR (bar ≤ 5%) | 0% | 8% | 0% | 0% | 25% | 75% | 0% | 0% | **6%** ✗ |
+  | Cost per merged issue (bar ≤ $2) | $0.74 | $0.29 | $0.18 | $0.96 | $1.34 | n/a | $2.48 | $1.79 | **$0.97** ✓ |
+
+  Reading the ✗ rows:
+  - **Wrong merges and escapes:** 8 of the 9 are `Tag release on main` failing on a duplicate tag in bunary core and http on 2026-10-19 (CI, tests and the consumer smoke test were green on those commits): bunker's PRs didn't bump `package.json`, which those repos require. Fixed by a version-bump rule in each bunary package's CLAUDE.md (bunary-dev/cli#129, http#146, core#90, orm#89, auth#90). The ninth is a real test failure after a bunker merge on the private Symfony library.
+  - **Unattended success** counts `needs-review` (a run that correctly stopped at a human-review path), `no-change` (issue already fixed) and `blocked` as failures. In bunker, 8 of the 18 non-merges are needs-review and 3 are no-change; without them bunker is 53 / 60 (88%). Fixing the definition: #597.
+  - **Interventions are undercounted:** the script looks for the old label names `bunker` / `bunker-failed` (current: `bunker:queued` / `bunker:failed`), so every re-queue read as 0, and it doesn't count hand commits to bunker PRs. On 2026-10-31/11-01 alone there were 6 re-queues (bunary http #37 #98 #128, orm #80, auth #77, bunker #569), three hand conflict resolutions on PR #587, and a cancelled run. Fix: #598. With those the bar is not met.
+  - Root causes found and fixed during the window: reviewer "Connection lost mid-response" from the credential proxy's 10 s idle timeout (#570), stuck "waiting for merge" runs (#567), a lost agent commit (#569), orphaned containers on watch stop (#575), review-held PRs left conflicting (#590), a hub run shown as running forever after a killed watcher (#595, open).
+- **Verdict: the bar is not met; v1.0 is not tagged.** The soak restarts once #597, #598 and the bunary version-bump rule have landed, on main@edd8494 or later (v0.15.0 plus #579–#585, #590), measured with the corrected script.
 
 **Definitions (`scripts/v1-readiness.ts`):** *Unattended success* is (merged + `no-change`) / finished runs, with gated and blocked runs left out of the denominator and shown in their own rows.
 - **Gated** = a run that ended `needs-review` or `awaiting-review`: it correctly stopped at a human-review path (e.g. `package.json`, `src/pipeline/review.ts`) or in manual-merge mode. Not a failure. If its PR later merged with only an approve/merge it counts as a success (merged); if a human pushed commits to it, it counts as a human intervention instead (neither success nor failure). A gated PR still open or closed unmerged stays in the gated row only.
