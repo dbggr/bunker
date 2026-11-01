@@ -112,6 +112,11 @@ Pointing bunker at repos it wasn't built on (a private Symfony library, a privat
 - **Measuring:** `bun scripts/v1-readiness.ts --since 2026-10-18T23:57:25Z --refresh`, per repo with `--runs <repo>/.bunker/runs --repo <owner/name>` (several of each give one report per repo plus a combined row, #454). The escapes row counts wrong merges only; add section 3's escapes by hand.
 - **First reading (bunker repo only, day 1, 2026-10-19 ~05:30Z):** wrong merges 0 · unattended success 11 / 13 (85%, bar ≥ 90%) · merged on the first finished attempt 10 / 11 · interventions per merged issue 0.00 · cost per merged issue $0.72. Partial: one day, one repo, and escapes not yet added from section 3 (several of this week's are bunker-merged code, so that row is above 5%). Full per-repo tables at the midpoint (~2026-10-25) and the end.
 
+**Definitions (`scripts/v1-readiness.ts`):** *Unattended success* is (merged + `no-change`) / finished runs, with gated and blocked runs left out of the denominator and shown in their own rows.
+- **Gated** = a run that ended `needs-review` or `awaiting-review`: it correctly stopped at a human-review path (e.g. `package.json`, `src/pipeline/review.ts`) or in manual-merge mode. Not a failure. If its PR later merged with only an approve/merge it counts as a success (merged); if a human pushed commits to it, it counts as a human intervention instead (neither success nor failure). A gated PR still open or closed unmerged stays in the gated row only.
+- **`no-change`** (issue already fixed, closed with an explained comment) counts as a success.
+- **Blocked** (waiting on another issue) is excluded from the denominator and reported in its own row.
+
 Thresholds over a **14-day `--watch` soak** on bunker itself plus at least one repo bunker wasn't built on (core or a private repo), measured by `scripts/v1-readiness.ts --since <soak start>`:
 
 | Metric | Bar | Measured (recent window) | Met? |
