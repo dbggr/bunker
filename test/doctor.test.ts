@@ -290,3 +290,20 @@ describe("doctor agent firewall", () => {
     expect(r.checks.find((c) => c.id === "agent-firewall")?.ok).toBe(true);
   });
 });
+
+describe("doctor watch unit", () => {
+  test("flags a systemd override whose ExecStart drops $BUNKER_WATCH_ARGS", async () => {
+    const w = await fakeWorld();
+    const xdg = join(w.repo, "xdg");
+    const env = { ...w.env, XDG_CONFIG_HOME: xdg };
+    const dir = join(xdg, "systemd", "user", "bunker-watch@.service.d");
+    expect((await runDoctor({ cwd: w.repo, env })).checks.find((c) => c.id === "watch-unit-args")).toBeUndefined();
+    await Bun.write(join(dir, "flags.conf"), "[Service]\nExecStart=\nExecStart=/usr/bin/bunker watch --ui\n");
+    const c = (await runDoctor({ cwd: w.repo, env })).checks.find((c) => c.id === "watch-unit-args");
+    expect(c?.ok).toBe(false);
+    expect(c?.required).toBe(false);
+    expect(c?.detail).toContain("flags.conf");
+    await Bun.write(join(dir, "flags.conf"), "[Service]\nExecStart=\nExecStart=/usr/bin/bunker watch --ui $BUNKER_WATCH_ARGS\n");
+    expect((await runDoctor({ cwd: w.repo, env })).checks.find((c) => c.id === "watch-unit-args")?.ok).toBe(true);
+  });
+});
