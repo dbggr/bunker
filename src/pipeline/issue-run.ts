@@ -223,7 +223,7 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
       log(`verify fix round ${i + 1}: agent output`, r.output);
       log(`verify fix round ${i + 1}: reviewer output (${r.approved ? "approved" : "changes requested"})`, r.feedback);
     }
-    if (fix.error) log("verify fix round error", fix.error);
+    if (fix.error) log(`verify fix round: ${fix.failedStep ?? "review"} error`, fix.error);
     const usage = sumUsage([result.usage, fix.usage]);
     Object.assign(result, { rounds: [...result.rounds, ...fix.rounds], commits: [...result.commits, ...fix.commits], ...(usage ? { usage } : {}), ...(fix.implSession ? { implSession: fix.implSession } : {}) });
     spent.usage = result.usage;

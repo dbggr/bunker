@@ -85,6 +85,6 @@ export async function implementIssue(ctx: IssueRunContext, input: ImplementInput
     log(`round ${i + 1}: agent output`, r.output);
     log(`round ${i + 1}: reviewer output (${r.approved ? "approved" : "changes requested"})`, r.feedback);
   }
-  if (result.error) log("review error", result.error);
+  if (result.error) log(`${result.failedStep ?? "review"} error`, result.error);
   return { result, prompt };
 }
