@@ -125,6 +125,13 @@ describe("interventions", () => {
     expect(t.interventions).toBe(2);
   });
 
+  test("a run whose log records a cancel is an intervention even if it ended otherwise", () => {
+    const r = parseRun("1-2026-10-19T10-00-00-000Z.log", "== final status: merged ==\n\n== cancelled by request ==\n");
+    expect(r.cancelled).toBe(true);
+    const t = totalsFor("o/r", [r, { ...r, status: "interrupted" }], { interventions: 0, bunkerMergedPrs: 0, wrongMerges: 0 });
+    expect(t.interventions).toBe(2); // one each, not double counted
+  });
+
   describe("hand commits on bunker PRs", () => {
     const bunker = (n: number) => ({ sha: `b${n}`, message: `feat: thing\n\nBunker-Run: 7-2026-11-02T10-00-00-000Z` });
     const hand = { sha: "h1", message: "fix: tweak by hand" };

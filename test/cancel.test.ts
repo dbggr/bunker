@@ -3,7 +3,7 @@ import { $ } from "bun";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cancelRequested, issueScope, markCancelled, requestCancel, takeCancelRequests, takeCancelled } from "../src/core/cancel.ts";
+import { cancelRequested, recordCancel, issueScope, markCancelled, requestCancel, takeCancelRequests, takeCancelled } from "../src/core/cancel.ts";
 import { createCanceller, activeIssues } from "../src/cli/commands/cancel.ts";
 import { agentStep } from "../src/pipeline/agent-step.ts";
 import { Interrupted } from "../src/pipeline/errors.ts";
@@ -56,6 +56,7 @@ function canceller(active: number[]) {
     abandon: async (n) => (events.push(`abandon ${n}`), "bunker/stale/1-x"),
     unlabel: async (n) => void events.push(`unlabel ${n}`),
     comment: async (n, body) => void events.push(`comment ${n}: ${body}`),
+    record: (n) => void events.push(`record ${n}`),
     log: (l) => void events.push(`log ${l}`),
   });
   return { cancel, events };
@@ -65,14 +66,32 @@ describe("createCanceller", () => {
   test("cancels one active run only: stops it, keeps its work, relabels and comments", async () => {
     const { cancel, events } = canceller([5, 6]);
     expect(await cancel(5)).toBe(true);
-    expect(events.slice(0, 4)).toEqual(["mark 5", "stop 5", "abandon 5", "unlabel 5"]);
-    expect(events[4]).toMatch(/^comment 5: .*cancelled.*bunker\/stale\/1-x/);
+    expect(events.slice(0, 5)).toEqual(["mark 5", "record 5", "stop 5", "abandon 5", "unlabel 5"]);
+    expect(events[5]).toMatch(/^comment 5: .*cancelled.*bunker\/stale\/1-x/);
     expect(events.some((e) => / 6\b/.test(e) && !e.startsWith("log"))).toBe(false);
   });
   test("ignores an issue without an active run", async () => {
     const { cancel, events } = canceller([5]);
     expect(await cancel(6)).toBe(false);
     expect(events.every((e) => e.startsWith("log"))).toBe(true);
+  });
+});
+
+describe("recordCancel", () => {
+  test("appends a cancelled line to the issue's latest run log only", async () => {
+    const repo = await tmp();
+    const runs = join(repo, ".bunker", "runs");
+    await Bun.write(join(runs, "5-2026-11-01T10-00-00-000Z.log"), "old\n");
+    await Bun.write(join(runs, "5-2026-11-01T11-00-00-000Z.log"), "new\n");
+    await Bun.write(join(runs, "6-2026-11-01T12-00-00-000Z.log"), "other\n");
+    recordCancel(repo, 5);
+    expect(await Bun.file(join(runs, "5-2026-11-01T11-00-00-000Z.log")).text()).toContain("== cancelled by request ==");
+    expect(await Bun.file(join(runs, "5-2026-11-01T10-00-00-000Z.log")).text()).toBe("old\n");
+    expect(await Bun.file(join(runs, "6-2026-11-01T12-00-00-000Z.log")).text()).toBe("other\n");
+  });
+  test("does nothing without a run log", async () => {
+    const repo = await tmp();
+    expect(() => recordCancel(repo, 5)).not.toThrow();
   });
 });
 

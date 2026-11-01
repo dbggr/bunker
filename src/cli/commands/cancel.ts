@@ -9,6 +9,8 @@ export interface CancelDeps {
   active: () => number[];
   /** Marks the run cancelled, so it starts nothing new and its result is not a failure. */
   mark: (issue: number) => void;
+  /** Writes the cancel into the run's log. */
+  record: (issue: number) => void;
   /** Kills the run's containers. */
   stopContainers: (issue: number) => void;
   /** Keeps the run's worktree work as a stale tag; returns the tag. */
@@ -27,6 +29,7 @@ export function createCanceller(d: CancelDeps) {
       return false;
     }
     d.mark(issue);
+    d.record(issue);
     d.stopContainers(issue);
     const kept = await d.abandon(issue).catch(() => undefined);
     await d.unlabel(issue);

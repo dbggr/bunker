@@ -45,6 +45,8 @@ export interface Run {
   costUsd: number;
   verifyFailed: boolean;
   leftoverKept: boolean;
+  /** The log records a `bunker cancel` (`== cancelled by request ==`). */
+  cancelled?: boolean;
 }
 
 export interface PrState {
@@ -92,6 +94,7 @@ export function parseRun(file: string, text: string): Run {
     costUsd,
     verifyFailed: /^== verify \(exit [1-9]/m.test(text),
     leftoverKept: /^== stale leftover kept/m.test(text),
+    ...(/^== cancelled by request ==$/m.test(text) ? { cancelled: true } : {}),
   };
 }
 
@@ -172,8 +175,8 @@ export function totalsFor(repo: string, runs: Run[], extra: { interventions: num
     issuesMerged: merged.length,
     firstTry: firstTry.length,
     ...extra,
-    // A run a human cancelled or stopped (`bunker cancel`, Ctrl-C) ends `interrupted`.
-    interventions: extra.interventions + intervened.length + finished.filter((r) => r.status === "interrupted").length,
+    // A run a human cancelled (logged by `bunker cancel`) or stopped (Ctrl-C ends it `interrupted`); counted once.
+    interventions: extra.interventions + intervened.length + finished.filter((r) => r.status === "interrupted" || r.cancelled).length,
     costUsd: runs.reduce((a, r) => a + r.costUsd, 0),
   };
 }
