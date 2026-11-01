@@ -1,5 +1,6 @@
 import { $ } from "bun";
 import { redact } from "../core/redact.ts";
+import { worktreeAdmin } from "./admin.ts";
 
 export interface Commit {
   sha: string;
@@ -26,5 +27,5 @@ export async function mergeBack(cwd: string, branch: string, commits: Commit[]):
       return redact(`merge conflict on ${branch}; branch kept:\n${merge.stdout}${merge.stderr}`);
     }
   }
-  await $`git -C ${cwd} branch -q -D ${branch}`;
+  await worktreeAdmin(cwd, () => $`git -C ${cwd} branch -q -D ${branch}`);
 }
