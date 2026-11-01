@@ -165,6 +165,13 @@ function fakeAgent(script: string, prompts: string[] = [], reviews: string[] = [
 }
 
 const COMMIT_FIX = `echo fixed > fix.txt && git add . && git commit -qm "fix: make the check pass"`;
+/** Full messages of the commits bunker added to `branch`: those past `from` (the PR's head before the pass) that main does not have. */
+const remoteBodies = async (w: World, branch: string, from: string) => (await $`git -C ${w.origin} log --format=%B%x00 ${branch} ${"^main"} ${`^${from}`}`.text()).split("\0").map((m) => m.trim()).filter(Boolean);
+/** Moves origin's main ahead by a commit that does not touch the PR's files. */
+const advanceMain = async (w: World) => {
+  await w.branch("tmp-main", { "other.txt": "other\n" });
+  await $`git -C ${w.repo} push -q origin tmp-main:main`;
+};
 const remoteLog = async (w: World, branch: string) => (await $`git -C ${w.origin} log --format=%s ${branch}`.text()).trim().split("\n");
 
 const shepherd = (w: World, agent: Agent, extra: object = {}) => createShepherd({ cwd: w.repo, agent, sandbox: noSandbox(), verify: "true", ...extra });
@@ -528,29 +535,35 @@ describe("shepherd pass", () => {
     expect(notes).toHaveLength(1);
   });
 
-  test("behind the base → the branch is updated through GitHub", async () => {
+  test("behind the base → bunker merges the base itself, so the merge commit carries the Bunker-Run trailer", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    await advanceMain(w);
     w.state.prs.push(prJson(10, "fix/7-thing", sha, { mergeStateStatus: "BEHIND" }));
     w.state.checks[10] = GREEN;
     w.save();
     const prompts: string[] = [];
     const pass = await shepherd(w, fakeAgent(COMMIT_FIX, prompts)).pass();
     expect(pass.entries[0]).toMatchObject({ action: "updated-branch" });
-    expect(w.calls().some((c) => c.startsWith("api -X PUT repos/{owner}/{repo}/pulls/10/update-branch") && c.includes(sha))).toBe(true);
+    expect(w.calls().some((c) => c.includes("update-branch"))).toBe(false); // GitHub's web-flow merge cannot carry a trailer
+    const bodies = await remoteBodies(w, "fix/7-thing", sha);
+    expect(bodies.some((b) => b.startsWith("Merge"))).toBe(true);
+    expect(bodies.every((b) => /^Bunker-Run: 7-/m.test(b))).toBe(true);
     expect(prompts).toHaveLength(0);
   });
 
   test("bunker:review PR behind the base → the branch is still updated, nothing else is touched", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    await advanceMain(w);
     w.state.prs.push(prJson(10, "fix/7-thing", sha, { mergeStateStatus: "BEHIND", labels: [{ name: "bunker:review" }] }));
     w.state.checks[10] = GREEN;
     w.save();
     const prompts: string[] = [];
     const pass = await shepherd(w, fakeAgent(COMMIT_FIX, prompts)).pass();
     expect(pass.entries[0]).toMatchObject({ action: "updated-branch" });
-    expect(w.calls().some((c) => c.startsWith("api -X PUT repos/{owner}/{repo}/pulls/10/update-branch"))).toBe(true);
+    expect(w.calls().some((c) => c.includes("update-branch"))).toBe(false);
+    expect((await remoteBodies(w, "fix/7-thing", sha)).every((b) => /^Bunker-Run: 7-/m.test(b))).toBe(true);
     expect(prompts).toHaveLength(0);
   });
 
@@ -575,11 +588,15 @@ describe("shepherd pass", () => {
 
   test("conflicting bunker:review PR → resolved and pushed, label kept, auto-merge never touched", async () => {
     const w = await world();
-    await conflictedReview(w);
+    const sha = await conflictedReview(w);
     const resolve = `printf 'both\\n' > a.txt && git add a.txt && git commit -qm "merge: resolve conflict"`;
     const pass = await shepherd(w, fakeAgent(resolve)).pass();
     expect(pass.entries[0]).toMatchObject({ action: "resolved-conflict" });
     expect((await $`git -C ${w.origin} show fix/7-thing:a.txt`.text())).toBe("both\n");
+    // the merge commit the agent finished carries the trailer; main's own commits are not rewritten
+    const bodies = await remoteBodies(w, "fix/7-thing", sha);
+    expect(bodies.length).toBeGreaterThanOrEqual(1);
+    expect(bodies.every((b) => /^Bunker-Run: 7-/m.test(b))).toBe(true);
     expect(w.calls().some((c) => /auto|label|merge/i.test(c) && !c.startsWith("pr list"))).toBe(false);
   });
 

@@ -21,6 +21,7 @@ import { addPrLabel, ensureLabel, FAILED_LABEL, requestReviewer, REVIEW_LABEL } 
 import { copyIntoWorktree, copyPatterns } from "../worktree/copy.ts";
 import { runSetup, worktreeAdmin } from "../worktree/admin.ts";
 import { isReviewPath } from "../worktree/steering.ts";
+import { stampCommits } from "../worktree/trailer.ts";
 import { UsageLimit } from "./errors.ts";
 import { VERDICT_FORMAT } from "./review.ts";
 
@@ -403,6 +404,10 @@ export function createShepherd(o: ShepherdOptions) {
       await edit({ worktree, repo, gitCommonDir, baseSha, headSha, identity });
       const tip = (await $`git -C ${worktree} rev-parse HEAD`.text()).trim();
       if (tip === headSha) throw new Refused("nothing to push: the agent made no commit");
+      // Every commit this pass made (the agent's, the merge of the base) is marked as bunker's; a commit without the trailer on a PR is a human's.
+      const issueNo = /^(?:feature|fix)\/(\d+)-/.exec(pr.branch)?.[1] ?? String(pr.number);
+      const stamped = await stampCommits(worktree, tip, [headSha, baseSha], `${issueNo}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+      if (stamped !== tip) await $`git -C ${worktree} reset -q --soft ${stamped}`.quiet();
       // An armed PR was checked not to touch these; a fix must not add to them behind the human's back.
       const baseToml = await $`git -C ${repo} show ${`${baseSha}:.bunker/config.toml`}`.nothrow().quiet();
       const reviewPaths = baseToml.exitCode === 0 ? (parseConfig(baseToml.stdout.toString()).config.review_paths ?? []) : [];
@@ -581,9 +586,20 @@ export function createShepherd(o: ShepherdOptions) {
     }
   };
 
+  /** Merges the base into the branch here rather than through GitHub's update-branch API: that merge commit is the web-flow's and cannot carry the Bunker-Run trailer. */
   const updateBranch = async (pr: BunkerPr): Promise<ShepherdEntry> => {
-    const r = await gh`gh api -X PUT repos/{owner}/{repo}/pulls/${pr.number}/update-branch -f expected_head_sha=${pr.headSha}`;
-    if (r.exitCode !== 0) return entry(pr, "failed", `could not update the branch: ${r.stderr.toString().trim()}`);
+    try {
+      await inWorktree(pr, async (w) => {
+        const merged = await $`git ${w.identity} -C ${w.worktree} merge --no-edit ${w.baseSha}`.nothrow().quiet();
+        if (merged.exitCode !== 0) {
+          await $`git -C ${w.worktree} merge --abort`.nothrow().quiet();
+          throw new Refused(`could not update the branch:\n${merged.stderr}${merged.stdout}`);
+        }
+      });
+    } catch (e) {
+      if (e instanceof Refused) return entry(pr, "failed", `could not update the branch: ${e.message}`);
+      throw e;
+    }
     note(pr, `updated the branch to ${pr.base}`);
     return entry(pr, "updated-branch");
   };

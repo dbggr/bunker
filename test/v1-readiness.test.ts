@@ -1,5 +1,5 @@
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
-import { combine, parseRun, resolveRun, section4, totalsFor, wrongMergedPrs, type PrState } from "../scripts/v1-readiness-lib.ts";
+import { combine, failedLabelsOf, handCommitState, handCommitsLine, parseRun, requeuesOf, resolveRun, section4, summariseHandCommits, totalsFor, wrongMergedPrs, type PrState } from "../scripts/v1-readiness-lib.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -99,6 +99,60 @@ describe("v1-readiness", () => {
       expect(md).toContain("| 1 / 1 (100%) | 1 / 1 (100%) |");
       expect(md).toMatch(/\| Gated runs[^|]*\| 1 \| 1 \|/);
       expect(md).toMatch(/\| Blocked runs[^|]*\| 1 \| 1 \|/);
+    });
+  });
+});
+
+describe("interventions", () => {
+  const ev = (event: string, name: string) => ({ event, label: { name } });
+
+  test("re-queues are repeated bunker:queued labelling after the first, plus the old `bunker` name", () => {
+    expect(requeuesOf([ev("labeled", "bunker:queued")])).toBe(0);
+    expect(requeuesOf([ev("labeled", "bunker:queued"), ev("labeled", "bunker:queued"), ev("labeled", "bunker:queued")])).toBe(2);
+    expect(requeuesOf([ev("labeled", "bunker"), ev("labeled", "bunker:queued")])).toBe(1); // history: renamed label
+    expect(requeuesOf([ev("labeled", "bunker"), ev("labeled", "bunker")])).toBe(1);
+    expect(requeuesOf([ev("labeled", "bunker:queued"), ev("unlabeled", "bunker:queued"), ev("labeled", "bunker:failed")])).toBe(0);
+    expect(requeuesOf([])).toBe(0);
+  });
+
+  test("failed labels count bunker:failed and the old bunker-failed", () => {
+    expect(failedLabelsOf([ev("labeled", "bunker:failed"), ev("labeled", "bunker-failed"), ev("labeled", "bunker:queued"), ev("unlabeled", "bunker:failed")])).toBe(2);
+  });
+
+  test("an interrupted run (a cancel or a stop) is an intervention", () => {
+    const runs = [run("1-2026-10-19T10-00-00-000Z.log", "interrupted"), run("2-2026-10-19T10-00-00-000Z.log", "merged")];
+    const t = totalsFor("o/r", runs, { interventions: 1, bunkerMergedPrs: 1, wrongMerges: 0 });
+    expect(t.interventions).toBe(2);
+  });
+
+  describe("hand commits on bunker PRs", () => {
+    const bunker = (n: number) => ({ sha: `b${n}`, message: `feat: thing\n\nBunker-Run: 7-2026-11-02T10-00-00-000Z` });
+    const hand = { sha: "h1", message: "fix: tweak by hand" };
+    const webFlow = { sha: "w1", message: "Merge branch 'main' into feature/7-x" };
+
+    test("a commit without the trailer on a PR whose bunker commits carry it is one intervention", () => {
+      expect(handCommitState([bunker(1), hand])).toBe("hand");
+      expect(handCommitState([bunker(1), hand, { ...hand, sha: "h2" }])).toBe("hand"); // still one per PR
+    });
+
+    test("the Update branch button (a web-flow merge) counts as human", () => {
+      expect(handCommitState([bunker(1), webFlow])).toBe("hand");
+    });
+
+    test("all commits marked → clean", () => {
+      expect(handCommitState([bunker(1), bunker(2)])).toBe("clean");
+    });
+
+    test("a PR with no trailer at all predates the change: unknown, never guessed from identity", () => {
+      expect(handCommitState([hand, { ...hand, sha: "h2" }])).toBe("unknown");
+      expect(handCommitState([hand, webFlow])).toBe("unknown");
+      expect(handCommitState([])).toBe("unknown");
+    });
+
+    test("the report line states the gap", () => {
+      const s = summariseHandCommits([[bunker(1), hand], [bunker(2)], [hand], [webFlow, hand]]);
+      expect(s).toEqual({ handCommitPrs: 1, unknownPrs: 2 });
+      expect(handCommitsLine(s)).toBe("hand commits: 1 (2 PRs predate the trailer, not counted)");
     });
   });
 });
