@@ -685,6 +685,33 @@ describe("queue order: priority, bug, age", () => {
     expect(notes).toContain("queue: #2");
   });
 
+  describe("tracking issues", () => {
+    const TRACKING = "Epic\n\n- [ ] #80\n- [x] #81\n- [ ] #82";
+    test("refuses an issue whose task list is only issue references, logs it and comments once", async () => {
+      const { repo, root } = await ordered([[1, "2026-01-01T00:00:00Z", []], [2, "2026-01-02T00:00:00Z", []]], { 1: { body: TRACKING } });
+      const notes: string[] = [];
+      const rs = await run(repo, { relist: true, onEvent: (e: { type: string; text?: string }) => e.type === "note" && notes.push(e.text ?? "") });
+      expect(rs.map((r) => r.issue)).toEqual([2]);
+      expect(notes.filter((n) => n === "skipped #1: tracking issue").length).toBe(1);
+      const edits = await Bun.file(join(root, "edits.log")).text();
+      expect(edits.split("\n").filter((l) => l.startsWith("issue comment 1 ")).length).toBe(1);
+      expect(edits).toContain("bunker:force");
+    });
+    test("a task list with real tasks is not a tracking issue", async () => {
+      const { repo } = await ordered([[1, "2026-01-01T00:00:00Z", []]], { 1: { body: "- [ ] #80\n- [ ] write the docs" } });
+      expect((await run(repo)).map((r) => r.issue)).toEqual([1]);
+    });
+    test("bunker:force overrides the refusal", async () => {
+      const { repo } = await ordered([[1, "2026-01-01T00:00:00Z", ["bunker:force"]]], { 1: { body: TRACKING } });
+      expect((await run(repo)).map((r) => r.issue)).toEqual([1]);
+    });
+    test("bunker:force is created like the priority labels", async () => {
+      const { repo, root } = await ordered([[1, "2026-01-01T00:00:00Z", []]]);
+      await run(repo, { limit: 1 });
+      expect(await Bun.file(join(root, "edits.log")).text()).toContain("label create bunker:force");
+    });
+  });
+
   test("creates the priority labels", async () => {
     const { repo, root } = await ordered([[1, "2026-01-01T00:00:00Z", []]]);
     await run(repo, { limit: 1 });

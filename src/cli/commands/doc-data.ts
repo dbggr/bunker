@@ -272,6 +272,7 @@ export const LABELS: [label: string, meaning: string][] = [
   ["`bunker:queued`", "set by you (or `triage --yes`) to queue an issue for `queue` / `watch`; by default only repo admins and maintainers may set it (see `--allow-labeler`). Returns once the blockers of a `bunker-blocked` issue close"],
   ["`bunker:in-progress`", "set while a run works the issue"],
   ["`bunker:exclude`", "set by you on an issue that is never for bunker (e.g. a maintainer-only decision): `triage` skips it, `queue` / `watch` skip it even if also `bunker:queued` (the queue output says why), and `triage --yes` never queues it"],
+  ["`bunker:force`", "set by you on an issue whose task list only references other issues: `queue` / `watch` refuse such a tracking issue (`skipped #N: tracking issue`, one comment) unless it carries this label; label tracking issues `bunker:exclude` instead"],
   ["`bunker:failed`", "set on a failed issue instead of `bunker:queued`, never retried automatically; also set on a PR after 3 failed shepherd fix attempts"],
   ["`bunker:awaiting-review`", "set on an open PR in manual-merge mode (`--no-merge`, `merge = \"manual\"`); bunker never merges it"],
   ["`bunker:review`", "set on a PR whose changes a human must review (bunker leaves auto-merge off); the shepherd leaves it for a human to merge"],

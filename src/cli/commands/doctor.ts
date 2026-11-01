@@ -15,7 +15,7 @@ import { AGENT_NETWORK } from "../../sandboxes/container.ts";
 import { DEFAULT_EGRESS } from "../../sandboxes/egress.ts";
 import { bridgeName, egressDenied, firewallRules, proxyReachable, rulesBlock } from "../../sandboxes/firewall.ts";
 import { applyIdentity, identityKind } from "../../github/identity.ts";
-import { AWAITING_REVIEW_LABEL, EXCLUDE_LABEL, FAILED_LABEL, IN_PROGRESS_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
+import { AWAITING_REVIEW_LABEL, EXCLUDE_LABEL, FAILED_LABEL, FORCE_LABEL, IN_PROGRESS_LABEL, QUEUED_LABEL, REVIEW_LABEL } from "../../github/labels.ts";
 import { SKILL_ROLES, SkillError, resolveSkills, skillPaths } from "../../core/skills.ts";
 import { PRIORITY_LABELS } from "../../core/priority.ts";
 import { requiredCheck } from "../../core/required-check.ts";
@@ -28,8 +28,8 @@ export const OLD_LABELS: Record<string, string> = { bunker: QUEUED_LABEL, "bunke
 /** Filed on follow-ups and audit findings; filing falls back to no severity label without them, so they are optional. */
 export const SEVERITY_LABELS = ["severity:high", "severity:medium"] as const;
 /** Only manual-merge mode applies this one; it is created by bunker on first use, so it is optional too. */
-export const OPTIONAL_LABELS: readonly string[] = [...SEVERITY_LABELS, AWAITING_REVIEW_LABEL, EXCLUDE_LABEL];
-export const LABELS = [QUEUED_LABEL, IN_PROGRESS_LABEL, FAILED_LABEL, REVIEW_LABEL, AWAITING_REVIEW_LABEL, EXCLUDE_LABEL, "discovered", "bunker-blocked", ...PRIORITY_LABELS.map((p) => p.name), ...SEVERITY_LABELS] as const;
+export const OPTIONAL_LABELS: readonly string[] = [...SEVERITY_LABELS, AWAITING_REVIEW_LABEL, EXCLUDE_LABEL, FORCE_LABEL];
+export const LABELS = [QUEUED_LABEL, IN_PROGRESS_LABEL, FAILED_LABEL, REVIEW_LABEL, AWAITING_REVIEW_LABEL, EXCLUDE_LABEL, FORCE_LABEL, "discovered", "bunker-blocked", ...PRIORITY_LABELS.map((p) => p.name), ...SEVERITY_LABELS] as const;
 
 /** Total bytes of the files under `dir` (0 if missing); symlinks are not followed. */
 function dirSize(dir: string): number {
