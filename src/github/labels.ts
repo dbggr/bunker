@@ -93,10 +93,58 @@ export async function requestReviewer(pr: number | string, login: string, cwd: s
   return outcome(await $`gh api -X POST repos/{owner}/{repo}/pulls/${prNumber(pr)}/requested_reviewers -f ${`reviewers[]=${login}`}`.cwd(cwd).env(env).nothrow().quiet());
 }
 
-/** An issue whose PR landed: drops `bunker:queued` and `bunker:in-progress`, which the closed issue would otherwise keep. Best effort. */
+/** A run that ended with its PR waiting for a human: swaps `bunker:queued` and `bunker:in-progress` for `bunker:awaiting-review`, so the issue no longer looks queued. Best effort. */
+export async function markAwaitingReview(issue: number, cwd: string, env: Env): Promise<void> {
+  await ensureLabel(AWAITING_REVIEW_LABEL, cwd, env);
+  await unqueue(issue, cwd, env, ["--add-label", AWAITING_REVIEW_LABEL, "--remove-label", IN_PROGRESS_LABEL]);
+}
+
+/** Drops `bunker:awaiting-review` from the issue. Best effort. */
+export async function clearAwaitingReview(issue: number, cwd: string, env: Env): Promise<void> {
+  await $`gh issue edit ${issue} --remove-label ${AWAITING_REVIEW_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
+}
+
+/** An issue whose PR landed: drops `bunker:queued`, `bunker:in-progress` and `bunker:awaiting-review`, which the closed issue would otherwise keep. Best effort. */
 export async function clearLanded(issue: number, cwd: string, env: Env): Promise<void> {
   await unqueue(issue, cwd, env);
   await clearInProgress(issue, cwd, env);
+  await clearAwaitingReview(issue, cwd, env);
+}
+
+/** Issue numbers carrying `label` in `state`; empty when gh fails. */
+async function issuesWith(label: string, state: "open" | "closed", cwd: string, env: Env): Promise<number[]> {
+  const list = await $`gh issue list --label ${label} --state ${state} --limit 100 --json number`.cwd(cwd).env(env).nothrow().quiet();
+  if (list.exitCode !== 0) return [];
+  try {
+    return (JSON.parse(list.stdout.toString() || "[]") as { number?: unknown }[]).flatMap((i) => (typeof i?.number === "number" ? [i.number] : []));
+  } catch {
+    return [];
+  }
+}
+
+/** Closed issues still labelled `bunker:awaiting-review` (their PR merged): the label is removed. Returns the issues cleared. */
+export async function sweepClosedAwaitingReview(cwd: string, env: Env): Promise<number[]> {
+  const cleared: number[] = [];
+  for (const n of await issuesWith(AWAITING_REVIEW_LABEL, "closed", cwd, env)) {
+    const r = await $`gh issue edit ${n} --remove-label ${AWAITING_REVIEW_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
+    if (r.exitCode === 0) cleared.push(n);
+  }
+  return cleared;
+}
+
+/**
+ * Open issues labelled `bunker:awaiting-review` whose PR closed unmerged (`closedUnmerged`): the label is removed and the issue is not
+ * re-queued; a maintainer relabels `bunker:queued` to retry. Returns the issues released.
+ */
+export async function releaseUnmergedReview(closedUnmerged: Set<number>, cwd: string, env: Env): Promise<number[]> {
+  if (!closedUnmerged.size) return [];
+  const released: number[] = [];
+  for (const n of await issuesWith(AWAITING_REVIEW_LABEL, "open", cwd, env)) {
+    if (!closedUnmerged.has(n)) continue;
+    const r = await $`gh issue edit ${n} --remove-label ${AWAITING_REVIEW_LABEL}`.cwd(cwd).env(env).nothrow().quiet();
+    if (r.exitCode === 0) released.push(n);
+  }
+  return released;
 }
 
 /**
