@@ -103,11 +103,11 @@ The hub keeps each repo's events in `$XDG_STATE_HOME/bunker/hub/<owner>_<repo>.j
 `bunker watch` runs a shepherd stage on every pass, and `bunker shepherd` runs one pass by hand. It owns every open bunker PR (same-repo branch `feature|fix/<n>-…` whose body says `Closes #<n>`) until GitHub merges it or a human is needed, and keeps no state: everything comes from GitHub, so a restarted watcher carries on. For each PR:
 
 - a **red required check**: the failed job's log goes to a fix agent in a worktree of the PR branch; after setup and verify pass the fix is pushed. At most 3 attempts (counted from hidden markers in the PR's comments), then the PR and its issue get `bunker:failed`, a comment and a notification. CI is read from the Actions runs and jobs of the PR's head commit plus its commit statuses (Actions: Read on the token; a fine-grained token cannot read check runs), and a required context with no run yet counts as pending. Without Actions: Read the PR is handed to a human the same way;
-- **behind** its base: the branch is updated through GitHub;
+- **behind** its base: the branch is updated through GitHub (also for `bunker:review` PRs);
 - a **conflict**: an agent merges the base into the branch in the PR's worktree and resolves it (also at most 3 attempts), verify runs, and if the diff changed a reviewer checks it again before the push;
 - a **"changes requested" review** from the owner or an admin/maintainer: the review and its inline comments go to the agent, the result is pushed and the review is re-requested.
 
-The shepherd never merges. PRs labelled `bunker:failed` or `bunker:review`, and drafts, are left alone; removing `bunker:failed` gives a PR a fresh set of attempts.
+The shepherd never merges. PRs labelled `bunker:failed`, and drafts, are left alone. A `bunker:review` PR only gets its branch updated and its conflicts resolved (auto-merge stays off, the label stays; a resolution that touches a review path is flagged in a comment, and a failed one is reported once and not retried until the head or base moves); removing `bunker:failed` gives a PR a fresh set of attempts.
 
 ## Manual-merge mode
 
