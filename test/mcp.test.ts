@@ -1,8 +1,8 @@
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMcp, escapePath, execStartDropsArgs, unescapePath, UNIT_TEMPLATE, type McpDeps } from "../src/mcp/server.ts";
+import { createMcp, effectiveWatchArgs, escapePath, execStartDropsArgs, readWatchDropIns, unescapePath, UNIT_TEMPLATE, type McpDeps } from "../src/mcp/server.ts";
 
 setDefaultTimeout(60_000); // see test/setup.ts
 
@@ -216,6 +216,32 @@ describe("watch caps", () => {
     expect(execStartDropsArgs(["[Service]\nExecStart=\nExecStart=/bin/bunker watch $BUNKER_WATCH_ARGS\n"])).toBe(false);
     expect(execStartDropsArgs(["[Service]\nExecStart=/bin/bunker watch\n", "[Service]\nExecStart=\nExecStart=/bin/bunker watch $BUNKER_WATCH_ARGS\n"])).toBe(false);
     expect(execStartDropsArgs(["[Service]\nRestart=always\n"])).toBe(false);
+  });
+  test("effectiveWatchArgs takes the last BUNKER_WATCH_ARGS in drop-in order, as systemd does (#612)", () => {
+    expect(effectiveWatchArgs([args("--max-cost-day 20"), args("--max-cost-day 50")])).toBe("--max-cost-day 50");
+    expect(effectiveWatchArgs([args("--interval 5"), "[Service]\nRestart=always\n"])).toBe("--interval 5");
+    expect(effectiveWatchArgs([args("--interval 5"), "[Service]\nEnvironment=\n"])).toBe("");
+    expect(effectiveWatchArgs(["[Service]\nEnvironment=BUNKER_WATCH_ARGS=--max-cost-day=7\n"])).toBe("--max-cost-day=7");
+    expect(effectiveWatchArgs([])).toBe("");
+  });
+  test("effectiveWatchArgs expands $BUNKER_WATCH_ARGS in an overriding ExecStart and keeps flags written into it", () => {
+    expect(effectiveWatchArgs([args("--interval 5"), "[Service]\nExecStart=\nExecStart=/bin/bunker watch --ui $BUNKER_WATCH_ARGS --max-cost-day 50\n"])).toBe("/bin/bunker watch --ui --interval 5 --max-cost-day 50");
+    expect(effectiveWatchArgs([args("--interval 5"), "[Service]\nExecStart=\nExecStart=/bin/bunker watch ${BUNKER_WATCH_ARGS}\n"])).toBe("/bin/bunker watch --interval 5");
+    expect(effectiveWatchArgs([args("--max-cost-day 20"), "[Service]\nExecStart=\nExecStart=/bin/bunker watch --max-cost-day 50\n"])).toBe("/bin/bunker watch --max-cost-day 50");
+  });
+  test("readWatchDropIns reads the instance's and the template's drop-ins in name order, the instance's winning a shared name", () => {
+    const root = mkdtempSync(join(tmpdir(), "bunker-units-"));
+    const inst = join(root, `bunker-watch@${escapePath(repo)}.service.d`), tmpl = join(root, "bunker-watch@.service.d");
+    mkdirSync(inst), mkdirSync(tmpl);
+    writeFileSync(join(inst, "args.conf"), args("--max-cost-day 20"));
+    writeFileSync(join(inst, "zz-cap.conf"), args("--max-cost-day 50"));
+    writeFileSync(join(inst, "notes.txt"), args("--max-cost-day 1"));
+    writeFileSync(join(tmpl, "aa.conf"), "[Service]\nRestart=always\n");
+    writeFileSync(join(tmpl, "zz-cap.conf"), args("--max-cost-day 3"));
+    const dropIns = readWatchDropIns(join(inst, "args.conf"));
+    expect(dropIns).toEqual(["[Service]\nRestart=always\n", args("--max-cost-day 20"), args("--max-cost-day 50")]);
+    expect(effectiveWatchArgs(dropIns)).toBe("--max-cost-day 50");
+    expect(readWatchDropIns(join(mkdtempSync(join(tmpdir(), "bunker-units-")), "missing.service.d", "args.conf"))).toEqual([]);
   });
   test("start_watch writes max_cost_day and max_cost_month as flags", async () => {
     const { call, writes } = setup();
