@@ -148,12 +148,14 @@ if (manual && values.merge) {
   console.error('bunker: --merge conflicts with manual-merge mode (--no-merge or merge = "manual" in .bunker/config.toml)');
   process.exit(2);
 }
-/** The caps as a watch reload sees them: config re-read, flags from the unit's current args.conf (BUNKER_WATCH_ARGS_FILE) when there is one, else the ones it started with. */
+/** The caps as a watch reload sees them: config re-read, flags from the unit's current drop-ins (args.conf, from BUNKER_WATCH_ARGS_FILE, and any other, in systemd's order: #612) when there are any, else the ones it started with. */
 async function reloadWatchCaps(started: Record<string, any>, cwd: string) {
   const flags: Record<string, any> = { ...started };
   const file = process.env.BUNKER_WATCH_ARGS_FILE;
-  if (file) {
-    const args = (await Bun.file(file).text().catch(() => "")).match(/BUNKER_WATCH_ARGS=([^"\n]*)/)?.[1] ?? "";
+  const { effectiveWatchArgs, readWatchDropIns } = await import("../mcp/server.ts");
+  const dropIns = file ? readWatchDropIns(file) : [];
+  if (dropIns.length) {
+    const args = effectiveWatchArgs(dropIns);
     for (const k of ["max-cost-day", "max-cost-month"]) delete flags[k];
     for (const m of args.matchAll(/--(max-cost-day|max-cost-month)[ =](\S+)/g)) flags[m[1]!] = m[2];
   }

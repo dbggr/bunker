@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { loadRepoConfig } from "../core/config.ts";
@@ -64,6 +64,42 @@ export function execStartDropsArgs(dropIns: string[]): boolean {
       if (m) effective = m[1]!.trim() || undefined; // an empty ExecStart= resets the list
     }
   return effective !== undefined && !effective.includes("BUNKER_WATCH_ARGS");
+}
+
+/** The watch's arguments as systemd builds them from the drop-ins (in read order): the last BUNKER_WATCH_ARGS assignment, expanded into an overriding ExecStart when there is one (#612). */
+export function effectiveWatchArgs(dropIns: string[]): string {
+  let env = "", exec: string | undefined;
+  for (const text of dropIns)
+    for (const raw of text.split("\n")) {
+      const line = raw.trim();
+      const e = line.match(/^Environment=(.*)$/);
+      if (e) {
+        if (!e[1]!.trim()) env = ""; // an empty Environment= resets the assignments
+        const m = e[1]!.match(/(?:^|\s)"BUNKER_WATCH_ARGS=([^"]*)"/) ?? e[1]!.match(/(?:^|\s)BUNKER_WATCH_ARGS=(\S*)/);
+        if (m) env = m[1]!.trim();
+      }
+      const x = line.match(/^ExecStart=(.*)$/);
+      if (x) exec = x[1]!.trim() || undefined;
+    }
+  if (exec === undefined) return env;
+  return exec.replace(/\$\{BUNKER_WATCH_ARGS\}|\$BUNKER_WATCH_ARGS\b/g, env).replace(/\s+/g, " ").trim();
+}
+
+/** The drop-ins of the watch instance whose args.conf is `argsFile`, merged with the template's (`bunker-watch@.service.d`) in systemd's read order: by file name, the instance's file winning a shared name. */
+export function readWatchDropIns(argsFile: string): string[] {
+  const inst = dirname(argsFile);
+  const files = new Map<string, string>();
+  for (const dir of [join(dirname(inst), `${PREFIX.replace(/@$/, "")}@.service.d`), inst])
+    try {
+      for (const f of readdirSync(dir)) if (f.endsWith(".conf")) files.set(f, join(dir, f));
+    } catch {}
+  return [...files.keys()].sort().flatMap((f) => {
+    try {
+      return [readFileSync(files.get(f)!, "utf8")];
+    } catch {
+      return [];
+    }
+  });
 }
 
 export interface Run {
