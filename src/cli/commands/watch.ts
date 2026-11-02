@@ -328,11 +328,11 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     }
   };
   /**
-   * A run that ended `awaiting-merge` stays in `current` until its PR is seen to settle, and the shepherd only reports PRs it watched
+   * A run that ended `awaiting-merge` or `awaiting-review` stays in `current` until its PR is seen to settle, and the shepherd only reports PRs it watched
    * close. One batched lookup per pass settles every such entry: merged takes the in-run merge path, closed unmerged becomes failed.
    */
   const reconcileWaiting = async (): Promise<number> => {
-    const waiting = new Set(status.snapshot().current.filter((c) => c.stage === "waiting for merge").map((c) => c.issue));
+    const waiting = new Set(status.snapshot().current.filter((c) => c.stage === "waiting for merge" || c.stage === "awaiting review").map((c) => c.issue));
     if (!waiting.size) return 0;
     const outcomes = await listRecentPrOutcomes(cwd, env, Date.now() - HISTORY_MS);
     let landed = 0;
