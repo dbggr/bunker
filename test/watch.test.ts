@@ -782,6 +782,41 @@ describe("runWatch() shepherd stage", () => {
     });
   });
 
+  describe("manual-merge runs left awaiting review when a human settles their PR later", () => {
+    const settle = (issue: number, over: object) => ({ ...bunkerPr(issue), state: "MERGED", mergedAt: new Date().toISOString(), closedAt: new Date().toISOString(), ...over });
+    const go = async (history: object[]) => {
+      const { repo, root } = await setup(three.slice(0, 1));
+      const ctl = new AbortController();
+      await runWatch({
+        ...base, manual: true, shepherd: true, cwd: repo, agent: fakeAgent(), signal: ctl.signal,
+        log: (l) => {
+          if (/pass 1 /.test(l)) Bun.write(join(root, "history.json"), JSON.stringify(history));
+          if (/pass 2 /.test(l)) ctl.abort();
+        },
+      });
+      return JSON.parse(await Bun.file(join(repo, ".bunker", "watch-status.json")).text());
+    };
+    const review = (st: any) => st.current.filter((c: any) => c.stage === "awaiting review");
+
+    test("a PR merged by a human leaves current and is recorded as merged", async () => {
+      const st = await go([settle(1, {})]);
+      expect(review(st)).toEqual([]);
+      expect(st.merged).toEqual([expect.objectContaining({ issue: 1 })]);
+    });
+
+    test("a PR closed unmerged leaves current and is recorded as failed", async () => {
+      const st = await go([settle(1, { state: "CLOSED", mergedAt: null })]);
+      expect(review(st)).toEqual([]);
+      expect(st.failed).toEqual([expect.objectContaining({ issue: 1, status: "closed-unmerged" })]);
+    });
+
+    test("a PR still open stays awaiting review", async () => {
+      const st = await go([settle(1, { state: "OPEN", mergedAt: null, closedAt: null })]);
+      expect(review(st)).toHaveLength(1);
+      expect(st.merged).toEqual([]);
+    });
+  });
+
   describe("reconciling PRs that finished while no watcher was looking", () => {
     const hist = (issue: number, over: object) => ({ ...bunkerPr(issue), state: "MERGED", mergedAt: new Date(Date.now() - 3_600_000).toISOString(), closedAt: new Date(Date.now() - 3_600_000).toISOString(), ...over });
     const start = async (history: object[], pre?: (repo: string) => void) => {
