@@ -674,6 +674,32 @@ describe("shepherd pass", () => {
     expect((await $`git -C ${w.origin} rev-parse fix/7-thing`.text()).trim()).toBe(sha);
   });
 
+  test("conflict whose merged base changed dependencies: setup runs again on the merged tree before verify", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "a.txt": "branch\n", "deps.txt": "v1\n" });
+    await w.branch("tmp-main", { "a.txt": "main\n", "deps.txt": "v2\n" });
+    await $`git -C ${w.repo} push -q origin tmp-main:main`;
+    w.state.prs.push(prJson(10, "fix/7-thing", sha, { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }));
+    w.save();
+    // The agent takes main's dependencies; verify passes only when what setup "installed" matches the tree it runs on.
+    const resolve = `printf 'both\\n' > a.txt && printf 'v2\\n' > deps.txt && git add a.txt deps.txt && git commit -qm "merge: resolve conflict"`;
+    const pass = await shepherd(w, fakeAgent(resolve), { setup: "cp deps.txt .installed", verify: "cmp deps.txt .installed" }).pass();
+    expect(pass.entries[0]).toMatchObject({ action: "resolved-conflict" });
+    expect((await $`git -C ${w.origin} show fix/7-thing:deps.txt`.text())).toBe("v2\n");
+  });
+
+  test("a verify failure names its last output line on the first line of the detail (what the log shows)", async () => {
+    const w = await world();
+    const sha = await w.branch("fix/7-thing", { "f.txt": "x\n" });
+    w.state.prs.push(prJson(10, "fix/7-thing", sha));
+    w.state.checks[10] = RED;
+    w.save();
+    const failing = await shepherd(w, fakeAgent(COMMIT_FIX), { verify: `echo 'error: Cannot find package "hono"'; echo; exit 1` }).pass();
+    expect(failing.entries[0]!.detail!.split("\n")[0]).toBe('verify failed on the fix (exit 1): error: Cannot find package "hono"');
+    const silent = await shepherd(w, fakeAgent(COMMIT_FIX), { verify: "exit 1" }).pass();
+    expect(silent.entries[0]!.detail!.split("\n")[0]).toBe("verify failed on the fix (exit 1): no output");
+  });
+
   test("conflict an agent leaves unresolved is not pushed", async () => {
     const w = await world();
     const sha = await w.branch("fix/7-thing", { "a.txt": "branch\n" });

@@ -28,6 +28,13 @@ import { VERDICT_FORMAT } from "./review.ts";
 /** Fix attempts (CI, conflict) per PR before the shepherd labels it `bunker:failed` and asks for a human. */
 export const MAX_FIX_ATTEMPTS = 3;
 
+/** A failure whose first line (all the run log shows) ends with the output's last line; the output's tail follows. */
+export function failure(what: string, output: string): string {
+  const tail = tailLines(stripAnsi(output));
+  const last = tail.split("\n").map((l) => l.trim()).filter(Boolean).pop();
+  return last ? `${what}: ${last}\n${tail}` : `${what}: no output`;
+}
+
 /** The shepherd keeps no state of its own: what it did is written on the PR as hidden comment markers. */
 const MARK = {
   fix: "<!-- bunker-shepherd:fix -->",
@@ -435,11 +442,20 @@ export function createShepherd(o: ShepherdOptions) {
     return text;
   };
 
-  const setupAndVerify = async (w: { worktree: string; repo: string; gitCommonDir: string; baseSha: string }, verifyAfter: boolean) => {
+  const setup = async (w: { worktree: string; gitCommonDir: string }, what: string) => {
     const prep = await runSetup(o.sandbox, w, o.setup, timeouts);
-    if (prep && (prep.code !== 0 || prep.timedOut)) throw new Refused(`setup failed (exit ${prep.code}):\n${tailLines(prep.stdout)}`);
+    if (prep && (prep.code !== 0 || prep.timedOut)) throw new Refused(failure(`${what} (exit ${prep.code})`, prep.stdout));
+    return prep !== undefined;
+  };
+  const treeOf = async (worktree: string) => (await $`git -C ${worktree} rev-parse HEAD^{tree}`.nothrow().quiet().text()).trim();
+
+  const setupAndVerify = async (w: { worktree: string; repo: string; gitCommonDir: string; baseSha: string }, verifyAfter: boolean) => {
+    const ran = await setup(w, "setup failed");
+    const setUpTree = await treeOf(w.worktree);
     return async () => {
       if (!verifyAfter) return;
+      // Verify may run without network: what setup installed must match the tree being verified (a merged base can change dependencies).
+      if (ran && (await treeOf(w.worktree)) !== setUpTree) await setup(w, "setup failed on the fix");
       const { verify, services, prepare } = await verifyConfig(w.repo, w.baseSha);
       if (!verify) return;
       let code: number;
@@ -471,7 +487,7 @@ export function createShepherd(o: ShepherdOptions) {
       } finally {
         await env.stop();
       }
-      if (code !== 0) throw new Refused(`verify failed on the fix (exit ${code}):\n${tailLines(text)}`);
+      if (code !== 0) throw new Refused(failure(`verify failed on the fix (exit ${code})`, text));
     };
   };
 
