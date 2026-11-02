@@ -113,6 +113,8 @@ export interface McpDeps {
   unitDir: string;
   /** The file's text, or null when it does not exist. */
   readUnit: (path: string) => string | null;
+  /** The unit's drop-ins in systemd's read order, given the instance's args.conf (readWatchDropIns). */
+  readDropIns: (argsFile: string) => string[];
   writeUnit: (path: string, text: string) => void;
   /** argv prefix that starts bunker, e.g. ["/usr/bin/bunker"]. */
   bunkerCommand: () => string[];
@@ -192,9 +194,15 @@ export function createMcp(d: McpDeps) {
     }
     return flags;
   };
-  /** Each window's effective cap and where it came from: the flag in args.conf, else the repo's config, else the global one. */
+  /** The flags the watch actually runs with: BUNKER_WATCH_ARGS (or an overriding ExecStart) from all the unit's drop-ins in systemd's order, not args.conf alone (#614). */
+  const effectiveFlags = (repo: string) => {
+    const flags = new Map<string, string>();
+    for (const f of effectiveWatchArgs(d.readDropIns(argsPath(repo))).matchAll(/(--[\w-]+)[ =](\S+)/g)) flags.set(f[1]!, f[2]!);
+    return flags;
+  };
+  /** Each window's effective cap and where it came from: the flag the watch runs with, else the repo's config, else the global one. */
   const effectiveCaps = async (repo: string) => {
-    const flags = readFlags(repo);
+    const flags = effectiveFlags(repo);
     const caps = await d.caps(repo);
     const src = await d.capSources(repo);
     const one = (w: "day" | "month") => {
@@ -259,7 +267,13 @@ export function createMcp(d: McpDeps) {
         const repo = repoArg(a);
         const given = flagsArg(a);
         if (given.size) await syncUnit(repo, new Map([...readFlags(repo), ...given]));
-        return systemctl(a.reload === true ? "reload" : "restart", repo);
+        const done = await systemctl(a.reload === true ? "reload" : "restart", repo);
+        // args.conf is only one drop-in: a later one setting BUNKER_WATCH_ARGS (or ExecStart) still wins (#614).
+        const runs = effectiveFlags(repo);
+        const shadowed = [...given].filter(([k, v]) => Number(runs.get(k)) !== Number(v));
+        if (!shadowed.length) return done;
+        const what = shadowed.map(([k, v]) => `${k} ${v} (runs with ${runs.has(k) ? `${k} ${runs.get(k)}` : `no ${k}`})`).join(", ");
+        return `${done}\nwarning: a later drop-in in ${dirname(argsPath(repo))} or the template's overrides args.conf: ${what}`;
       },
     },
     {
@@ -374,6 +388,7 @@ export function liveDeps(): McpDeps {
     run: exec,
     unitDir: join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "systemd", "user"),
     readUnit: (path) => (existsSync(path) ? readFileSync(path, "utf8") : null),
+    readDropIns: readWatchDropIns,
     writeUnit: (path, text) => {
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, text);
