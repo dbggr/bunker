@@ -22,6 +22,7 @@ function setup(over: Partial<McpDeps> = {}) {
     },
     unitDir: "/units",
     readUnit: () => null,
+    readDropIns: (f) => [writes[f] ?? deps.readUnit(f)].filter((t): t is string => t !== null),
     writeUnit: (p, t) => void (writes[p] = t),
     bunkerCommand: () => ["/usr/bin/bunker"],
     readCurrent: () => [{ issue: 7, stage: "verify", since: 1 }],
@@ -277,6 +278,33 @@ describe("watch caps", () => {
     });
     const w = JSON.parse((await call("list_watches")).text).watches[0];
     expect(w.caps).toEqual({ day: { cap: 7, source: "flag" }, month: { cap: 100, source: "global" } });
+  });
+  test("spend and list_watches take the cap from a later drop-in over args.conf, as the watch does (#614)", async () => {
+    const { call } = setup({ readUnit: (p) => (p === dropin ? args("--max-cost-day 7") : null), readDropIns: () => [args("--max-cost-day 7"), args("--interval 2 --max-cost-day 50")] });
+    expect(JSON.parse((await call("spend", { repo })).text).day).toEqual({ spent: 2.5, cap: 50, source: "flag" });
+    expect(JSON.parse((await call("list_watches")).text).watches[0].caps.day).toEqual({ cap: 50, source: "flag" });
+    const reset = setup({ readUnit: (p) => (p === dropin ? args("--max-cost-day 7") : null), readDropIns: () => [args("--max-cost-day 7"), "[Service]\nEnvironment=\n"] });
+    expect(JSON.parse((await reset.call("spend", { repo })).text).day).toEqual({ spent: 2.5, cap: 10, source: "repo" });
+    const exec = setup({ readDropIns: () => [args("--interval 2"), "[Service]\nExecStart=\nExecStart=/bin/bunker watch $BUNKER_WATCH_ARGS --max-cost-day=12\n"] });
+    expect(JSON.parse((await exec.call("spend", { repo })).text).day).toEqual({ spent: 2.5, cap: 12, source: "flag" });
+  });
+  test("queue_issue refuses at the cap a later drop-in sets (#614)", async () => {
+    const { call, labels } = setup({ readDropIns: () => [args("--max-cost-day 20"), args("--max-cost-day 2")] });
+    expect((await call("queue_issue", { repo, issue: 3 })).isError).toBe(true);
+    expect(labels).toEqual([]);
+  });
+  test("restart_watch warns when a later drop-in shadows a flag written to args.conf (#614)", async () => {
+    const zz = args("--max-cost-day 50");
+    const { call, writes } = setup({ readUnit: (p) => (p === dropin ? args("--interval 1") : null), readDropIns: () => [writes[dropin] ?? "", zz] });
+    const res = await call("restart_watch", { repo, max_cost_day: 9, interval: 3 });
+    expect(res.isError).toBe(false);
+    expect(writes[dropin]).toBe(args("--interval 3 --max-cost-day 9"));
+    expect(res.text).toContain("restart:");
+    expect(res.text).toContain("--max-cost-day 9");
+    expect(res.text).toContain("--max-cost-day 50");
+    expect(res.text).toContain("--interval 3 (runs with no --interval)"); // a later BUNKER_WATCH_ARGS replaces the whole value
+    const plain = setup({ readUnit: (p) => (p === dropin ? args("--interval 1") : null) });
+    expect((await plain.call("restart_watch", { repo, max_cost_day: 9 })).text).not.toContain("warning");
   });
   test("a repo cap reports source repo; no cap reports null", async () => {
     const { call } = setup();
