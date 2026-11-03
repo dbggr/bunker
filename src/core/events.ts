@@ -27,7 +27,7 @@ export interface BunkerEvent {
   name?: string;
   /** Agent text, the failure status on a "failed" stage, or the message of a "note" (a permanent line, may span lines). */
   text?: string;
-  /** On a "failed" stage: one line saying why. */
+  /** On a "failed" stage: one line saying why; on "awaiting review", why a human must merge the PR. */
   reason?: string;
   /** On "result": what that agent run cost. */
   costUsd?: number;

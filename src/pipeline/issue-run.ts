@@ -16,7 +16,7 @@ import { emit, emitStage, hyperlink, type OnEvent } from "../core/events.ts";
 import { tailLines } from "../core/output.ts";
 import { sumUsage } from "../agents/agent.ts";
 import { review } from "./review.ts";
-import { failureReason } from "../core/reason.ts";
+import { failureReason, oneLine } from "../core/reason.ts";
 import type { Pause } from "./errors.ts";
 import { worktreeAdmin } from "../worktree/admin.ts";
 import type { Usage } from "../agents/agent.ts";
@@ -77,7 +77,11 @@ export async function runIssueInner({ issue: number, cwd = process.cwd(), agent,
     if (status === "merged") emitStage({ onEvent }, "merged");
     else if (status === "interrupted") emitStage({ onEvent }, "interrupted");
     else if (status === "awaiting-merge") emitStage({ onEvent }, "waiting for merge", extra.prUrl);
-    else if (status === "awaiting-review") emitStage({ onEvent }, "awaiting review", extra.prUrl);
+    else if (status === "awaiting-review" || status === "needs-review") {
+      // The PR waits for a human: the reason says why (manual-merge mode, or the paths it changes).
+      const reason = status === "needs-review" ? extra.error ?? "the PR changes paths a human must review" : `manual-merge mode: a human merges it${extra.error ? ` (${extra.error})` : ""}`;
+      emit(onEvent, { type: "stage", name: "awaiting review", ...(extra.prUrl ? { text: extra.prUrl } : {}), reason: oneLine(reason) });
+    }
     else if (!["pr-opened", "needs-review", "awaiting-merge", "awaiting-review", "no-change"].includes(status)) {
       const reason = failureReason(status, logPath, { ...(extra.error ? { error: extra.error } : {}), ...(extra.verifyOutput ? { verifyOutput: extra.verifyOutput } : {}) });
       emit(onEvent, { type: "stage", name: "failed", text: status, reason });

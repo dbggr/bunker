@@ -15,6 +15,10 @@ export interface CurrentRun {
   /** Epoch ms the run entered `stage`. */
   since: number;
   logPath?: string;
+  /** While the run's PR waits ("waiting for merge", "awaiting review"): its URL. */
+  prUrl?: string;
+  /** On "awaiting review": one line saying why a human must merge it. */
+  reason?: string;
 }
 
 export interface MergedRun {
@@ -112,16 +116,23 @@ export function createStatusRecorder(dir: string, init: { pid: number; version: 
     event(e: BunkerEvent) {
       if (e.issue === undefined) return;
       if (e.type === "meta") landed.delete(e.issue);
-      else if (e.type === "stage" && e.name === "waiting for merge" && landed.has(e.issue)) return;
+      else if (e.type === "stage" && (e.name === "waiting for merge" || e.name === "awaiting review") && landed.has(e.issue)) return;
       const i = state.current.findIndex((c) => c.issue === e.issue);
       if (e.type === "meta" && e.logPath && i >= 0) state.current[i]!.logPath = e.logPath;
       else if (e.type === "meta" && e.logPath) state.current.push({ issue: e.issue, stage: "setup", since: e.at, logPath: e.logPath });
       else if (e.type === "stage" && e.name) {
         const stage = e.name === "verify" && e.text ? `verify (${e.text})` : e.name;
+        // A waiting PR's stage carries its URL, and for "awaiting review" why a human must merge it.
+        const pr = e.name === "waiting for merge" || e.name === "awaiting review" ? { ...(e.text ? { prUrl: e.text } : {}), ...(e.reason ? { reason: e.reason } : {}) } : {};
+        const cur = state.current[i];
         if (e.name === "merged" || e.name === "failed" || e.name === "done" || e.name === "interrupted") {
           if (i >= 0) state.current.splice(i, 1);
-        } else if (i < 0) state.current.push({ issue: e.issue, stage, since: e.at });
-        else if (state.current[i]!.stage !== stage) Object.assign(state.current[i]!, { stage, since: e.at });
+        } else if (!cur) state.current.push({ issue: e.issue, stage, since: e.at, ...pr });
+        else if (cur.stage !== stage) {
+          delete cur.prUrl;
+          delete cur.reason;
+          Object.assign(cur, { stage, since: e.at }, pr);
+        } else if (Object.entries(pr).some(([k, v]) => cur[k as keyof typeof pr] !== v)) Object.assign(cur, pr);
         else return;
       } else return;
       save();
