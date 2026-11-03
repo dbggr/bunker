@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.16.0 - 2026-11-03
+
+- fix(mcp): report caps from all the unit's drop-ins, and warn when one shadows args.conf on restart_watch (#614) (#618)
+- fix(shepherd): re-run setup before verify when the fix changed the tree, and name verify's last output line in the failure (#611) (#617)
+- fix(watch): settle awaiting-review runs once their PR merges or closes (#613) (#616)
+- fix(watch): reload caps from all the unit's drop-ins in systemd order, not args.conf alone (#612) (#615)
+- feat(cancel): record cancels in the run log and count them in v1-readiness (#608)
+- fix(v1-readiness): interventions read old label names (bunker, bunker-failed) and miss hand commits to bunker PRs (#607)
+- fix(v1-readiness): count needs-review as gated and no-change as success, not failures (#603)
+- fix(hub): close runs left open by a killed watcher and emit a stage for interrupted runs (#595) (#596)
+- feat(watch): cancel one run without stopping the watch, and an unqueue_issue MCP tool (#580) (#587)
+- feat(logs): name the failing role/step and the signal for exit codes >=128 (#585) (#593)
+- feat(shepherd): update branches and resolve conflicts on bunker:review PRs without arming auto-merge (#590) (#594)
+- feat(self-update): --when-idle drains the watch, updates and restarts it; --restart-all restarts every watch unit (#584) (#592)
+- feat(watch): reload caps/config each pass or on SIGHUP without a restart (#591)
+- feat(labels): swap bunker:queued for bunker:awaiting-review when a run ends needs-review (#582) (#589)
+- feat(queue): refuse bunker:exclude and tracking issues unless bunker:force (#581) (#588)
+- feat(mcp): per-repo caps via start_watch/restart_watch and flag a watch override that drops $BUNKER_WATCH_ARGS (#579) (#586)
+
 ## v0.15.0 - 2026-11-01
 
 - fix(watch): start no new agent session after a stop signal and stop orphaned agent containers (#575) (#576)
