@@ -19,9 +19,10 @@ Usage:
   bunker audit                                file improvement ideas as \`discovered\` issues
   bunker triage [--yes]                       read-only agent verifies open \`discovered\` issues (dry run unless --yes)
   bunker clean [--yes] [--logs <days>] [--images] [--force]   remove leftover worktrees and branches (dry run unless --yes)
-  bunker self-update [--channel main] [--when-idle [--restart-all]]
+  bunker self-update [--channel main] [--when-idle [--restart-all]] [--force]
                                               build and install the latest v* release tag (--channel main: pull main instead;
-                                              --when-idle: drain a running watch, update, restart it; --restart-all: every watch unit)
+                                              --when-idle: drain a running watch, update, restart it; --restart-all: every watch unit);
+                                              refuses a target behind or diverged from the installed build (--force: downgrade anyway)
 
 Common options (all modes):
   --model <id>               model for every role (implementer, reviewer, auditor)
@@ -31,7 +32,7 @@ Common options (all modes):
   --no-sandbox               run the agent on the host (empty HOME, no isolation)
   -h, --help                 show this help (wins over every other flag)
   --verbose                  stream all agent, setup and verify output (also BUNKER_VERBOSE=1)
-  --version                  print the version and the tag (or main@<sha>) it was built from
+  --version                  print the version, the tag (or main@<sha>) it was built from, and the self-update channel that follows it
   --no-pull                  (issue, queue, watch, audit) skip the \`git pull --ff-only\` of your checkout that
                              otherwise runs first, only when it has no tracked changes and is on the default branch
 

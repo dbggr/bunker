@@ -87,12 +87,18 @@ if (process.env.BUNKER_IN_SANDBOX) {
 }
 
 if (values.version) {
-  console.log(`${pkg.version} (${await buildLabel()})`);
+  const label = await buildLabel();
+  console.log(`${pkg.version} (${label})`);
+  console.log(
+    label.startsWith("main@")
+      ? "built from main: `bunker self-update --channel main` follows main; the default release channel refuses a v* tag behind this build (--force overrides)"
+      : "release build: `bunker self-update` installs newer v* tags (--channel main follows main); it refuses to downgrade (--force overrides)",
+  );
   process.exit(0);
 }
 
 if (positionals.length === 1 && positionals[0] === "self-update") {
-  process.exit(await selfUpdate({ channel: values.channel, whenIdle: values["when-idle"], restartAll: values["restart-all"] }));
+  process.exit(await selfUpdate({ channel: values.channel, whenIdle: values["when-idle"], restartAll: values["restart-all"], force: values.force }));
 }
 
 // `bunker doctor` (read-only checks) and `bunker init` (interactive onboarding). `bunker -- init` is the prompt "init".

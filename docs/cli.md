@@ -33,13 +33,14 @@ bunker doctor
 
 ### bunker self-update
 
-build and install the latest v* release tag
+build and install the latest v* release tag. It compares the target (the tag, or origin's default branch with `--channel main`) with the commit the running binary was built from and refuses, exit 2, when the target is behind it (a downgrade) or has diverged: nothing is rebuilt and no watch is drained or restarted. The last line says `updated <old> → <new>` or `already at <v>`
 
 | Flag | What it does | Default |
 | --- | --- | --- |
 | `--channel main` | pull main instead of the latest v* release tag | latest v* tag |
 | `--when-idle` | instead of refusing while a watch runs here: ask it to finish its current steps and start no new work, wait for it to exit, update, then restart it (a `bunker-watch@` systemd unit is restarted; any other watch is left for you to start) | refuse |
 | `--restart-all` | with `--when-idle`: drain and restart every active bunker watch unit on the machine, so all repos run the new binary | off |
+| `--force` | install the target even when it is behind or has diverged from the installed build (prints a downgrading warning), or rebuild the same commit | refuse |
 
 ```sh
 bunker self-update --channel main
@@ -299,7 +300,7 @@ bunker clean --yes --logs 14
 | `--no-sandbox` | run the agent on the host (empty HOME, no isolation); skips the auth check, claude on the host uses your normal login |  |
 | `-h`, `--help` | show help (wins over every other flag) |  |
 | `--verbose` | stream all agent, setup and verify output (also BUNKER_VERBOSE=1) |  |
-| `--version` | print the version and the tag (or main@&lt;sha>) it was built from |  |
+| `--version` | print the version, the tag (or main@&lt;sha>) it was built from, and the self-update channel that follows it |  |
 | `--max-rounds <n>` | review rounds before giving up (review, issue, queue, watch) | 2 |
 | `--parallel <n>` | issues worked at once (queue --merge, watch) | 1 |
 | `--verify "<cmd>"` | run after approval (issue, queue, watch) | verify in config.toml |
