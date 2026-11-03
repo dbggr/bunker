@@ -2,19 +2,11 @@ import { $ } from "bun";
 import { accessSync, constants, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { buildLabel, bunkerHome } from "../../build-info.ts";
-import { pullBlocker, safePull } from "../../github/pull.ts";
+import { buildCommit, buildLabel, bunkerHome } from "../../build-info.ts";
+import { defaultBranchOf, pullBlocker, safePull } from "../../github/pull.ts";
 import { escapePath, unescapePath } from "../../mcp/server.ts";
 import { alive } from "./watch.ts";
-
-const version = (home: string) => {
-  try {
-    return JSON.parse(readFileSync(join(home, "package.json"), "utf8")).version as string;
-  } catch {
-    return "unknown";
-  }
-};
-const commitOf = async (home: string) => (await $`git -C ${home} rev-parse --short HEAD`.nothrow().quiet().text()).trim() || "unknown";
+import pkg from "../../../package.json" with { type: "json" };
 
 /** Where the new binary goes: the running binary if it is one and writable, else ~/.local/bin/bunker. */
 export function installTarget(execPath = process.execPath): string {
@@ -66,6 +58,10 @@ export interface SelfUpdateOptions {
   /** With `whenIdle`: also drain and restart every active bunker watch unit on the machine. */
   restartAll?: boolean;
   watches?: WatchControl;
+  /** Install even when the target is behind (or has diverged from) the installed build, or is the same commit. */
+  force?: boolean;
+  /** The build being replaced (default: this one). */
+  installed?: InstalledBuild;
 }
 
 /** How self-update finds, drains and restarts watches. */
@@ -127,6 +123,81 @@ function install(bin: string, target: string) {
   renameSync(tmp, target);
 }
 
+/** The build being replaced. `commit` is absent for binaries built before it was recorded; it is then found from `label`. */
+export interface InstalledBuild {
+  version: string;
+  /** `vX.Y.Z` or `main@<sha>`. */
+  label: string;
+  commit?: string;
+}
+
+/** What the channel would build: the latest release tag's commit, or origin's default branch. */
+interface UpdateTarget {
+  commit: string;
+  /** `vX.Y.Z`, or `main@<sha>`. */
+  label: string;
+  /** package.json's version at `commit`. */
+  version: string;
+}
+
+const git = (home: string, ...args: string[]) => $`git -C ${home} ${args}`.nothrow().quiet();
+
+const versionAt = async (home: string, commit: string) => {
+  try {
+    return JSON.parse((await git(home, "show", `${commit}:package.json`)).stdout.toString()).version as string;
+  } catch {
+    return "unknown";
+  }
+};
+
+/** The full commit `rev` names in `home`, or undefined if `home` doesn't have it. */
+const resolveCommit = async (home: string, rev: string) => {
+  const r = await git(home, "rev-parse", "--verify", "-q", `${rev}^{commit}`);
+  return r.exitCode === 0 ? r.stdout.toString().trim() : undefined;
+};
+
+/** Fetches and finds what the channel would install; an exit code when there is nothing to install. */
+async function resolveTarget(channel: string, home: string): Promise<UpdateTarget | number> {
+  if (channel === "main") {
+    const branch = await defaultBranchOf(home);
+    if ((await git(home, "fetch", "-q", "origin")).exitCode !== 0) console.error(`bunker: self-update: couldn't fetch origin; using the local origin/${branch}`);
+    const commit = await resolveCommit(home, `refs/remotes/origin/${branch}`);
+    if (!commit) {
+      console.error(`bunker: self-update: no origin/${branch} in ${home}`);
+      return 2;
+    }
+    return { commit, label: `main@${commit.slice(0, 7)}`, version: await versionAt(home, commit) };
+  }
+  const fetched = await git(home, "fetch", "--tags", "--force", "-q", "origin");
+  if (fetched.exitCode !== 0) console.error("bunker: self-update: couldn't fetch tags from origin; using local tags");
+  const tag = await latestTag(home);
+  const commit = tag && (await resolveCommit(home, `refs/tags/${tag}`));
+  if (!tag || !commit) {
+    console.error("bunker: self-update: no v* release tags found (use --channel main to track main)");
+    return 2;
+  }
+  return { commit, label: tag, version: await versionAt(home, commit) };
+}
+
+export type Direction = "same" | "update" | "downgrade" | "diverged" | "unknown";
+
+/** How `target` relates to `installed` in `home`'s history. */
+export async function direction(home: string, installed: string | undefined, target: string): Promise<Direction> {
+  if (!installed) return "unknown";
+  if (installed === target) return "same";
+  const isAncestor = async (a: string, b: string) => (await git(home, "merge-base", "--is-ancestor", a, b)).exitCode === 0;
+  if (await isAncestor(installed, target)) return "update";
+  if (await isAncestor(target, installed)) return "downgrade";
+  return "diverged";
+}
+
+/** `vX.Y.Z` for a release build, else `X.Y.Z (main@<sha>)`. */
+const named = (v: string, label: string) => (SEMVER_TAG.test(label) || v === "unknown" ? label : `${v} (${label})`);
+
+async function currentBuild(): Promise<InstalledBuild> {
+  return { version: pkg.version, label: await buildLabel(), commit: await buildCommit() };
+}
+
 /** Rebuilds and reinstalls bunker: the latest release tag, or (`channel: "main"`) a pull of main. Returns the exit code. */
 export async function selfUpdate(opts: SelfUpdateOptions = {}): Promise<number> {
   const channel = opts.channel ?? "release";
@@ -154,6 +225,38 @@ export async function selfUpdate(opts: SelfUpdateOptions = {}): Promise<number> 
     console.error(`bunker: self-update refused: a bunker watch (pid ${own}) is running for ${home}; use --when-idle to let it finish its current steps, update, and restart it`);
     return 2;
   }
+
+  // Decided before any watch is drained: a refused update leaves every watch running as it is.
+  const installed = opts.installed ?? (await currentBuild());
+  const target = await resolveTarget(channel, home);
+  if (typeof target === "number") return target;
+  const commit = installed.commit ?? (await resolveCommit(home, installed.label.replace(/^main@/, "")));
+  const dir = await direction(home, commit && (await resolveCommit(home, commit)), target.commit);
+  const from = named(installed.version, installed.label);
+  const to = named(target.version, target.label);
+  if (dir === "same" && !opts.force) {
+    console.log(`bunker: already at ${to} (${channel} channel); nothing to do`);
+    return 0;
+  }
+  if (dir === "downgrade" || dir === "diverged") {
+    // Name both commits, unless the label already does (main@<sha>).
+    const at = (name: string, sha: string) => (name.includes(sha.slice(0, 7)) ? name : `${name} (${sha.slice(0, 7)})`);
+    const [t, i] = [at(to, target.commit), at(from, commit!)];
+    const what =
+      dir === "downgrade"
+        ? `${t} is behind the installed ${i}, so updating would be a downgrade`
+        : `${t} has diverged from the installed ${i} (neither contains the other), so updating would drop commits`;
+    if (!opts.force) {
+      const other = channel === "release" ? "; `--channel main` tracks main instead" : "";
+      console.error(`bunker: self-update refused on the ${channel} channel: ${what}. Nothing was rebuilt or restarted. Pass --force to install it anyway${other}`);
+      return 2;
+    }
+    console.error(`bunker: self-update: warning: --force: downgrading the installed ${i} to ${t}`);
+  }
+  if (dir === "unknown") {
+    console.error(`bunker: self-update: warning: can't tell whether ${to} is newer than the installed ${from} (its commit isn't in ${home}); updating anyway`);
+  }
+
   if (opts.whenIdle) {
     const units = new Set(await watches.units());
     const repos = opts.restartAll ? [...new Set([home, ...units])] : [home];
@@ -174,7 +277,11 @@ export async function selfUpdate(opts: SelfUpdateOptions = {}): Promise<number> 
     }
   }
   try {
-    return await apply(channel, home, build, opts.target);
+    const installedTo = await apply(channel, home, build, target, opts.target);
+    if (typeof installedTo === "number") return installedTo;
+    const verb = dir === "downgrade" || dir === "diverged" ? "downgraded" : dir === "same" ? "rebuilt" : "updated";
+    console.log(`bunker: ${verb} ${from} → ${to}, installed to ${installedTo}`);
+    return 0;
   } finally {
     await restartStopped(stopped, watches);
   }
@@ -194,12 +301,9 @@ async function restartStopped(stopped: Stopped[], watches: WatchControl) {
   }
 }
 
-async function apply(channel: string, home: string, build: BuildFn, targetOpt: string | undefined): Promise<number> {
-  const oldVersion = version(home);
-  const oldLabel = await buildLabel();
+/** Builds and installs `update`; the install path, or an exit code on failure. */
+async function apply(channel: string, home: string, build: BuildFn, update: UpdateTarget, targetOpt: string | undefined): Promise<string | number> {
   const target = targetOpt ?? installTarget();
-  let newLabel: string;
-
   if (channel === "main") {
     const pull = await safePull(home);
     if (!pull.pulled) {
@@ -209,35 +313,25 @@ async function apply(channel: string, home: string, build: BuildFn, targetOpt: s
     const bin = await build(home, home);
     if (!bin) return 1;
     install(bin, target);
-    newLabel = `main@${await commitOf(home)}`;
-  } else {
-    const fetched = await $`git -C ${home} fetch --tags --force -q origin`.nothrow().quiet();
-    if (fetched.exitCode !== 0) console.error("bunker: self-update: couldn't fetch tags from origin; using local tags");
-    const tag = await latestTag(home);
-    if (!tag) {
-      console.error("bunker: self-update: no v* release tags found (use --channel main to track main)");
-      return 2;
-    }
-    const tmp = mkdtempSync(join(tmpdir(), "bunker-release-"));
-    const dir = join(tmp, "src");
-    try {
-      const wt = await $`git -C ${home} worktree add -q --detach ${dir} ${`refs/tags/${tag}`}`.nothrow().quiet();
-      if (wt.exitCode !== 0) {
-        console.error(`bunker: self-update: couldn't check out ${tag}: ${wt.stderr.toString().trim()}`);
-        return 1;
-      }
-      try {
-        const bin = await build(dir, home);
-        if (!bin) return 1;
-        install(bin, target);
-      } finally {
-        await $`git -C ${home} worktree remove --force ${dir}`.nothrow().quiet();
-      }
-    } finally {
-      rmSync(tmp, { recursive: true, force: true });
-    }
-    newLabel = tag;
+    return target;
   }
-  console.log(`bunker: updated ${oldVersion} (${oldLabel}) → ${newLabel}, installed to ${target}`);
-  return 0;
+  const tmp = mkdtempSync(join(tmpdir(), "bunker-release-"));
+  const dir = join(tmp, "src");
+  try {
+    const wt = await $`git -C ${home} worktree add -q --detach ${dir} ${update.commit}`.nothrow().quiet();
+    if (wt.exitCode !== 0) {
+      console.error(`bunker: self-update: couldn't check out ${update.label}: ${wt.stderr.toString().trim()}`);
+      return 1;
+    }
+    try {
+      const bin = await build(dir, home);
+      if (!bin) return 1;
+      install(bin, target);
+    } finally {
+      await $`git -C ${home} worktree remove --force ${dir}`.nothrow().quiet();
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+  return target;
 }

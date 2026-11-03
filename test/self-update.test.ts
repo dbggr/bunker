@@ -205,3 +205,129 @@ describe("selfUpdate --when-idle", () => {
     expect(log).toEqual([`stop ${process.pid}`, `restart ${f.repo}`]);
   });
 });
+
+describe("selfUpdate downgrade guard", () => {
+  const sha = async (repo: string, ref: string) => (await $`git -C ${repo} rev-parse ${`${ref}^{commit}`}`.text()).trim();
+  const capture = async <T>(f: () => Promise<T>) => {
+    const out: string[] = [];
+    const [log, err] = [console.log, console.error];
+    console.log = (...a: unknown[]) => void out.push(a.join(" "));
+    console.error = (...a: unknown[]) => void out.push(a.join(" "));
+    try {
+      return { result: await f(), out: out.join("\n") };
+    } finally {
+      [console.log, console.error] = [log, err];
+    }
+  };
+  const control = (log: string[], units: string[] = []) => ({
+    units: async () => units,
+    stop: async (pid: number) => (log.push(`stop ${pid}`), true),
+    restartUnit: async (repo: string) => (log.push(`restart ${repo}`), true),
+  });
+
+  test("an installed build from main ahead of the latest tag: refused, binary unchanged, no watch touched", async () => {
+    const f = await fixture(["v1.0.0"]);
+    await Bun.write(join(f.repo, ".bunker", "watch.lock"), String(process.pid));
+    const installed = { version: "1.1.0", label: `main@${(await sha(f.repo, "main")).slice(0, 7)}`, commit: await sha(f.repo, "main") };
+    const target = join(f.root, "b");
+    await Bun.write(target, "old");
+    const seen: string[] = [];
+    const log: string[] = [];
+    const { result, out } = await capture(() =>
+      selfUpdate({ home: f.repo, target, build: fakeBuild(seen), installed, whenIdle: true, restartAll: true, watches: control(log, [f.repo]) }),
+    );
+    expect(result).not.toBe(0);
+    expect(seen).toEqual([]);
+    expect(await Bun.file(target).text()).toBe("old");
+    expect(log).toEqual([]);
+    expect(out).toContain("downgrade");
+    expect(out).toContain(installed.label);
+    expect(out).toContain("v1.0.0");
+    expect(out).toContain("release");
+    expect(out).toContain("--force");
+    expect(out).toContain("--channel main");
+  });
+
+  test("--force downgrades anyway, with a warning", async () => {
+    const f = await fixture(["v1.0.0"]);
+    const installed = { version: "1.1.0", label: "main@x", commit: await sha(f.repo, "main") };
+    const target = join(f.root, "b");
+    await Bun.write(target, "old");
+    const seen: string[] = [];
+    const { result, out } = await capture(() => selfUpdate({ home: f.repo, target, build: fakeBuild(seen), installed, force: true }));
+    expect(result).toBe(0);
+    expect(seen).toEqual(["v1.0.0"]);
+    expect(await Bun.file(target).text()).toBe("bin");
+    expect(out).toMatch(/warning.*downgrading/);
+    expect(out).toContain("downgraded");
+  });
+
+  test("a tag ahead of the installed build updates", async () => {
+    const f = await fixture(["v1.0.0", "v1.1.0"]);
+    const installed = { version: "1.0.0", label: "v1.0.0", commit: await sha(f.repo, "v1.0.0") };
+    const seen: string[] = [];
+    const { result, out } = await capture(() => selfUpdate({ home: f.repo, target: join(f.root, "b"), build: fakeBuild(seen), installed }));
+    expect(result).toBe(0);
+    expect(seen).toEqual(["v1.1.0"]);
+    expect(out).toMatch(/updated .*v1\.0\.0.* → v1\.1\.0/);
+  });
+
+  test("already at the tag: says so and rebuilds nothing", async () => {
+    const f = await fixture(["v1.0.0", "v1.1.0"]);
+    const installed = { version: "1.1.0", label: "v1.1.0", commit: await sha(f.repo, "v1.1.0") };
+    const seen: string[] = [];
+    const target = join(f.root, "b");
+    const { result, out } = await capture(() => selfUpdate({ home: f.repo, target, build: fakeBuild(seen), installed }));
+    expect(result).toBe(0);
+    expect(seen).toEqual([]);
+    expect(existsSync(target)).toBe(false);
+    expect(out).toContain("already at v1.1.0");
+  });
+
+  test("an old binary with only a label: its commit is found from the label", async () => {
+    const f = await fixture(["v1.0.0"]);
+    const seen: string[] = [];
+    const installed = { version: "1.1.0", label: `main@${(await sha(f.repo, "main")).slice(0, 7)}` };
+    const { result } = await capture(() => selfUpdate({ home: f.repo, target: join(f.root, "b"), build: fakeBuild(seen), installed }));
+    expect(result).not.toBe(0);
+    expect(seen).toEqual([]);
+  });
+
+  test("diverged from the tag: refused", async () => {
+    const f = await fixture(["v1.0.0", "v1.1.0"]);
+    await $`git -C ${f.repo} checkout -q -b side v1.0.0`;
+    await Bun.write(join(f.repo, "marker.txt"), "side\n");
+    await $`git -C ${f.repo} commit -q -am side`;
+    const installed = { version: "1.0.1", label: "main@side", commit: await sha(f.repo, "side") };
+    const seen: string[] = [];
+    const { result, out } = await capture(() => selfUpdate({ home: f.repo, target: join(f.root, "b"), build: fakeBuild(seen), installed }));
+    expect(result).not.toBe(0);
+    expect(seen).toEqual([]);
+    expect(out).toContain("diverged");
+  });
+
+  test("--channel main behind the installed build: refused, nothing pulled or built", async () => {
+    const f = await fixture(["v1.0.0"]);
+    const before = await sha(f.repo, "main");
+    await Bun.write(join(f.repo, "marker.txt"), "local\n");
+    await $`git -C ${f.repo} commit -q -am local`;
+    const installed = { version: "1.1.0", label: "main@local", commit: await sha(f.repo, "main") };
+    await $`git -C ${f.repo} reset -q --hard ${before}`;
+    const seen: string[] = [];
+    const { result, out } = await capture(() => selfUpdate({ home: f.repo, channel: "main", target: join(f.root, "b"), build: fakeBuild(seen), installed }));
+    expect(result).not.toBe(0);
+    expect(seen).toEqual([]);
+    expect(out).toContain("downgrade");
+    expect(out).toContain("main channel");
+  });
+
+  test("--channel main ahead of the installed build updates", async () => {
+    const f = await fixture(["v1.0.0"]);
+    const installed = { version: "1.0.0", label: "v1.0.0", commit: await sha(f.repo, "v1.0.0") };
+    const seen: string[] = [];
+    const { result, out } = await capture(() => selfUpdate({ home: f.repo, channel: "main", target: join(f.root, "b"), build: fakeBuild(seen), installed }));
+    expect(result).toBe(0);
+    expect(seen).toEqual(["main-tip"]);
+    expect(out).toMatch(/updated .* → .*main@/);
+  });
+});
