@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.16.1 - 2026-11-03
+
+- fix(self-update): refuse to downgrade or cross a diverged build unless --force (#621) (#622)
+
 ## v0.16.0 - 2026-11-03
 
 - fix(mcp): report caps from all the unit's drop-ins, and warn when one shadows args.conf on restart_watch (#614) (#618)
