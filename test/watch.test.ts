@@ -817,6 +817,59 @@ describe("runWatch() shepherd stage", () => {
     });
   });
 
+  describe("runs ending needs-review or awaiting-review wait for a human in the status and the hub", () => {
+    // Changing package.json is a review path: the PR is left for a human and the run ends needs-review.
+    const sensitiveAgent = (): Agent => ({
+      command(_prompt, mode = "write") {
+        if (mode !== "write") return ["sh", "-c", `echo '${APPROVE}'`];
+        return ["sh", "-c", `echo "{\\"n\\":$(date +%s%N)}" > package.json && git add . && git commit -qm "chore: deps"`];
+      },
+    });
+    const modes = [
+      { name: "needs-review", opts: { agent: sensitiveAgent() }, reason: /package\.json, which a human must review/ },
+      { name: "awaiting-review", opts: { agent: fakeAgent(), manual: true }, reason: /manual-merge mode/ },
+    ];
+    const go = async (opts: { agent: Agent; manual?: boolean }, history?: object[]) => {
+      const { repo, root } = await setup(three.slice(0, 1));
+      const ctl = new AbortController();
+      const events: any[] = [];
+      let first: any;
+      const read = () => JSON.parse(readFileSync(join(repo, ".bunker", "watch-status.json"), "utf8"));
+      await runWatch({
+        ...base, shepherd: true, cwd: repo, signal: ctl.signal, onEvent: (e: any) => events.push(e), notify: () => {}, ...opts,
+        log: (l) => {
+          if (/pass 1 /.test(l)) {
+            first = read();
+            if (history) writeFileSync(join(root, "history.json"), JSON.stringify(history));
+            else ctl.abort();
+          }
+          if (/pass 2 /.test(l)) ctl.abort();
+        },
+      });
+      return { first, st: read(), events };
+    };
+    const settle = (over: object) => ({ ...bunkerPr(1), state: "MERGED", mergedAt: new Date().toISOString(), closedAt: new Date().toISOString(), ...over });
+
+    for (const m of modes) {
+      test(`${m.name}: current holds stage "awaiting review" with the PR URL and why, plus a stage event`, async () => {
+        const { st, events } = await go(m.opts);
+        expect(st.current).toEqual([expect.objectContaining({ issue: 1, stage: "awaiting review", prUrl: expect.stringMatching(/^https:\/\/github\.com\/o\/r\/pull\//), reason: expect.stringMatching(m.reason) })]);
+        const stage = events.filter((e) => e.type === "stage" && e.issue === 1 && e.name === "awaiting review");
+        expect(stage).toHaveLength(1);
+        expect(stage[0]).toMatchObject({ text: st.current[0].prUrl, reason: expect.stringMatching(m.reason) });
+        expect(st.failed).toEqual([]);
+      });
+
+      test(`${m.name}: merging the PR later settles it as merged`, async () => {
+        const { first, st, events } = await go(m.opts, [settle({})]);
+        expect(first.current).toEqual([expect.objectContaining({ issue: 1, stage: "awaiting review" })]);
+        expect(st.current).toEqual([]);
+        expect(st.merged).toEqual([expect.objectContaining({ issue: 1 })]);
+        expect(events.filter((e) => e.type === "stage" && e.issue === 1).map((e) => e.name).slice(-2)).toEqual(["awaiting review", "merged"]);
+      });
+    }
+  });
+
   describe("reconciling PRs that finished while no watcher was looking", () => {
     const hist = (issue: number, over: object) => ({ ...bunkerPr(issue), state: "MERGED", mergedAt: new Date(Date.now() - 3_600_000).toISOString(), closedAt: new Date(Date.now() - 3_600_000).toISOString(), ...over });
     const start = async (history: object[], pre?: (repo: string) => void) => {

@@ -459,13 +459,89 @@ describe("hub page model", () => {
     expect(M.groups(r, NOW).running.length).toBe(1);
   });
 
-  test("manual mode: awaiting review is a waiting card, not running", async () => {
+  test("awaiting review needs a human: its own group with the PR and why, not running or waiting for merge", async () => {
     const M = await load();
     const r = M.newRepo();
-    M.ingest(r, ev({ type: "stage", issue: 4, name: "awaiting review" }));
-    const g = M.groups(r, NOW);
-    expect([g.running.length, g.waiting.length]).toEqual([0, 1]);
+    M.ingest(r, ev({ type: "stage", issue: 4, name: "PR" }));
+    M.ingest(r, ev({ type: "stage", issue: 4, name: "awaiting review", text: "https://github.com/o/r/pull/9", reason: "the PR changes package.json, which a human must review" }));
+    let g = M.groups(r, NOW);
+    expect([g.running.length, g.waiting.length, g.review.length, g.finished.length]).toEqual([0, 0, 1, 0]);
+    expect(g.review[0]).toMatchObject({ prUrl: "https://github.com/o/r/pull/9", reason: "the PR changes package.json, which a human must review" });
+    expect(g.idle).toBe(false);
     expect(M.track("awaiting review")[5].state).toBe("current");
+    expect(M.tab(r, NOW)).toMatchObject({ kind: "review", label: "1 needs review" });
+    M.ingest(r, ev({ type: "stage", issue: 5, name: "implement" }));
+    expect(M.tab(r, NOW)).toMatchObject({ kind: "working", label: "1 running · 1 needs review" });
+    // The #613 reconcile settles it: merged moves it to Finished.
+    M.ingest(r, { at: NOW - 1000, type: "stage", issue: 4, name: "merged" });
+    g = M.groups(r, NOW);
+    expect(g.review).toEqual([]);
+    expect(g.finished.map((f: any) => [f.issue, f.outcome])).toEqual([[4, "merged"]]);
+  });
+
+  test("a needs-review row falls back to the shepherd's reason, then to a plain one", async () => {
+    const M = await load();
+    const r = M.newRepo();
+    M.ingest(r, ev({ type: "stage", issue: 150, name: "awaiting review" }));
+    expect(M.groups(r, NOW).review[0].reason).toBe("a human merges it");
+    M.ingest(r, ev(wsnap({ shepherd: [{ issue: 150, pr: 152, action: "skipped", detail: "labelled bunker:review (a human merges it)", prUrl: "https://github.com/o/r/pull/152" }] })));
+    expect(M.groups(r, NOW).review[0]).toMatchObject({ reason: "labelled bunker:review (a human merges it)", prUrl: "https://github.com/o/r/pull/152" });
+    expect(M.reviewStatus("x")).toBe("needs your review · x");
+  });
+
+  describe("rendered page", () => {
+    // A small DOM: enough for the page's own h() builder, the tab strip and the panes.
+    class El {
+      children: any[] = [];
+      attrs: Record<string, string> = {};
+      className = "";
+      style: Record<string, string> = {};
+      dataset: Record<string, string> = {};
+      content = { firstElementChild: { cloneNode: () => new El("svg") } };
+      constructor(public tagName: string) {}
+      setAttribute(k: string, v: unknown) { this.attrs[k] = String(v); }
+      append(...kids: any[]) { for (const k of kids) this.children.push(typeof k === "string" ? { text: k } : k); }
+      replaceChildren(...kids: any[]) { this.children = []; this.append(...kids); }
+      get textContent(): string { return this.children.map((c) => (c instanceof El ? c.textContent : c.text)).join(""); }
+      set textContent(v: string) { this.children = [{ text: v }]; }
+      querySelectorAll() { return []; }
+      remove() {}
+    }
+    const all = (el: El): El[] => [el, ...el.children.filter((c) => c instanceof El).flatMap(all)];
+    const page = async () => {
+      const html = await Bun.file(new URL("../src/ui/ui.html", import.meta.url)).text();
+      const scripts = [...html.matchAll(/<script(?: id="model")?>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+      const Model = new Function(scripts[0] + "; return Model;")();
+      const ids = new Map<string, El>();
+      const document = { getElementById: (id: string) => ids.get(id) ?? (ids.set(id, new El("div")), ids.get(id)!), createElement: (t: string) => new El(t) };
+      const noop = () => {};
+      const view = new Function("Model", "document", "location", "window", "localStorage", "WebSocket", "setInterval", "setTimeout", "clearTimeout", "getSelection",
+        scripts[1] + "; return { repos, render };")(Model, document, { hash: "", host: "127.0.0.1:1", search: "" }, { addEventListener: noop }, { getItem: () => null, setItem: noop },
+        class { }, noop, noop, noop, () => null);
+      return { Model, view, el: (id: string) => document.getElementById(id) };
+    };
+
+    test("the repo tab says needs review and the row links the PR and says why", async () => {
+      const { Model, view, el } = await page();
+      const model = Model.newRepo();
+      const now = Date.now();
+      Model.ingest(model, { at: now - 1000, type: "meta", issue: 150, title: "Ship it" });
+      Model.ingest(model, { at: now - 500, type: "stage", issue: 150, name: "awaiting review", text: "https://github.com/o/r/pull/152", reason: "the PR changes package.json, which a human must review" });
+      view.repos.set("o/r", { name: "o/r", model });
+      view.render();
+      const tab = all(el("tabs")).find((e) => e.className.startsWith("tab"))!;
+      expect(tab.textContent).toContain("1 needs review");
+      expect(all(tab).some((e) => e.className === "dot review")).toBe(true);
+      const nodes = all(el("main"));
+      const section = nodes.find((e) => e.tagName === "section" && e.children[0]?.textContent === "Needs review · 1")!;
+      expect(section).toBeDefined();
+      const row = all(section).find((e) => e.className === "card wait review")!;
+      expect(row.textContent).toContain("#150");
+      expect(row.textContent).toContain("Ship it");
+      expect(row.textContent).toContain("needs your review · the PR changes package.json, which a human must review");
+      expect(all(row).find((e) => e.tagName === "a" && e.textContent === "PR #152")!.attrs.href).toBe("https://github.com/o/r/pull/152");
+      expect(nodes.some((e) => /^Waiting for merge|^Running/.test(e.textContent) && e.tagName === "h2")).toBe(false);
+    });
   });
 
   test("a run's notes land in its log; the stage track marks done/current/todo", async () => {

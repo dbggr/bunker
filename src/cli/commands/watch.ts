@@ -357,6 +357,14 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
     }
     return landed;
   };
+  /**
+   * A run whose PR waits for a human stays in `current` as "awaiting review" until reconcileWaiting sees the PR settle. The run itself
+   * publishes that stage; this covers a run that ended without it, so the status and the hub never stay at "PR".
+   */
+  const awaitingReview = (issue: number, prUrl: string | undefined, reason: string) => {
+    if (status.snapshot().current.some((c) => c.issue === issue && c.stage === "awaiting review")) return;
+    emit(opts.onEvent, { type: "stage", issue, name: "awaiting review", ...(prUrl ? { text: prUrl } : {}), reason: oneLine(reason) });
+  };
   /** One shepherd pass: resumes whatever the open PRs need, whether this watcher or an earlier one opened them. Returns how many merged. */
   const shepherdPass = async (): Promise<number> => {
     if (!shepherd || stopped()) return 0;
@@ -510,10 +518,12 @@ export async function runWatch({ intervalMs = 10 * 60_000, maxCostUsd, maxCostDa
             giveUp(e.issue);
           } else if (e.status === "awaiting-review") {
             giveUp(e.issue);
+            awaitingReview(e.issue, e.prUrl, `manual-merge mode: a human merges it${e.error ? ` (${e.error})` : ""}`);
             notify(`bunker: #${e.issue} awaiting your review`, e.prUrl ?? e.error ?? "");
           } else if (e.status === "needs-review") {
             // Not a failure: the PR waits for a human, and the issue must not be picked up again.
             giveUp(e.issue);
+            awaitingReview(e.issue, e.prUrl, e.error ?? "the PR changes paths a human must review");
             notify(`bunker: #${e.issue} needs human review`, e.prUrl ?? e.error ?? "");
           } else if (e.status === "blocked") {
             notify(`bunker: #${e.issue} blocked`, e.error ?? "waiting on another issue");

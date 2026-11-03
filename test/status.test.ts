@@ -152,6 +152,19 @@ describe("collectStatus()", () => {
     expect((await collectStatus({ repo: r, alive: () => true })).current.map((c) => c.issue)).toEqual([101]);
   });
 
+  test("an awaiting-review stage keeps the PR URL and why; a late one after the merge is ignored", async () => {
+    const r = repo();
+    const dir = join(r, ".bunker");
+    writeFileSync(join(dir, "watch.lock"), "4242");
+    const rec = createStatusRecorder(dir, { pid: 4242, version: "x" });
+    rec.event({ type: "stage", name: "PR", issue: 7, at: 1 });
+    rec.event({ type: "stage", name: "awaiting review", issue: 7, text: "https://github.com/o/r/pull/8", reason: "the PR changes package.json", at: 2 });
+    expect(rec.snapshot().current).toEqual([{ issue: 7, stage: "awaiting review", since: 2, prUrl: "https://github.com/o/r/pull/8", reason: "the PR changes package.json" }]);
+    rec.merged({ issue: 7 });
+    rec.event({ type: "stage", name: "awaiting review", issue: 7, text: "https://github.com/o/r/pull/8", at: 3 });
+    expect(rec.snapshot().current).toEqual([]);
+  });
+
   test("shepherd decisions replace the previous list and show in the report", async () => {
     const r = repo();
     const dir = join(r, ".bunker");
