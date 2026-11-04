@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.16.2 - 2026-11-04
+
+- fix(watch): show runs waiting for human review in the status and the hub (#625) (#626)
+
 ## v0.16.1 - 2026-11-03
 
 - fix(self-update): refuse to downgrade or cross a diverged build unless --force (#621) (#622)
